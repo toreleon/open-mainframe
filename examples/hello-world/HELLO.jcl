@@ -1,3 +1,15 @@
-//HELLO    JOB (ACCT),'HELLO WORLD'
-//STEP1    EXEC PGM=HELLO
+//HELLOJOB JOB (ACCT),'HELLO WORLD',CLASS=A,MSGCLASS=X
+//*
+//* JCL to compile and run the Hello World program
+//*
+//COMPILE  EXEC PGM=ZOSCOB,PARM='HELLO.cbl'
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD DSN=HELLO.cbl,DISP=SHR
+//*
+//RUN      EXEC PGM=HELLO
 //SYSOUT   DD SYSOUT=*
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+Claude
+/*
+//
