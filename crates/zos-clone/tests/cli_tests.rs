@@ -313,6 +313,52 @@ fn test_interpret_cics_xctl_chain() {
 }
 
 #[test]
+fn test_interpret_cics_abend_handler() {
+    // Tests HANDLE ABEND → ABEND → handler paragraph invocation
+    let (stdout, stderr, success) =
+        run_cli(&["interpret", fixture("cics-abend.cbl").to_str().unwrap()]);
+    if !success {
+        eprintln!("STDERR: {}", stderr);
+    }
+    assert!(success, "Command failed with stderr: {}", stderr);
+    // Program starts
+    assert!(
+        stdout.contains("ABEND TEST STARTING"),
+        "Output: {}",
+        stdout
+    );
+    // Handler registered
+    assert!(
+        stdout.contains("HANDLER REGISTERED"),
+        "Output: {}",
+        stdout
+    );
+    // Handler paragraph was invoked after ABEND
+    assert!(
+        stdout.contains("ABEND HANDLER INVOKED"),
+        "Handler not invoked! Output: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("STATUS: HANDLED"),
+        "Handler did not complete! Output: {}",
+        stdout
+    );
+    // Execution should NOT continue after ABEND
+    assert!(
+        !stdout.contains("SHOULD NOT REACH HERE"),
+        "ABEND did not stop main flow! Output: {}",
+        stdout
+    );
+    // Handler issues RETURN TRANSID(MENU)
+    assert!(
+        stdout.contains("[CICS] RETURN TRANSID(MENU)"),
+        "Handler should RETURN, got: {}",
+        stdout
+    );
+}
+
+#[test]
 fn test_completions() {
     let (stdout, _, success) = run_cli(&["completions", "bash"]);
     assert!(success);

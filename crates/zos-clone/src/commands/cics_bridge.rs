@@ -30,6 +30,10 @@ pub struct CicsBridge {
     pub xctl_program: Option<String>,
     /// COMMAREA variable name (the COBOL variable holding COMMAREA data).
     pub commarea_var: Option<String>,
+    /// Pending abend handler label — set when ABEND fires and a HANDLE ABEND
+    /// label was registered.  The session loop checks this to execute the
+    /// handler paragraph instead of terminating.
+    pub abend_label: Option<String>,
     /// Active browse tokens per file (file_name -> token).
     browse_tokens: HashMap<String, u32>,
     /// Optional terminal callback for TUI-driven I/O.
@@ -62,6 +66,7 @@ impl CicsBridge {
             return_transid: None,
             xctl_program: None,
             commarea_var: None,
+            abend_label: None,
             browse_tokens: HashMap::new(),
             terminal_callback: None,
             last_map_name: None,
@@ -102,6 +107,7 @@ impl CicsBridge {
         self.return_transid = None;
         self.xctl_program = None;
         self.commarea_var = None;
+        self.abend_label = None;
         self.runtime.eib.reset_for_command();
     }
 
@@ -640,6 +646,10 @@ impl CicsBridge {
     }
 
     /// Handle ABEND command.
+    ///
+    /// If a HANDLE ABEND label was previously registered, sets `abend_label`
+    /// so the session loop can transfer control to the handler paragraph.
+    /// Otherwise just logs the abend and stops execution.
     fn handle_abend(
         &mut self,
         options: &[(String, Option<CobolValue>)],
@@ -647,8 +657,16 @@ impl CicsBridge {
     ) -> Result<()> {
         let abcode = Self::get_option_str(options, "ABCODE").unwrap_or_else(|| "ASRA".to_string());
 
-        env.display(&format!("[CICS] ABEND({})", abcode), false)?;
-        env.stop();
+        if let Some(ref handler) = self.runtime.context.abend_handler {
+            // A HANDLE ABEND label was registered — signal the session loop
+            // to execute that paragraph instead of terminating.
+            tracing::info!("ABEND({}) — routing to handler '{}'", abcode, handler);
+            self.abend_label = Some(handler.clone());
+            env.stop();
+        } else {
+            env.display(&format!("[CICS] ABEND({})", abcode), false)?;
+            env.stop();
+        }
         Ok(())
     }
 
@@ -1044,6 +1062,44 @@ mod tests {
 
         bridge.execute("HANDLE", &options, &mut env).unwrap();
         assert_eq!(bridge.runtime.eib.eibresp, CicsResponse::Normal as u32);
+        // Verify the handler was registered
+        assert_eq!(bridge.runtime.context.abend_handler, Some("ABEND-PARA".to_string()));
+    }
+
+    #[test]
+    fn test_abend_with_handler_sets_label() {
+        let mut bridge = CicsBridge::new("MENU", "T001");
+        let mut env = create_test_env();
+
+        // Register HANDLE ABEND
+        let handle_opts = vec![
+            ("ABEND".to_string(), None),
+            ("LABEL".to_string(), Some(CobolValue::Alphanumeric("ERR-HANDLER".to_string()))),
+        ];
+        bridge.execute("HANDLE", &handle_opts, &mut env).unwrap();
+        assert!(bridge.abend_label.is_none());
+
+        // Issue ABEND — should set abend_label instead of just stopping
+        let abend_opts = vec![
+            ("ABCODE".to_string(), Some(CobolValue::Alphanumeric("ASRA".to_string()))),
+        ];
+        bridge.execute("ABEND", &abend_opts, &mut env).unwrap();
+        assert_eq!(bridge.abend_label, Some("ERR-HANDLER".to_string()));
+        assert!(env.is_stopped());
+    }
+
+    #[test]
+    fn test_abend_without_handler_no_label() {
+        let mut bridge = CicsBridge::new("MENU", "T001");
+        let mut env = create_test_env();
+
+        // No HANDLE ABEND registered — ABEND should just stop
+        let abend_opts = vec![
+            ("ABCODE".to_string(), Some(CobolValue::Alphanumeric("AICA".to_string()))),
+        ];
+        bridge.execute("ABEND", &abend_opts, &mut env).unwrap();
+        assert!(bridge.abend_label.is_none());
+        assert!(env.is_stopped());
     }
 
     #[test]

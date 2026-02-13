@@ -441,7 +441,7 @@ pub fn execute(program: &SimpleProgram, env: &mut Environment) -> Result<i32> {
 }
 
 /// Execute a list of statements.
-fn execute_statements(
+pub fn execute_statements(
     statements: &[SimpleStatement],
     program: &SimpleProgram,
     env: &mut Environment,

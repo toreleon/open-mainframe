@@ -258,8 +258,54 @@ pub fn interpret(
         env.resume();
 
         // Execute the program
-        let rc = zos_runtime::interpreter::execute(&program, &mut env)
-            .map_err(|e| miette::miette!("Runtime error in {}: {}", current_program, e))?;
+        let exec_result = zos_runtime::interpreter::execute(&program, &mut env);
+
+        // If execution failed, check for a HANDLE ABEND handler before propagating.
+        let rc = match exec_result {
+            Ok(rc) => rc,
+            Err(e) => {
+                let abend_label = env.cics_handler.as_mut().and_then(|h| {
+                    h.as_any_mut()
+                        .and_then(|a| a.downcast_mut::<CicsBridge>())
+                        .and_then(|b| b.runtime.context.abend_handler.clone())
+                });
+                if let Some(label) = abend_label {
+                    tracing::info!(
+                        "Error in {}: {} — invoking HANDLE ABEND label '{}'",
+                        current_program, e, label
+                    );
+                    if let Some(para) = program.paragraphs.get(&label.to_uppercase()) {
+                        env.resume();
+                        let _ = zos_runtime::interpreter::execute_statements(para, program, &mut env);
+                    }
+                    0 // Handler ran — continue as normal
+                } else {
+                    return Err(miette::miette!("Runtime error in {}: {}", current_program, e));
+                }
+            }
+        };
+
+        // Check if bridge has a pending abend label (EXEC CICS ABEND with handler)
+        if let Some(mut handler) = env.cics_handler.take() {
+            let bridge = handler.as_any_mut()
+                .and_then(|a| a.downcast_mut::<CicsBridge>());
+            if let Some(bridge) = bridge {
+                if let Some(label) = bridge.abend_label.take() {
+                    tracing::info!("EXEC CICS ABEND — invoking handler label '{}'", label);
+                    if let Some(para) = program.paragraphs.get(&label.to_uppercase()) {
+                        env.cics_handler = Some(handler);
+                        env.resume();
+                        let _ = zos_runtime::interpreter::execute_statements(para, program, &mut env);
+                    } else {
+                        env.cics_handler = Some(handler);
+                    }
+                } else {
+                    env.cics_handler = Some(handler);
+                }
+            } else {
+                env.cics_handler = Some(handler);
+            }
+        }
 
         // Check if XCTL was issued - extract handler to inspect state
         if let Some(mut handler) = env.cics_handler.take() {

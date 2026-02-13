@@ -521,23 +521,76 @@ fn run_session_loop(
         // had an error, there may be a partial screen to display).
         apply_pending_events(session, ctx.callback_state);
 
-        // Handle execution errors gracefully: show on status line and wait for
-        // user to press PF3 to exit, rather than immediately terminating.
+        // Handle execution errors gracefully.  If a HANDLE ABEND label was
+        // registered, transfer control to that paragraph instead of showing
+        // the error screen and blocking.
         if let Err(e) = exec_result {
-            let err_msg = format!("ABEND in {}: {}", ctx.current_program, e);
-            tracing::error!("{}", err_msg);
-            session.set_message(&err_msg);
+            let abend_label = env.cics_handler.as_mut().and_then(|h| {
+                h.as_any_mut()
+                    .and_then(|a| a.downcast_mut::<CicsBridge>())
+                    .and_then(|b| b.runtime.context.abend_handler.clone())
+            });
 
-            // Show the error and wait for user to press PF3 or Ctrl+C
-            loop {
-                let (aid, _fields) = session.wait_for_input(terminal)?;
-                if aid == zos_cics::runtime::eib::aid::PF3
-                    || aid == zos_cics::runtime::eib::aid::CLEAR
-                {
-                    return Ok(());
+            if let Some(label) = abend_label {
+                tracing::info!(
+                    "Execution error in {}: {} — invoking HANDLE ABEND label '{}'",
+                    ctx.current_program, e, label
+                );
+                let program = ctx.program_cache.get(ctx.current_program.as_str()).unwrap();
+                if let Some(para) = program.paragraphs.get(&label.to_uppercase()) {
+                    env.resume();
+                    let _ = zos_runtime::interpreter::execute_statements(para, program, env);
+                    apply_pending_events(session, ctx.callback_state);
+                } else {
+                    tracing::warn!("HANDLE ABEND label '{}' not found in program", label);
+                    session.set_message(&format!("ABEND in {}: {}", ctx.current_program, e));
+                    loop {
+                        let (aid, _) = session.wait_for_input(terminal)?;
+                        if aid == zos_cics::runtime::eib::aid::PF3
+                            || aid == zos_cics::runtime::eib::aid::CLEAR
+                        {
+                            return Ok(());
+                        }
+                        session.set_message(&format!("ABEND in {}: {}", ctx.current_program, e));
+                    }
                 }
-                // Any other key: keep showing the error screen
+            } else {
+                let err_msg = format!("ABEND in {}: {}", ctx.current_program, e);
+                tracing::error!("{}", err_msg);
                 session.set_message(&err_msg);
+
+                // Show the error and wait for user to press PF3 or Ctrl+C
+                loop {
+                    let (aid, _fields) = session.wait_for_input(terminal)?;
+                    if aid == zos_cics::runtime::eib::aid::PF3
+                        || aid == zos_cics::runtime::eib::aid::CLEAR
+                    {
+                        return Ok(());
+                    }
+                    // Any other key: keep showing the error screen
+                    session.set_message(&err_msg);
+                }
+            }
+        }
+
+        // Check if bridge has a pending abend label (from EXEC CICS ABEND
+        // with a HANDLE ABEND handler registered — execution stopped normally
+        // via env.stop(), not via an Err).
+        if let Some(handler) = env.cics_handler.as_mut() {
+            let bridge = handler.as_any_mut()
+                .and_then(|a| a.downcast_mut::<CicsBridge>());
+            if let Some(bridge) = bridge {
+                if let Some(label) = bridge.abend_label.take() {
+                    tracing::info!("EXEC CICS ABEND — invoking handler label '{}'", label);
+                    let program = ctx.program_cache.get(ctx.current_program.as_str()).unwrap();
+                    if let Some(para) = program.paragraphs.get(&label.to_uppercase()) {
+                        env.resume();
+                        let _ = zos_runtime::interpreter::execute_statements(para, program, env);
+                        apply_pending_events(session, ctx.callback_state);
+                    } else {
+                        tracing::warn!("HANDLE ABEND label '{}' not found in program", label);
+                    }
+                }
             }
         }
 
