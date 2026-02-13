@@ -4,13 +4,13 @@
 
 ```yaml
 active: true
-iteration: 12
+iteration: 13
 started: 2026-02-13
 last_updated: 2026-02-13
-current_version: v1.1
-current_epic: 20
-current_story: 20.5
-status: complete
+current_version: v1.2
+current_epic: 21
+current_story: 21.1
+status: planning_complete
 ```
 
 ---
@@ -278,6 +278,26 @@ status: complete
 - [x] All tests passing: 306 tests
 - [x] **v1.1 COMPLETE**
 
+### Iteration 13 - 2026-02-13
+**Focus:** v1.2 Planning - Enterprise Features
+**Status:** Complete
+**Actions:**
+- [x] Create PRD v1.2 (DB2, CICS, Migration Tools)
+  - DB2 SQL preprocessing with PostgreSQL backend
+  - CICS foundation (LINK, XCTL, file control, BMS)
+  - Migration assessment tooling
+- [x] Create Architecture v1.2
+  - DB2 subsystem architecture
+  - CICS command processor design
+  - BMS map compiler design
+  - zos-db2, zos-cics, zos-bms, zos-migrate crates
+- [x] Create Epics v1.2
+  - 8 epics, 57 stories planned
+  - Epic 21-24: DB2 (27 stories)
+  - Epic 25-27: CICS (23 stories)
+  - Epic 28: Migration (7 stories)
+- [x] Ready for v1.2 implementation
+
 ---
 
 ## Blockers
@@ -329,7 +349,9 @@ crates/zos-dataset/src/
 | PRD | v1.1 | ✅ Complete | `_bmad-output/planning-artifacts/prd-v1.1.md` |
 | Architecture | v1.1 | ✅ Complete | `_bmad-output/planning-artifacts/architecture-v1.1.md` |
 | Epics | v1.1 | ✅ Complete | `_bmad-output/planning-artifacts/epics-v1.1.md` |
-| PRD | v1.2 | ⏳ Not Started | - |
+| PRD | v1.2 | ✅ Complete | `_bmad-output/planning-artifacts/prd-v1.2.md` |
+| Architecture | v1.2 | ✅ Complete | `_bmad-output/planning-artifacts/architecture-v1.2.md` |
+| Epics | v1.2 | ✅ Complete | `_bmad-output/planning-artifacts/epics-v1.2.md` |
 | PRD | v1.3 | ⏳ Not Started | - |
 
 ---
@@ -352,9 +374,9 @@ cargo clippy -- -D warnings
 ```
 
 ### Next Steps
-1. v1.1 Complete - ready for release
-2. Plan v1.2 features (CICS support, DB2 integration)
-3. Set up package repository infrastructure
+1. Start Epic 21: SQL Preprocessor
+2. Implement DB2 core functionality
+3. Tag v1.1.0 release
 
 ---
 
@@ -370,3 +392,4 @@ cargo clippy -- -D warnings
 | 2026-02-13 | Epic 18 | GDG Support | ✅ Epic complete |
 | 2026-02-13 | Epic 19 | IDCAMS | ✅ Epic complete |
 | 2026-02-13 | Epic 20 | Package Distribution | ✅ Epic complete, v1.1 done |
+| 2026-02-13 | Planning | v1.2 artifacts | ✅ PRD, Arch, Epics done |
