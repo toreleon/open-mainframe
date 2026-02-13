@@ -139,6 +139,12 @@ enum Commands {
         input: PathBuf,
     },
 
+    /// Manage Generation Data Groups (GDG)
+    Gdg {
+        #[command(subcommand)]
+        action: commands::gdg::GdgAction,
+    },
+
     /// Manage configuration
     Config {
         #[command(subcommand)]
@@ -187,6 +193,7 @@ fn main() -> Result<()> {
         Commands::ParseJcl { input } => commands::parse_jcl::run(input),
         Commands::Lex { input, format } => commands::lex::run(input, format),
         Commands::Interpret { input } => commands::interpret::interpret(input),
+        Commands::Gdg { action } => commands::gdg::run(action),
         Commands::Config { action } => match action {
             ConfigAction::Show => {
                 let config = config::Config::load();

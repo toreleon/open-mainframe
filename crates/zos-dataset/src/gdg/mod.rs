@@ -24,5 +24,5 @@
 mod base;
 mod generation;
 
-pub use base::{GdgBase, GdgOptions};
+pub use base::{GdgBase, GdgGenerationInfo, GdgListInfo, GdgOptions};
 pub use generation::{GdgGeneration, GenerationNumber};

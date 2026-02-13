@@ -7,6 +7,36 @@ use std::path::{Path, PathBuf};
 use crate::error::DatasetError;
 use crate::gdg::generation::{GdgGeneration, GenerationNumber};
 
+/// Information about a GDG for LISTCAT-style output.
+#[derive(Debug, Clone)]
+pub struct GdgListInfo {
+    /// Base name.
+    pub name: String,
+    /// Generation limit.
+    pub limit: u8,
+    /// Scratch mode.
+    pub scratch: bool,
+    /// Empty allowed.
+    pub empty: bool,
+    /// Number of generations.
+    pub generation_count: usize,
+    /// Generation details.
+    pub generations: Vec<GdgGenerationInfo>,
+}
+
+/// Information about a single generation.
+#[derive(Debug, Clone)]
+pub struct GdgGenerationInfo {
+    /// Full dataset name.
+    pub name: String,
+    /// Generation number.
+    pub number: GenerationNumber,
+    /// Creation timestamp (Unix seconds).
+    pub created: u64,
+    /// Whether the file exists.
+    pub exists: bool,
+}
+
 /// GDG base options.
 #[derive(Debug, Clone)]
 pub struct GdgOptions {
@@ -459,6 +489,43 @@ impl GdgBase {
         Ok(())
     }
 
+    /// Get LISTCAT-style information about this GDG.
+    pub fn list_info(&self) -> GdgListInfo {
+        GdgListInfo {
+            name: self.name.clone(),
+            limit: self.options.limit,
+            scratch: self.options.scratch,
+            empty: self.options.empty,
+            generation_count: self.generations.len(),
+            generations: self.generations.iter().map(|g| GdgGenerationInfo {
+                name: g.name(),
+                number: g.number(),
+                created: g.created(),
+                exists: g.exists(),
+            }).collect(),
+        }
+    }
+
+    /// Delete a specific generation.
+    pub fn delete_generation(&mut self, number: GenerationNumber) -> Result<(), DatasetError> {
+        let idx = self.generations.iter().position(|g| g.number() == number);
+        match idx {
+            Some(idx) => {
+                let gen = &self.generations[idx];
+                // Delete file
+                if gen.path().exists() {
+                    fs::remove_file(gen.path())?;
+                }
+                // Remove from list
+                self.generations.remove(idx);
+                Ok(())
+            }
+            None => Err(DatasetError::NotFound {
+                name: format!("{}.{}", self.name, number),
+            }),
+        }
+    }
+
     /// Delete the entire GDG and all generations.
     pub fn delete(self) -> Result<(), DatasetError> {
         // Delete all generation files
@@ -722,6 +789,73 @@ mod tests {
             base.delete().unwrap();
         }
 
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_gdg_list_info() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut base = GdgBase::create(
+            "MY.GDG.BASE",
+            &dir,
+            GdgOptions {
+                limit: 5,
+                scratch: true,
+                empty: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        base.new_generation().unwrap();
+        base.new_generation().unwrap();
+
+        let info = base.list_info();
+        assert_eq!(info.name, "MY.GDG.BASE");
+        assert_eq!(info.limit, 5);
+        assert!(info.scratch);
+        assert!(info.empty);
+        assert_eq!(info.generation_count, 2);
+        assert_eq!(info.generations.len(), 2);
+        assert_eq!(info.generations[0].name, "MY.GDG.BASE.G0001V00");
+        assert_eq!(info.generations[1].name, "MY.GDG.BASE.G0002V00");
+
+        base.delete().unwrap();
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_gdg_delete_generation() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut base = GdgBase::create("MY.GDG.BASE", &dir, GdgOptions::default()).unwrap();
+
+        let gen1 = base.new_generation().unwrap();
+        let gen2 = base.new_generation().unwrap();
+
+        // Create files
+        fs::write(gen1.path(), "gen1").unwrap();
+        fs::write(gen2.path(), "gen2").unwrap();
+
+        // Delete gen1
+        let gen1_num = gen1.number();
+        base.delete_generation(gen1_num).unwrap();
+
+        assert_eq!(base.generation_count(), 1);
+        assert!(!gen1.path().exists());
+        assert!(gen2.path().exists());
+
+        // Current should be gen2
+        assert_eq!(base.current().unwrap().name(), "MY.GDG.BASE.G0002V00");
+
+        // Try to delete nonexistent generation
+        let result = base.delete_generation(gen1_num);
+        assert!(result.is_err());
+
+        base.delete().unwrap();
         cleanup(&dir);
     }
 }
