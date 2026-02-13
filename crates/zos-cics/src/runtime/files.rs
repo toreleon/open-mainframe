@@ -200,9 +200,16 @@ impl FileManager {
             CicsError::FileError(CicsResponse::Filenotfound)
         })?;
 
+        // Use prefix matching: when KEYLENGTH differs from the file's key
+        // length, CICS compares only the shorter of the two.  This lets a
+        // COBOL program with `KEYLENGTH(8)` match records whose stored key
+        // is wider (or vice-versa).
         let record = records
             .iter()
-            .find(|r| r.key == key)
+            .find(|r| {
+                let min_len = r.key.len().min(key.len());
+                min_len > 0 && r.key[..min_len] == key[..min_len]
+            })
             .cloned()
             .ok_or_else(|| CicsError::FileError(CicsResponse::Notfnd))?;
 

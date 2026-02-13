@@ -216,7 +216,19 @@ fn derive_assign_values(needed: &HashSet<String>) -> HashMap<String, CobolValue>
         if let Ok(val) = std::env::var(&env_name) {
             values.insert(key.clone(), CobolValue::Alphanumeric(val));
         } else {
-            tracing::debug!("No env var '{}' set for ASSIGN option '{}'", env_name, key);
+            // Provide sensible defaults for common ASSIGN options
+            let default = match key.as_str() {
+                "APPLID" => Some("CARDDEMO"),
+                "SYSID" => Some("ZOS1"),
+                "USERID" => Some("CICSUSER"),
+                "NETNAME" => Some("NETNAME1"),
+                _ => None,
+            };
+            if let Some(def) = default {
+                values.insert(key.clone(), CobolValue::Alphanumeric(def.to_string()));
+            } else {
+                tracing::debug!("No env var '{}' set for ASSIGN option '{}'", env_name, key);
+            }
         }
     }
 
@@ -323,6 +335,7 @@ pub fn run_session(
         tracing::info!("ASSIGN {}={}", k, v.to_display_string().trim());
     }
     bridge.set_assign_values(assign_values);
+    bridge.set_mapset_maps(mapset_maps.clone());
 
     // Load VSAM data files
     for spec in &data_files {

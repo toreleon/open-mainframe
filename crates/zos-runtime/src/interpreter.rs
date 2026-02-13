@@ -395,7 +395,7 @@ pub struct SimpleProgram {
 /// A sub-field within a group item, with its offset and size.
 #[derive(Debug, Clone)]
 pub struct GroupField {
-    /// Field name (uppercase).
+    /// Field name (uppercase). Empty string for FILLER fields.
     pub name: String,
     /// Byte offset within the group.
     pub offset: usize,
@@ -403,6 +403,8 @@ pub struct GroupField {
     pub size: usize,
     /// Whether numeric.
     pub is_numeric: bool,
+    /// Default value for FILLER fields with VALUE clause (e.g., "/", ":").
+    pub default_value: Option<String>,
 }
 
 /// When a group item is set, decompose its value into sub-fields based on the group layout.
@@ -425,6 +427,62 @@ fn decompose_group(group_name: &str, data: &str, program: &SimpleProgram, env: &
         }
     }
     Ok(())
+}
+
+/// Recompose a group variable's value from its children's current values.
+///
+/// This is the inverse of `decompose_group`. When a group variable is read
+/// (e.g., used as the source of a MOVE), its stored value may be stale if
+/// children were updated independently. This function rebuilds the group
+/// string by slotting each child's current display value into its offset.
+fn compose_group(group_name: &str, program: &SimpleProgram, env: &Environment) -> Option<CobolValue> {
+    let fields = program.group_layouts.get(&group_name.to_uppercase())?;
+    if fields.is_empty() {
+        return None;
+    }
+
+    // Determine total group size from the last field's offset + size
+    let total_size = fields.iter().map(|f| f.offset + f.size).max().unwrap_or(0);
+    if total_size == 0 {
+        return None;
+    }
+
+    let mut buffer = vec![b' '; total_size];
+
+    for field in fields {
+        // For FILLER fields with default values (e.g., "/" or ":"), use the default
+        if field.name.is_empty() {
+            if let Some(ref default) = field.default_value {
+                let bytes = default.as_bytes();
+                for i in 0..field.size {
+                    if field.offset + i < buffer.len() {
+                        buffer[field.offset + i] = if i < bytes.len() { bytes[i] } else { b' ' };
+                    }
+                }
+            }
+            continue;
+        }
+
+        if let Some(val) = env.get(&field.name) {
+            let display = if field.is_numeric {
+                // Numeric fields: zero-pad on the left to field size
+                let raw = val.to_display_string();
+                let trimmed = raw.trim();
+                format!("{:0>width$}", trimmed, width = field.size)
+            } else {
+                val.to_display_string()
+            };
+            let bytes = display.as_bytes();
+            // Slot value into buffer at field offset
+            for i in 0..field.size {
+                if field.offset + i < buffer.len() {
+                    buffer[field.offset + i] = if i < bytes.len() { bytes[i] } else { b' ' };
+                }
+            }
+        }
+    }
+
+    Some(CobolValue::Alphanumeric(String::from_utf8_lossy(&buffer).to_string()))
 }
 
 /// Execute a simple program.
@@ -505,12 +563,23 @@ fn execute_statement_impl(
         }
 
         SimpleStatement::Move { from, to } => {
+            // If the source is a group variable, recompose from children first
+            if let SimpleExpr::Variable(ref var_name) = from {
+                if program.group_layouts.contains_key(&var_name.to_uppercase()) {
+                    if let Some(composed) = compose_group(var_name, program, env) {
+                        env.set(var_name, composed)?;
+                    }
+                }
+            }
             let value = eval_expr(from, env)?;
             for target in to {
                 env.set(target, value.clone())?;
                 // If target is a group item, decompose into sub-fields
                 if program.group_layouts.contains_key(&target.to_uppercase()) {
                     let data = value.to_display_string();
+                    if std::env::var("ZOS_DEBUG_GROUPS").is_ok() {
+                        eprintln!("[MOVE→DECOMPOSE] target={} data_len={} data={:?}", target, data.len(), &data[..data.len().min(40)]);
+                    }
                     decompose_group(target, &data, program, env)?;
                 }
             }
@@ -646,6 +715,8 @@ fn execute_statement_impl(
             ];
             // Commands where ALL option values are paragraph/label names, not expressions
             let is_label_command = command == "HANDLE" || command == "IGNORE";
+            // Commands where ALL option values are variable names (target for writing)
+            let is_assign_command = command == "ASSIGN";
 
             // Evaluate option expressions, but for variable-reference options,
             // pass the variable NAME as a string instead of evaluating the value.
@@ -654,7 +725,16 @@ fn execute_statement_impl(
                 .iter()
                 .map(|(name, expr)| {
                     let value = if let Some(e) = expr {
-                        if is_label_command {
+                        if is_assign_command {
+                            // ASSIGN: all values are variable names (targets for writing)
+                            if let SimpleExpr::Variable(var_name) = e {
+                                Some(CobolValue::Alphanumeric(var_name.clone()))
+                            } else if let SimpleExpr::String(s) = e {
+                                Some(CobolValue::Alphanumeric(s.clone()))
+                            } else {
+                                Some(eval_expr(e, env)?)
+                            }
+                        } else if is_label_command {
                             // HANDLE CONDITION / IGNORE CONDITION: values are paragraph names
                             if let SimpleExpr::Variable(var_name) = e {
                                 Some(CobolValue::Alphanumeric(var_name.clone()))
@@ -867,20 +947,52 @@ fn eval_expr(expr: &SimpleExpr, env: &Environment) -> Result<CobolValue> {
                     Ok(CobolValue::Alphanumeric(val.to_display_string().to_lowercase()))
                 }
                 "CURRENT-DATE" => {
-                    // Returns YYYYMMDDHHMMSSTT (21 chars)
+                    // Returns YYYYMMDDHHMMSSCC+HHMM (21 chars)
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
-                    // Simple date formatting: 20260213120000+0000
-                    // Use a fixed format for now
-                    let secs = now % 86400;
-                    let hh = secs / 3600;
-                    let mm = (secs % 3600) / 60;
-                    let ss = secs % 60;
+
+                    let days_since_epoch = (now / 86400) as i64;
+                    let time_of_day = now % 86400;
+                    let hh = time_of_day / 3600;
+                    let mm = (time_of_day % 3600) / 60;
+                    let ss = time_of_day % 60;
+
+                    // Calculate year, month, day from days since 1970-01-01
+                    let mut year = 1970i64;
+                    let mut remaining = days_since_epoch;
+                    loop {
+                        let days_in_year = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+                            366
+                        } else {
+                            365
+                        };
+                        if remaining < days_in_year {
+                            break;
+                        }
+                        remaining -= days_in_year;
+                        year += 1;
+                    }
+                    let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+                    let month_days: [i64; 12] = if is_leap {
+                        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+                    } else {
+                        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+                    };
+                    let mut month = 1i64;
+                    for &d in &month_days {
+                        if remaining < d {
+                            break;
+                        }
+                        remaining -= d;
+                        month += 1;
+                    }
+                    let day = remaining + 1;
+
                     let date_str = format!(
-                        "20260213{:02}{:02}{:02}00+0000",
-                        hh, mm, ss
+                        "{:04}{:02}{:02}{:02}{:02}{:02}00+0000",
+                        year, month, day, hh, mm, ss
                     );
                     Ok(CobolValue::Alphanumeric(date_str))
                 }

@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use zos_cics::bms::BmsMap;
 use zos_cics::runtime::{CicsRuntime, FileMode, FileRecord};
 use zos_cics::terminal::{TerminalCallback, TerminalManager};
 use zos_cics::CicsResponse;
@@ -13,6 +14,7 @@ use zos_runtime::interpreter::{CicsCommandHandler, Environment, InterpreterError
 use zos_runtime::value::CobolValue;
 
 type Result<T> = std::result::Result<T, InterpreterError>;
+type MapsetMaps = HashMap<String, HashMap<String, BmsMap>>;
 
 /// Convert an AID byte to its CICS name for HANDLE AID lookup.
 fn aid_byte_to_name(byte: u8) -> Option<&'static str> {
@@ -75,6 +77,9 @@ pub struct CicsBridge {
     /// The bridge performs a plain lookup; it has zero knowledge of which
     /// option names exist or how the values are derived.
     assign_values: HashMap<String, CobolValue>,
+    /// BMS mapset definitions — used by `handle_send_map` to look up
+    /// individual output field values from the COBOL environment.
+    mapset_maps: MapsetMaps,
 }
 
 impl CicsBridge {
@@ -103,6 +108,7 @@ impl CicsBridge {
             last_map_name: None,
             last_mapset_name: None,
             assign_values: HashMap::new(),
+            mapset_maps: HashMap::new(),
         }
     }
 
@@ -110,6 +116,12 @@ impl CicsBridge {
     /// The caller decides what keys and values to provide.
     pub fn set_assign_values(&mut self, values: HashMap<String, CobolValue>) {
         self.assign_values = values;
+    }
+
+    /// Store BMS mapset definitions so `handle_send_map` can look up
+    /// individual output field values from the COBOL environment.
+    pub fn set_mapset_maps(&mut self, maps: MapsetMaps) {
+        self.mapset_maps = maps;
     }
 
     /// Register a VSAM file with the bridge's file manager.
@@ -194,6 +206,29 @@ impl CicsBridge {
             // FROM(data-area) - send the whole data area
             if let Some(val) = env.get(from) {
                 data.insert("__FROM__".to_string(), val.to_display_string().into_bytes());
+            }
+        }
+
+        // Look up individual output field values from the environment.
+        // The COBOL program sets fields like TRNNAMEO, PGMNAMEO, etc. as
+        // children of the symbolic output map group.  Since env.get() on
+        // the group doesn't recompose from children, we need to fetch each
+        // child individually and pass them to the TUI by BMS field name.
+        if let Some(maps) = self.mapset_maps.get(&mapset_name.to_uppercase()) {
+            if let Some(bms_map) = maps.get(&map_name.to_uppercase()) {
+                for field in &bms_map.fields {
+                    if !field.name.is_empty() {
+                        // Output fields use the "O" suffix (COBOL symbolic map convention)
+                        let output_name = format!("{}O", field.name);
+                        if let Some(val) = env.get(&output_name) {
+                            let s = val.to_display_string();
+                            // Only include if the program actually set a value
+                            if s.trim().len() > 0 {
+                                data.insert(field.name.clone(), s.into_bytes());
+                            }
+                        }
+                    }
+                }
             }
         }
 

@@ -497,6 +497,10 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
         }
     }
 
+    if std::env::var("ZOS_DEBUG_GROUPS").is_ok() {
+        eprintln!("[GROUP_LAYOUTS] {:?}", group_layouts.keys().collect::<Vec<_>>());
+    }
+
     Ok(SimpleProgram {
         name,
         data_items,
@@ -621,25 +625,53 @@ fn collect_sub_fields(
         if item.level == 88 {
             continue; // Skip condition names
         }
+        // REDEFINES items share the same offset as the item they redefine;
+        // they must NOT advance the offset counter.
+        if item.redefines.is_some() {
+            continue;
+        }
         let size = compute_item_size(item);
-        if let DataItemName::Named(ref name) = item.name {
-            let is_numeric = item
-                .picture
-                .as_ref()
-                .map(|p| {
-                    matches!(
-                        p.category,
-                        zos_cobol::ast::PictureCategory::Numeric
-                            | zos_cobol::ast::PictureCategory::NumericEdited
-                    )
-                })
-                .unwrap_or(false);
-            fields.push(zos_runtime::interpreter::GroupField {
-                name: name.to_uppercase(),
-                offset,
-                size,
-                is_numeric,
-            });
+        match &item.name {
+            DataItemName::Named(name) => {
+                let is_numeric = item
+                    .picture
+                    .as_ref()
+                    .map(|p| {
+                        matches!(
+                            p.category,
+                            zos_cobol::ast::PictureCategory::Numeric
+                                | zos_cobol::ast::PictureCategory::NumericEdited
+                        )
+                    })
+                    .unwrap_or(false);
+                fields.push(zos_runtime::interpreter::GroupField {
+                    name: name.to_uppercase(),
+                    offset,
+                    size,
+                    is_numeric,
+                    default_value: None,
+                });
+            }
+            DataItemName::Filler => {
+                // Include FILLER fields with VALUE clauses (e.g., "/", ":") so
+                // compose_group can reproduce the separator characters.
+                if let Some(ref val_lit) = item.value {
+                    let val_str = match &val_lit.kind {
+                        zos_cobol::ast::LiteralKind::String(s) => s.clone(),
+                        zos_cobol::ast::LiteralKind::Integer(n) => n.to_string(),
+                        _ => String::new(),
+                    };
+                    if !val_str.is_empty() {
+                        fields.push(zos_runtime::interpreter::GroupField {
+                            name: String::new(), // Unnamed / FILLER
+                            offset,
+                            size,
+                            is_numeric: false,
+                            default_value: Some(val_str),
+                        });
+                    }
+                }
+            }
         }
         // If this is a sub-group, also collect its children at the same offset
         if !item.children.is_empty() {
