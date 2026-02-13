@@ -36,6 +36,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Decimal arithmetic
 rust_decimal = { version = "1", features = ["maths"] }
 
+# System paths
+dirs = "5"
+
 # LLVM code generation
 inkwell = { version = "0.5", features = ["llvm18-0"] }
 
