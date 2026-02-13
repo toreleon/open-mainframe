@@ -317,6 +317,25 @@ impl JobExecutor {
 
     /// Execute a program.
     fn execute_program(&mut self, step: &Step, pgm: &str) -> Result<StepResult, JclError> {
+        // Handle built-in system utilities
+        match pgm {
+            "IEFBR14" => {
+                // No-op program - just return success
+                return Ok(StepResult {
+                    name: step.name.clone(),
+                    return_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: true,
+                });
+            }
+            "SORT" | "DFSORT" | "ICEMAN" => {
+                // Sort utility - handle internally
+                return self.execute_sort(step);
+            }
+            _ => {}
+        }
+
         // Find the program executable
         let exe_path = self.find_program(pgm)?;
 
@@ -357,6 +376,80 @@ impl JobExecutor {
             stdout,
             stderr,
             success,
+        })
+    }
+
+    /// Execute SORT utility.
+    fn execute_sort(&self, step: &Step) -> Result<StepResult, JclError> {
+        // Get required DD files
+        let sortin = self.dd_files.get("SORTIN").ok_or_else(|| JclError::ExecutionFailed {
+            message: "SORT requires SORTIN DD".to_string(),
+        })?;
+
+        let sortout = self.dd_files.get("SORTOUT").ok_or_else(|| JclError::ExecutionFailed {
+            message: "SORT requires SORTOUT DD".to_string(),
+        })?;
+
+        // Get control statements from SYSIN if available
+        let control_statements = if let Some(sysin_path) = self.dd_files.get("SYSIN") {
+            std::fs::read_to_string(sysin_path).unwrap_or_default()
+        } else if let Some(ref parm) = step.params.parm {
+            // Use PARM as control statement
+            parm.clone()
+        } else {
+            return Err(JclError::ExecutionFailed {
+                message: "SORT requires SYSIN or PARM with control statements".to_string(),
+            });
+        };
+
+        // Parse control statements
+        let parsed = zos_sort::parse_control_statements(&control_statements)
+            .map_err(|e| JclError::ExecutionFailed {
+                message: format!("SORT control statement error: {}", e),
+            })?;
+
+        // Build sort engine
+        let mut engine = if parsed.copy_mode {
+            zos_sort::SortEngine::copy()
+        } else {
+            let sort_spec = parsed.sort.ok_or_else(|| JclError::ExecutionFailed {
+                message: "SORT FIELDS specification required".to_string(),
+            })?;
+            zos_sort::SortEngine::new(sort_spec)
+        };
+
+        if let Some(include) = parsed.include {
+            engine = engine.with_include(include);
+        }
+        if let Some(omit) = parsed.omit {
+            engine = engine.with_omit(omit);
+        }
+        if let Some(inrec) = parsed.inrec {
+            engine = engine.with_inrec(inrec);
+        }
+        if let Some(outrec) = parsed.outrec {
+            engine = engine.with_outrec(outrec);
+        }
+        if let Some(sum_fields) = parsed.sum_fields {
+            engine = engine.with_sum(sum_fields);
+        }
+
+        // Execute sort
+        let stats = engine.sort_file(sortin, sortout).map_err(|e| JclError::ExecutionFailed {
+            message: format!("SORT failed: {}", e),
+        })?;
+
+        let stdout = format!(
+            "SORT COMPLETED - IN: {} OUT: {} FILTERED: {}\n",
+            stats.input_records, stats.output_records, stats.filtered_records
+        );
+
+        Ok(StepResult {
+            name: step.name.clone(),
+            return_code: 0,
+            stdout,
+            stderr: String::new(),
+            success: true,
         })
     }
 
@@ -478,5 +571,54 @@ mod tests {
 
         // Step should be bypassed
         assert!(!executor.should_execute_step(&step, &prev));
+    }
+
+    #[test]
+    fn test_sort_jcl_integration() {
+        use std::fs;
+
+        // Create temp directory for test
+        let temp_dir = std::env::temp_dir().join("jcl_sort_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create input file with consistent 7-char records
+        let input_path = temp_dir.join("SORTIN.dat");
+        let output_path = temp_dir.join("SORTOUT.dat");
+        let sysin_path = temp_dir.join("SYSIN.dat");
+
+        fs::write(&input_path, "Charlie\nAlpha..\nBravo..\nDelta..\n").unwrap();
+        fs::write(&sysin_path, "  SORT FIELDS=(1,7,CH,A)\n").unwrap();
+
+        // Create executor with temp directories
+        let config = ExecutionConfig {
+            program_dir: temp_dir.clone(),
+            dataset_dir: temp_dir.clone(),
+            work_dir: temp_dir.clone(),
+            sysout_dir: temp_dir.clone(),
+        };
+        let mut executor = JobExecutor::with_config(config);
+
+        // Set up DD files manually
+        executor.dd_files.insert("SORTIN".to_string(), input_path);
+        executor.dd_files.insert("SORTOUT".to_string(), output_path.clone());
+        executor.dd_files.insert("SYSIN".to_string(), sysin_path);
+
+        // Create a step
+        let step = Step::program(Some("SORT01".to_string()), "SORT");
+
+        // Execute sort
+        let result = executor.execute_sort(&step).unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.return_code, 0);
+        assert!(result.stdout.contains("SORT COMPLETED"));
+
+        // Verify output is sorted
+        let output = fs::read_to_string(&output_path).unwrap();
+        assert_eq!(output, "Alpha..\nBravo..\nCharlie\nDelta..\n");
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

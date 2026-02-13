@@ -11,5 +11,6 @@ description = "JCL interpreter for zOS-clone"
 miette.workspace = true
 thiserror.workspace = true
 zos-dataset.workspace = true
+zos-sort.workspace = true
 
 [dev-dependencies]
