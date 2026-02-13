@@ -18,16 +18,12 @@ use zos_runtime::interpreter::{
 
 use super::cics_bridge::CicsBridge;
 
-/// Interpret a COBOL program directly.
-pub fn interpret(input: PathBuf) -> Result<()> {
-    // Read source file
-    let source_text = std::fs::read_to_string(&input)
+/// Load and parse a single COBOL source file into a SimpleProgram.
+fn load_program(path: &std::path::Path) -> Result<SimpleProgram> {
+    let source_text = std::fs::read_to_string(path)
         .into_diagnostic()
-        .wrap_err_with(|| format!("Failed to read: {}", input.display()))?;
+        .wrap_err_with(|| format!("Failed to read: {}", path.display()))?;
 
-    tracing::info!("Interpreting: {}", input.display());
-
-    // Create source file and lex
     let source_file = SourceFile::from_text(FileId(0), source_text, SourceFormat::Fixed);
     let (tokens, lex_errors) = scan(&source_file);
 
@@ -36,12 +32,12 @@ pub fn interpret(input: PathBuf) -> Result<()> {
             tracing::error!("Lex error: {:?}", err);
         }
         return Err(miette::miette!(
-            "Lexing failed with {} errors",
-            lex_errors.len()
+            "Lexing failed with {} errors in {}",
+            lex_errors.len(),
+            path.display()
         ));
     }
 
-    // Parse
     let (program, parse_errors) = zos_cobol::parser::parse(tokens);
 
     if !parse_errors.is_empty() {
@@ -49,45 +45,149 @@ pub fn interpret(input: PathBuf) -> Result<()> {
             tracing::error!("Parse error: {:?}", err);
         }
         return Err(miette::miette!(
-            "Parse failed with {} errors",
-            parse_errors.len()
+            "Parse failed with {} errors in {}",
+            parse_errors.len(),
+            path.display()
         ));
     }
 
     let program = program.ok_or_else(|| miette::miette!("Failed to parse program"))?;
+    convert_program(&program)
+}
 
-    let program_name = program.identification.program_id.name.clone();
+/// Try to find a COBOL source file for a program name in a directory.
+fn find_program_source(program_name: &str, search_dir: &std::path::Path) -> Option<PathBuf> {
+    let name_upper = program_name.to_uppercase();
+    // Try common naming patterns: NAME.cbl, NAME.CBL, NAME.cob
+    for ext in &["cbl", "CBL", "cob", "COB"] {
+        let candidate = search_dir.join(format!("{}.{}", name_upper, ext));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Interpret a COBOL program directly.
+pub fn interpret(input: PathBuf) -> Result<()> {
+    tracing::info!("Interpreting: {}", input.display());
+
+    let simple = load_program(&input)?;
+    let program_name = simple.name.clone();
     tracing::info!("Program: {}", program_name);
-
-    // Convert to SimpleProgram
-    let simple = convert_program(&program)?;
 
     // Check if program uses CICS (has any ExecCics statements)
     let uses_cics = has_cics_statements(&simple);
 
-    // Execute
-    let mut env = if uses_cics {
-        tracing::info!("CICS program detected, installing CICS bridge");
-        let bridge = CicsBridge::new("CARD", "T001");
-        Environment::new().with_cics_handler(Box::new(bridge))
-    } else {
-        Environment::new()
-    };
-
-    let rc = zos_runtime::interpreter::execute(&simple, &mut env)
-        .map_err(|e| miette::miette!("Runtime error: {}", e))?;
-
-    tracing::info!("Program completed with RC={}", rc);
-
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(miette::miette!(
-            "Program {} exited with RC={}",
-            program_name,
-            rc
-        ))
+    if !uses_cics {
+        // Simple non-CICS program - execute directly
+        let mut env = Environment::new();
+        let rc = zos_runtime::interpreter::execute(&simple, &mut env)
+            .map_err(|e| miette::miette!("Runtime error: {}", e))?;
+        tracing::info!("Program completed with RC={}", rc);
+        return if rc == 0 {
+            Ok(())
+        } else {
+            Err(miette::miette!("Program {} exited with RC={}", program_name, rc))
+        };
     }
+
+    // CICS program - set up bridge with XCTL dispatch support
+    tracing::info!("CICS program detected, installing CICS bridge");
+    let search_dir = input.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+
+    // Program registry: cache loaded programs by name
+    let mut program_cache: HashMap<String, SimpleProgram> = HashMap::new();
+    program_cache.insert(program_name.to_uppercase(), simple);
+
+    let bridge = CicsBridge::new("CARD", "T001");
+    let mut env = Environment::new().with_cics_handler(Box::new(bridge));
+
+    let mut current_program = program_name.to_uppercase();
+    let max_xctl_chain = 50; // Safety limit to prevent infinite XCTL loops
+
+    for xctl_depth in 0..max_xctl_chain {
+        let program = program_cache.get(&current_program).cloned();
+        let program = match program {
+            Some(p) => p,
+            None => {
+                // Try to load the program from the search directory
+                match find_program_source(&current_program, &search_dir) {
+                    Some(path) => {
+                        tracing::info!("Loading program {} from {}", current_program, path.display());
+                        let p = load_program(&path)?;
+                        program_cache.insert(current_program.clone(), p.clone());
+                        p
+                    }
+                    None => {
+                        return Err(miette::miette!(
+                            "XCTL target program not found: {} (searched in {})",
+                            current_program,
+                            search_dir.display()
+                        ));
+                    }
+                }
+            }
+        };
+
+        tracing::info!(
+            "Executing program {} (XCTL depth {})",
+            current_program,
+            xctl_depth
+        );
+
+        // Resume environment for new program (clear stopped state)
+        env.resume();
+
+        // Execute the program
+        let rc = zos_runtime::interpreter::execute(&program, &mut env)
+            .map_err(|e| miette::miette!("Runtime error in {}: {}", current_program, e))?;
+
+        // Check if XCTL was issued - extract handler to inspect state
+        if let Some(mut handler) = env.cics_handler.take() {
+            let bridge = handler
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<CicsBridge>());
+
+            if let Some(bridge) = bridge {
+                if let Some(ref xctl_target) = bridge.xctl_program.clone() {
+                    tracing::info!(
+                        "XCTL from {} to {} (RC={})",
+                        current_program,
+                        xctl_target,
+                        rc
+                    );
+                    current_program = xctl_target.to_uppercase();
+                    bridge.reset_for_xctl();
+                    env.cics_handler = Some(handler);
+                    continue;
+                }
+
+                if bridge.returned {
+                    if let Some(ref transid) = bridge.return_transid.clone() {
+                        tracing::info!(
+                            "RETURN TRANSID({}) from {} (RC={})",
+                            transid,
+                            current_program,
+                            rc
+                        );
+                    } else {
+                        tracing::info!("RETURN from {} (RC={})", current_program, rc);
+                    }
+                    env.cics_handler = Some(handler);
+                    break;
+                }
+            }
+
+            env.cics_handler = Some(handler);
+        }
+
+        // Normal completion (no XCTL, no RETURN) - done
+        tracing::info!("Program {} completed with RC={}", current_program, rc);
+        break;
+    }
+
+    Ok(())
 }
 
 /// Convert a COBOL AST Program to SimpleProgram.

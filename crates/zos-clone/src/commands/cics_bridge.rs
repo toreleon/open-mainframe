@@ -21,13 +21,15 @@ pub struct CicsBridge {
     /// Terminal manager for SEND/RECEIVE MAP.
     pub terminals: TerminalManager,
     /// Active terminal ID for this transaction.
-    pub terminal_id: String,
+    terminal_id: String,
     /// Program return flag - when set, the interpreter should stop.
     pub returned: bool,
     /// TRANSID to return to (for conversational pseudo-conversations).
     pub return_transid: Option<String>,
     /// Program to XCTL to.
     pub xctl_program: Option<String>,
+    /// COMMAREA variable name (the COBOL variable holding COMMAREA data).
+    pub commarea_var: Option<String>,
 }
 
 impl CicsBridge {
@@ -47,7 +49,17 @@ impl CicsBridge {
             returned: false,
             return_transid: None,
             xctl_program: None,
+            commarea_var: None,
         }
+    }
+
+    /// Reset the bridge for a new program execution (after XCTL).
+    pub fn reset_for_xctl(&mut self) {
+        self.returned = false;
+        self.return_transid = None;
+        self.xctl_program = None;
+        self.commarea_var = None;
+        self.runtime.eib.reset_for_command();
     }
 
     /// Helper to extract a named string option from CICS command options.
@@ -176,13 +188,21 @@ impl CicsBridge {
         env: &mut Environment,
     ) -> Result<()> {
         let transid = Self::get_option_str(options, "TRANSID");
-        let _commarea = Self::get_option_str(options, "COMMAREA");
+        let commarea = Self::get_option_str(options, "COMMAREA");
 
         if let Some(ref tid) = transid {
-            env.display(
-                &format!("[CICS] RETURN TRANSID({})", tid),
-                false,
-            )?;
+            if let Some(ref ca) = commarea {
+                env.display(
+                    &format!("[CICS] RETURN TRANSID({}) COMMAREA({})", tid, ca),
+                    false,
+                )?;
+                self.commarea_var = Some(ca.clone());
+            } else {
+                env.display(
+                    &format!("[CICS] RETURN TRANSID({})", tid),
+                    false,
+                )?;
+            }
             self.return_transid = Some(tid.clone());
         } else {
             env.display("[CICS] RETURN", false)?;
@@ -201,12 +221,20 @@ impl CicsBridge {
         env: &mut Environment,
     ) -> Result<()> {
         let program = Self::get_option_str(options, "PROGRAM").unwrap_or_default();
-        let _commarea = Self::get_option_str(options, "COMMAREA");
+        let commarea = Self::get_option_str(options, "COMMAREA");
 
-        env.display(
-            &format!("[CICS] XCTL PROGRAM({})", program),
-            false,
-        )?;
+        if let Some(ref ca) = commarea {
+            env.display(
+                &format!("[CICS] XCTL PROGRAM({}) COMMAREA({})", program, ca),
+                false,
+            )?;
+            self.commarea_var = Some(ca.clone());
+        } else {
+            env.display(
+                &format!("[CICS] XCTL PROGRAM({})", program),
+                false,
+            )?;
+        }
 
         self.xctl_program = Some(program);
         self.runtime.eib.set_response(CicsResponse::Normal);
@@ -685,6 +713,10 @@ impl CicsCommandHandler for CicsBridge {
                 Ok(())
             }
         }
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 }
 

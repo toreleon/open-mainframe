@@ -56,6 +56,11 @@ pub trait CicsCommandHandler {
         options: &[(String, Option<CobolValue>)],
         env: &mut Environment,
     ) -> Result<()>;
+
+    /// Downcast to concrete type (for inspecting handler state after execution).
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
 }
 
 /// Runtime environment for interpreter.
@@ -185,6 +190,11 @@ impl Environment {
     /// Check if stopped.
     pub fn is_stopped(&self) -> bool {
         self.stopped
+    }
+
+    /// Reset stopped flag (for XCTL dispatch to new program).
+    pub fn resume(&mut self) {
+        self.stopped = false;
     }
 }
 

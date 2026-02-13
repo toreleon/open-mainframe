@@ -1,0 +1,14 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CICSSUB.
+      *
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-TRANID             PIC X(4) VALUE 'SUB1'.
+      *
+       PROCEDURE DIVISION.
+       MAIN-LOGIC.
+           DISPLAY 'SUB PROGRAM REACHED VIA XCTL'.
+           EXEC CICS RETURN
+                TRANSID(WS-TRANID)
+           END-EXEC.
+           STOP RUN.

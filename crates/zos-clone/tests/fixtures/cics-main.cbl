@@ -1,0 +1,18 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CICSMAIN.
+      *
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-TRANID             PIC X(4) VALUE 'MAIN'.
+       01  WS-MESSAGE            PIC X(40) VALUE SPACES.
+      *
+       PROCEDURE DIVISION.
+       MAIN-LOGIC.
+           DISPLAY 'MAIN PROGRAM STARTING'.
+           MOVE 'XCTL TO SUBMENU' TO WS-MESSAGE.
+           DISPLAY WS-MESSAGE.
+           EXEC CICS XCTL
+                PROGRAM('CICSSUB')
+           END-EXEC.
+           DISPLAY 'SHOULD NOT REACH HERE'.
+           STOP RUN.

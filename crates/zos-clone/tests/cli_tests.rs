@@ -158,6 +158,46 @@ fn test_missing_file_error() {
 }
 
 #[test]
+fn test_interpret_cics_xctl() {
+    let (stdout, stderr, success) =
+        run_cli(&["interpret", fixture("cics-main.cbl").to_str().unwrap()]);
+    if !success {
+        eprintln!("STDERR: {}", stderr);
+    }
+    assert!(success, "Command failed with stderr: {}", stderr);
+    // Main program starts
+    assert!(
+        stdout.contains("MAIN PROGRAM STARTING"),
+        "Output: {}",
+        stdout
+    );
+    // XCTL is issued
+    assert!(
+        stdout.contains("[CICS] XCTL PROGRAM(CICSSUB)"),
+        "Expected XCTL message, got: {}",
+        stdout
+    );
+    // Sub program is reached via XCTL
+    assert!(
+        stdout.contains("SUB PROGRAM REACHED VIA XCTL"),
+        "XCTL did not dispatch to sub program! Output: {}",
+        stdout
+    );
+    // Sub program returns
+    assert!(
+        stdout.contains("[CICS] RETURN TRANSID(SUB1)"),
+        "Expected RETURN from sub program, got: {}",
+        stdout
+    );
+    // Main should NOT continue after XCTL
+    assert!(
+        !stdout.contains("SHOULD NOT REACH HERE"),
+        "XCTL did not stop main program! Output: {}",
+        stdout
+    );
+}
+
+#[test]
 fn test_interpret_cics_return() {
     let (stdout, stderr, success) =
         run_cli(&["interpret", fixture("cics-return.cbl").to_str().unwrap()]);
