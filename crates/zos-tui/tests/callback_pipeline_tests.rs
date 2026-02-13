@@ -297,3 +297,54 @@ fn test_session_frset_clears_mdt() {
     session.on_send_map(&map, &HashMap::new(), &frset_opts);
     // MDTs should be cleared after FRSET.
 }
+
+#[test]
+fn test_e2e_signon_flow_with_color_attributes() {
+    // End-to-end test verifying that BMS COLOR and HILIGHT attributes
+    // are preserved through the full pipeline.
+    let colored_bms = r#"
+COLSGN   DFHMSD TYPE=MAP,LANG=COBOL,TIOAPFX=YES
+COLSGNA  DFHMDI SIZE=(24,80)
+TITLE    DFHMDF POS=(1,25),LENGTH=30,ATTRB=(PROT,BRT),                X
+               COLOR=BLUE,INITIAL='AWS CardDemo Sign-on Screen'
+USRIDL   DFHMDF POS=(7,10),LENGTH=9,ATTRB=(PROT),COLOR=GREEN,          X
+               INITIAL='User ID :'
+USRIDI   DFHMDF POS=(7,21),LENGTH=8,ATTRB=(UNPROT,IC),COLOR=TURQUOISE
+PASSWL   DFHMDF POS=(9,10),LENGTH=11,ATTRB=(PROT),COLOR=GREEN,         X
+               INITIAL='Password  :'
+PASSWI   DFHMDF POS=(9,21),LENGTH=8,ATTRB=(DRK,UNPROT)
+ERRMSG   DFHMDF POS=(12,10),LENGTH=60,ATTRB=(PROT,BRT),COLOR=RED,      X
+               HILIGHT=REVERSE
+         DFHMSD TYPE=FINAL
+"#;
+
+    let mut session = Session::new(test_config());
+    let map = parse_first_map(colored_bms);
+
+    // SEND MAP with ERASE
+    session.on_send_map(&map, &HashMap::new(), &SendMapOptions::initial());
+
+    // Verify the field table was built with extended attributes
+    let table = FieldTable::from_bms_map(&map);
+
+    // TITLE: bright protected, blue color
+    let title = table.fields().iter().find(|f| f.name == "TITLE").unwrap();
+    assert!(title.attribute.is_bright());
+    assert!(title.attribute.is_protected());
+    assert_eq!(title.color, Some(zos_cics::bms::FieldColor::Blue));
+
+    // USRIDI: unprotected input, turquoise
+    let usridi = table.fields().iter().find(|f| f.name == "USRIDI").unwrap();
+    assert!(!usridi.attribute.is_protected());
+    assert_eq!(usridi.color, Some(zos_cics::bms::FieldColor::Turquoise));
+
+    // PASSWI: dark (non-display) for password
+    let passwi = table.fields().iter().find(|f| f.name == "PASSWI").unwrap();
+    assert!(passwi.attribute.is_dark());
+
+    // ERRMSG: bright protected, red + reverse
+    let errmsg = table.fields().iter().find(|f| f.name == "ERRMSG").unwrap();
+    assert!(errmsg.attribute.is_bright());
+    assert_eq!(errmsg.color, Some(zos_cics::bms::FieldColor::Red));
+    assert_eq!(errmsg.highlight, Some(zos_cics::bms::FieldHighlight::Reverse));
+}

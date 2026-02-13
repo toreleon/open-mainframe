@@ -226,6 +226,40 @@ fn test_interpret_cics_return() {
 }
 
 #[test]
+fn test_interpret_cics_send_map() {
+    let (stdout, stderr, success) =
+        run_cli(&["interpret", fixture("cics-signon.cbl").to_str().unwrap()]);
+    if !success {
+        eprintln!("STDERR: {}", stderr);
+    }
+    assert!(success, "Command failed with stderr: {}", stderr);
+    // Program should start
+    assert!(
+        stdout.contains("SIGNON PROGRAM STARTING"),
+        "Output: {}",
+        stdout
+    );
+    // Program should detect initial start
+    assert!(
+        stdout.contains("INITIAL START - SENDING MAP"),
+        "Output: {}",
+        stdout
+    );
+    // SEND MAP should be issued
+    assert!(
+        stdout.contains("[CICS] SEND MAP"),
+        "Expected SEND MAP message, got: {}",
+        stdout
+    );
+    // RETURN TRANSID should be issued
+    assert!(
+        stdout.contains("[CICS] RETURN TRANSID(SIGN)"),
+        "Expected RETURN TRANSID, got: {}",
+        stdout
+    );
+}
+
+#[test]
 fn test_completions() {
     let (stdout, _, success) = run_cli(&["completions", "bash"]);
     assert!(success);
