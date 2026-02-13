@@ -32,5 +32,6 @@ zos-runtime.workspace = true
 zos-dataset.workspace = true
 zos-cobol.workspace = true
 zos-jcl.workspace = true
+zos-db2.workspace = true
 
 [dev-dependencies]

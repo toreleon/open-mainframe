@@ -4,13 +4,13 @@
 
 ```yaml
 active: true
-iteration: 13
+iteration: 14
 started: 2026-02-13
 last_updated: 2026-02-13
 current_version: v1.2
-current_epic: 21
-current_story: 21.1
-status: planning_complete
+current_epic: 22
+current_story: 22.1
+status: in_progress
 ```
 
 ---
@@ -60,6 +60,27 @@ status: planning_complete
 - Total Stories: 42
 - Completed: 42
 - Remaining: 0
+
+---
+
+### v1.2 - Enterprise Features 🔄 IN PROGRESS
+
+| Epic | Name | Stories | Status | Progress |
+|------|------|---------|--------|----------|
+| 21 | SQL Preprocessor | 7 | ✅ Complete | 7/7 |
+| 22 | DB2 Runtime | 8 | ⏳ Pending | 0/8 |
+| 23 | Cursor Operations | 6 | ⏳ Pending | 0/6 |
+| 24 | DB2 Utilities | 6 | ⏳ Pending | 0/6 |
+| 25 | CICS Command Processor | 8 | ⏳ Pending | 0/8 |
+| 26 | BMS Maps | 7 | ⏳ Pending | 0/7 |
+| 27 | CICS Terminal Interface | 8 | ⏳ Pending | 0/8 |
+| 28 | Migration Assessment | 7 | ⏳ Pending | 0/7 |
+
+**v1.2 Metrics:**
+- Total Epics: 8
+- Total Stories: 57
+- Completed: 7
+- Remaining: 50
 
 ---
 
@@ -298,6 +319,36 @@ status: planning_complete
   - Epic 28: Migration (7 stories)
 - [x] Ready for v1.2 implementation
 
+### Iteration 14 - 2026-02-13
+**Focus:** Epic 21 - SQL Preprocessor - Complete Epic
+**Status:** Complete
+**Actions:**
+- [x] Story 21.1: EXEC SQL Scanner
+  - Created zos-db2 crate structure
+  - SqlScanner extracts EXEC SQL blocks
+  - Handles multi-line blocks and comments
+- [x] Story 21.2: SQL Statement Parser
+  - SqlStatementType detection (SELECT, INSERT, UPDATE, etc.)
+  - Statement extraction with line numbers
+- [x] Story 21.3: Host Variable Detection
+  - Extract :VARIABLE syntax
+  - Detect indicator variables (:VAR:IND)
+  - Track input vs output usage
+- [x] Story 21.4: COBOL Call Generation
+  - Replace EXEC SQL with CALL statements
+  - Generate runtime linkage
+- [x] Story 21.5: SQLCA Generation
+  - generate_sqlca_copybook() function
+  - SqlCode enum with common codes
+- [x] Story 21.6: DBRM Output
+  - Dbrm struct with JSON serialization
+  - Statement listing and host variable mapping
+- [x] Story 21.7: Preprocessor CLI
+  - `zos-clone db2 preprocess` command
+  - --listing mode for display
+  - DBRM file output
+- [x] 21 new tests, 327 total passing
+
 ---
 
 ## Blockers
@@ -335,6 +386,14 @@ crates/zos-dataset/src/
     ├── mod.rs
     ├── parser.rs
     └── commands/
+
+crates/zos-db2/src/           # DB2 support (v1.2)
+├── lib.rs
+└── preprocess/
+    ├── mod.rs
+    ├── scanner.rs    # EXEC SQL scanner
+    ├── sqlca.rs      # SQLCA generation
+    └── dbrm.rs       # DBRM output
 ```
 
 ---
@@ -374,9 +433,9 @@ cargo clippy -- -D warnings
 ```
 
 ### Next Steps
-1. Start Epic 21: SQL Preprocessor
-2. Implement DB2 core functionality
-3. Tag v1.1.0 release
+1. Start Epic 22: DB2 Runtime
+2. Implement PostgreSQL connection
+3. Continue v1.2 DB2 implementation
 
 ---
 
@@ -393,3 +452,4 @@ cargo clippy -- -D warnings
 | 2026-02-13 | Epic 19 | IDCAMS | ✅ Epic complete |
 | 2026-02-13 | Epic 20 | Package Distribution | ✅ Epic complete, v1.1 done |
 | 2026-02-13 | Planning | v1.2 artifacts | ✅ PRD, Arch, Epics done |
+| 2026-02-13 | Epic 21 | SQL Preprocessor | ✅ Epic complete |

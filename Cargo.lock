@@ -1504,6 +1504,7 @@ dependencies = [
  "tracing-subscriber",
  "zos-cobol",
  "zos-dataset",
+ "zos-db2",
  "zos-encoding",
  "zos-jcl",
  "zos-runtime",
@@ -1528,6 +1529,15 @@ dependencies = [
  "miette",
  "thiserror",
  "zos-encoding",
+]
+
+[[package]]
+name = "zos-db2"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

@@ -151,6 +151,9 @@ enum Commands {
         action: commands::idcams::IdcamsAction,
     },
 
+    /// DB2 SQL preprocessing and utilities
+    Db2(commands::db2::Db2Args),
+
     /// Manage configuration
     Config {
         #[command(subcommand)]
@@ -201,6 +204,7 @@ fn main() -> Result<()> {
         Commands::Interpret { input } => commands::interpret::interpret(input),
         Commands::Gdg { action } => commands::gdg::run(action),
         Commands::Idcams { action } => commands::idcams::run(action),
+        Commands::Db2(args) => commands::db2::execute(args),
         Commands::Config { action } => match action {
             ConfigAction::Show => {
                 let config = config::Config::load();

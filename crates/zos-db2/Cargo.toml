@@ -1,0 +1,15 @@
+[package]
+name = "zos-db2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DB2 SQL preprocessing and runtime for zOS-clone"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json = "1"
+
+[dev-dependencies]
