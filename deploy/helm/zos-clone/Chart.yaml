@@ -1,0 +1,16 @@
+apiVersion: v2
+name: zos-clone
+description: Mainframe-compatible runtime environment for COBOL, CICS, and IMS
+type: application
+version: 1.3.0
+appVersion: "1.3.0"
+keywords:
+  - cobol
+  - cics
+  - ims
+  - mainframe
+  - legacy-modernization
+home: https://github.com/zos-clone/zos-clone
+maintainers:
+  - name: zOS-clone Team
+    email: team@zos-clone.dev

@@ -1,0 +1,151 @@
+# Default values for zos-clone Helm chart
+
+# Number of replicas
+replicaCount: 3
+
+image:
+  repository: ghcr.io/zos-clone/zos-clone
+  pullPolicy: IfNotPresent
+  tag: ""  # Defaults to appVersion
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 80
+  metricsPort: 9090
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: zos-clone.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: zos-clone
+          topologyKey: kubernetes.io/hostname
+
+# Application configuration
+config:
+  logLevel: info
+  logFormat: json
+
+  server:
+    host: "0.0.0.0"
+    port: 8080
+    metricsPort: 9090
+
+  database:
+    poolSize: 10
+    idleTimeout: 300
+
+  cobol:
+    defaultEncoding: EBCDIC
+    collatingSequence: NATIVE
+
+  cics:
+    maxTasks: 100
+    timeout: 30
+
+  ims:
+    checkpointInterval: 100
+    maxSegments: 1000
+
+  observability:
+    metrics:
+      enabled: true
+      prefix: zos_clone
+    tracing:
+      enabled: true
+      sampleRate: 0.1
+
+# External secrets (set via --set or secrets file)
+secrets:
+  databaseUrl: ""
+
+# OpenTelemetry collector endpoint
+otel:
+  enabled: true
+  endpoint: "http://otel-collector:4317"
+
+# Health check configuration
+probes:
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 30
+
+# PostgreSQL subchart (optional)
+postgresql:
+  enabled: false
+  auth:
+    postgresPassword: ""
+    database: zos
+  primary:
+    persistence:
+      size: 10Gi

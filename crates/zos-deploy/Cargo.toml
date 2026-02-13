@@ -1,0 +1,36 @@
+[package]
+name = "zos-deploy"
+version = "0.1.0"
+edition = "2021"
+description = "Deployment, health checks, and observability for zOS-clone"
+license = "MIT"
+
+[features]
+default = []
+otel = []
+
+[dependencies]
+# Metrics
+prometheus = "0.13"
+
+# Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = "0.22"
+opentelemetry = "0.21"
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.14", features = ["tonic"] }
+
+# Configuration
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Error handling
+thiserror = "1.0"
+
+[dev-dependencies]
+tokio-test = "0.4"

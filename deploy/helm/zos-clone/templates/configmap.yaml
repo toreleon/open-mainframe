@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "zos-clone.fullname" . }}-config
+  labels:
+    {{- include "zos-clone.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    server:
+      host: {{ .Values.config.server.host | quote }}
+      port: {{ .Values.config.server.port }}
+      metrics_port: {{ .Values.config.server.metricsPort }}
+
+    database:
+      pool_size: {{ .Values.config.database.poolSize }}
+      idle_timeout: {{ .Values.config.database.idleTimeout }}
+
+    cobol:
+      default_encoding: {{ .Values.config.cobol.defaultEncoding }}
+      collating_sequence: {{ .Values.config.cobol.collatingSequence }}
+
+    cics:
+      max_tasks: {{ .Values.config.cics.maxTasks }}
+      timeout: {{ .Values.config.cics.timeout }}
+
+    ims:
+      checkpoint_interval: {{ .Values.config.ims.checkpointInterval }}
+      max_segments: {{ .Values.config.ims.maxSegments }}
+
+    observability:
+      metrics:
+        enabled: {{ .Values.config.observability.metrics.enabled }}
+        prefix: {{ .Values.config.observability.metrics.prefix | quote }}
+      tracing:
+        enabled: {{ .Values.config.observability.tracing.enabled }}
+        sample_rate: {{ .Values.config.observability.tracing.sampleRate }}

@@ -1,0 +1,57 @@
+# zOS-clone ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zos-clone-config
+  labels:
+    app: zos-clone
+data:
+  # Logging configuration
+  log_level: "info"
+  log_format: "json"
+
+  # OpenTelemetry configuration
+  otel_endpoint: "http://otel-collector:4317"
+
+  # Application configuration
+  config.yaml: |
+    server:
+      host: 0.0.0.0
+      port: 8080
+      metrics_port: 9090
+
+    database:
+      pool_size: 10
+      idle_timeout: 300
+      max_lifetime: 3600
+
+    cobol:
+      default_encoding: EBCDIC
+      collating_sequence: NATIVE
+
+    cics:
+      max_tasks: 100
+      timeout: 30
+
+    ims:
+      checkpoint_interval: 100
+      max_segments: 1000
+
+    observability:
+      metrics:
+        enabled: true
+        prefix: zos_clone
+      tracing:
+        enabled: true
+        sample_rate: 0.1
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: zos-clone-secrets
+  labels:
+    app: zos-clone
+type: Opaque
+stringData:
+  # These should be managed by external secrets manager in production
+  database_url: "postgresql://user:password@postgres:5432/zos"

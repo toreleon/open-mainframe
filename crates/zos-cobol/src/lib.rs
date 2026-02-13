@@ -24,6 +24,7 @@ pub mod intrinsics;
 pub mod lexer;
 pub mod parser;
 pub mod semantic;
+pub mod xml_json;
 
 pub use ast::*;
 pub use error::CobolError;
@@ -36,4 +37,9 @@ pub use parser::Parser;
 pub use semantic::{
     analyze, CobolType, Diagnostic, SemanticAnalyzer, SemanticResult, Severity, Symbol, SymbolKind,
     SymbolTable, TypeCategory,
+};
+pub use xml_json::{
+    json_generate, json_generate_value, json_parse, xml_generate, CobolField, FieldType,
+    JsonGenerateOptions, JsonParser, JsonValue, XmlEvent, XmlGenerateOptions, XmlJsonError,
+    XmlJsonResult, XmlParser,
 };
