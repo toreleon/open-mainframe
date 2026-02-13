@@ -11,6 +11,7 @@ members = [
     "crates/zos-db2",
     "crates/zos-cics",
     "crates/zos-assess",
+    "crates/zos-ims",
 ]
 
 [workspace.package]
@@ -59,3 +60,4 @@ zos-sort = { path = "crates/zos-sort" }
 zos-db2 = { path = "crates/zos-db2" }
 zos-cics = { path = "crates/zos-cics" }
 zos-assess = { path = "crates/zos-assess" }
+zos-ims = { path = "crates/zos-ims" }

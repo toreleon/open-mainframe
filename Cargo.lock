@@ -2118,6 +2118,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zos-ims"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "zos-jcl"
 version = "0.1.0"
 dependencies = [
