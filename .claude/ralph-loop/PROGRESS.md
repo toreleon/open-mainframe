@@ -4,12 +4,12 @@
 
 ```yaml
 active: true
-iteration: 4
+iteration: 5
 started: 2026-02-13
 last_updated: 2026-02-13
 current_version: v1.1
 current_epic: 15
-current_story: 15.5
+current_story: 15.7
 status: in_progress
 ```
 
@@ -48,7 +48,7 @@ status: in_progress
 
 | Epic | Name | Stories | Status | Progress |
 |------|------|---------|--------|----------|
-| 15 | VSAM Core (KSDS) | 8 | 🔄 In Progress | 4/8 |
+| 15 | VSAM Core (KSDS) | 8 | 🔄 In Progress | 6/8 |
 | 16 | VSAM ESDS/RRDS | 5 | ⏳ Pending | 0/5 |
 | 17 | SORT Utility | 9 | ⏳ Pending | 0/9 |
 | 18 | GDG Support | 7 | ⏳ Pending | 0/7 |
@@ -58,8 +58,8 @@ status: in_progress
 **v1.1 Metrics:**
 - Total Epics: 6
 - Total Stories: 42
-- Completed: 4
-- Remaining: 38
+- Completed: 6
+- Remaining: 36
 
 ---
 
@@ -79,7 +79,9 @@ status: in_progress
 | 15.2 | Cluster Definition | ✅ Complete | VsamCluster, KeySpec, file format |
 | 15.3 | Keyed Read | ✅ Complete | read_key(), read_key_generic(), FileStatus |
 | 15.4 | Keyed Write | ✅ Complete | write() with duplicate key detection |
-| 15.5 | Update/Delete | ⏳ Next | |
+| 15.5 | Update/Delete | ✅ Complete | rewrite(), delete(), status 21/43 |
+| 15.6 | Sequential Access | ✅ Complete | start(), read_next(), status 10 |
+| 15.7 | File Status Codes | ⏳ Next | Already implemented in 15.3-15.6 |
 | 15.6 | Sequential Access | ⏳ Pending | |
 | 15.7 | File Status Codes | ⏳ Pending | |
 | 15.8 | JCL Integration | ⏳ Pending | |
@@ -117,12 +119,21 @@ status: in_progress
 - [x] Add 8 KSDS tests
 
 ### Iteration 4 - 2026-02-13
-**Focus:** KSDS Update/Delete
+**Focus:** KSDS Update/Delete/Sequential
+**Status:** Complete
+**Actions:**
+- [x] Implement rewrite() with key change detection
+- [x] Implement delete() for record removal
+- [x] Implement start() for positioning
+- [x] Implement read_next() for sequential reads
+- [x] Add 8 new tests for update/delete/sequential
+
+### Iteration 5 - 2026-02-13
+**Focus:** Complete Epic 15 (File Status, JCL Integration)
 **Status:** Starting
 **Actions:**
-- [ ] Implement rewrite() for record updates
-- [ ] Implement delete() for record removal
-- [ ] Add sequential read methods
+- [ ] Verify file status codes complete (Story 15.7)
+- [ ] Implement JCL VSAM DD support (Story 15.8)
 
 ---
 
