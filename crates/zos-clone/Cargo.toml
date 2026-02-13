@@ -11,7 +11,12 @@ description = "CLI for the zOS-clone mainframe emulator"
 name = "zos-clone"
 path = "src/main.rs"
 
+[features]
+default = []
+llvm = ["zos-cobol/llvm", "dep:inkwell"]
+
 [dependencies]
+inkwell = { workspace = true, optional = true }
 clap.workspace = true
 clap_complete.workspace = true
 miette.workspace = true
