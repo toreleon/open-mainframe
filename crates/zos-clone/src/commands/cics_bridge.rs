@@ -53,6 +53,8 @@ pub struct CicsBridge {
     pub return_transid: Option<String>,
     /// Program to XCTL to.
     pub xctl_program: Option<String>,
+    /// Program to LINK to (call + return).
+    pub link_program: Option<String>,
     /// COMMAREA variable name (the COBOL variable holding COMMAREA data).
     pub commarea_var: Option<String>,
     /// Pending abend handler label — set when ABEND fires and a HANDLE ABEND
@@ -92,6 +94,7 @@ impl CicsBridge {
             returned: false,
             return_transid: None,
             xctl_program: None,
+            link_program: None,
             commarea_var: None,
             abend_label: None,
             aid_handlers: HashMap::new(),
@@ -134,6 +137,7 @@ impl CicsBridge {
         self.returned = false;
         self.return_transid = None;
         self.xctl_program = None;
+        self.link_program = None;
         self.commarea_var = None;
         self.abend_label = None;
         self.runtime.eib.reset_for_command();
@@ -387,6 +391,38 @@ impl CicsBridge {
         self.returned = true;
         self.runtime.eib.set_response(CicsResponse::Normal);
         env.stop();
+        Ok(())
+    }
+
+    /// Handle LINK command.
+    ///
+    /// LINK calls a sub-program and returns control to the caller when it
+    /// finishes.  We set `link_program` so the session loop can execute the
+    /// linked program inline, then resume the current program.
+    fn handle_link(
+        &mut self,
+        options: &[(String, Option<CobolValue>)],
+        env: &mut Environment,
+    ) -> Result<()> {
+        let program = Self::get_option_str(options, "PROGRAM").unwrap_or_default();
+        let commarea = Self::get_option_str(options, "COMMAREA");
+
+        if let Some(ref ca) = commarea {
+            env.display(
+                &format!("[CICS] LINK PROGRAM({}) COMMAREA({})", program, ca),
+                false,
+            )?;
+            self.commarea_var = Some(ca.clone());
+        } else {
+            env.display(
+                &format!("[CICS] LINK PROGRAM({})", program),
+                false,
+            )?;
+        }
+
+        self.link_program = Some(program);
+        self.runtime.eib.set_response(CicsResponse::Normal);
+        env.stop(); // Pause current execution
         Ok(())
     }
 
@@ -864,6 +900,9 @@ impl CicsCommandHandler for CicsBridge {
             }
             "RETURN" => {
                 self.handle_return(options, env)
+            }
+            "LINK" => {
+                self.handle_link(options, env)
             }
             "XCTL" => {
                 self.handle_xctl(options, env)

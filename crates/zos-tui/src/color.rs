@@ -115,6 +115,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_color_support_levels() {
+        // Verify all enum variants exist and are distinct
+        assert_ne!(ColorSupport::None, ColorSupport::Basic);
+        assert_ne!(ColorSupport::Basic, ColorSupport::TrueColor);
+        assert_ne!(ColorSupport::None, ColorSupport::TrueColor);
+    }
+
+    #[test]
+    fn test_detect_color_support_returns_valid() {
+        // The function should always return a valid ColorSupport variant
+        // regardless of the current environment.
+        let support = detect_color_support();
+        assert!(
+            support == ColorSupport::None
+                || support == ColorSupport::Basic
+                || support == ColorSupport::TrueColor
+        );
+    }
+
+    #[test]
     fn test_theme_by_name() {
         let classic = ColorTheme::by_name("classic");
         assert_eq!(classic.background, Color::Black);

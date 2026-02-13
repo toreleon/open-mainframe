@@ -314,6 +314,45 @@ pub fn interpret(
                 .and_then(|a| a.downcast_mut::<CicsBridge>());
 
             if let Some(bridge) = bridge {
+                // Handle LINK: execute linked program then return to caller
+                if let Some(ref link_target) = bridge.link_program.clone() {
+                    let commarea_data = bridge.commarea_var.as_ref().and_then(|ca| {
+                        env.get(ca).map(|v| v.to_display_string())
+                    });
+
+                    let saved_program = current_program.clone();
+                    tracing::info!("LINK from {} to {}", current_program, link_target);
+                    current_program = link_target.to_uppercase();
+                    bridge.link_program = None;
+                    bridge.commarea_var = None;
+                    bridge.runtime.eib.reset_for_command();
+                    env.cics_handler = Some(handler);
+
+                    if let Some(data) = commarea_data {
+                        let len = data.len();
+                        env.set("DFHCOMMAREA", CobolValue::Alphanumeric(data)).ok();
+                        env.set("EIBCALEN", CobolValue::from_i64(len as i64)).ok();
+                    }
+
+                    // Load + execute the linked program
+                    if !program_cache.contains_key(&current_program) {
+                        if let Some(path) = find_program_source(&current_program, &search_dir) {
+                            if let Ok(p) = load_program(&path, &include_paths) {
+                                program_cache.insert(current_program.clone(), p);
+                            }
+                        }
+                    }
+                    if program_cache.contains_key(&current_program) {
+                        let linked_prog = program_cache.get(&current_program).unwrap();
+                        env.resume();
+                        let _ = zos_runtime::interpreter::execute(linked_prog, &mut env);
+                    }
+
+                    // Return to the calling program
+                    current_program = saved_program;
+                    continue;
+                }
+
                 if let Some(ref xctl_target) = bridge.xctl_program.clone() {
                     // Extract COMMAREA data before resetting
                     let commarea_data = if let Some(ref ca_var) = bridge.commarea_var {

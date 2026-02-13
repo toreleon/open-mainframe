@@ -601,6 +601,47 @@ fn run_session_loop(
                 .and_then(|a| a.downcast_mut::<CicsBridge>());
 
             if let Some(bridge) = bridge {
+                // Handle LINK: execute the linked program, then re-run the
+                // original.  LINK is "call and return" — after the sub-program
+                // finishes, the calling program is re-executed.
+                if let Some(ref link_target) = bridge.link_program.clone() {
+                    let commarea_data = bridge.commarea_var.as_ref().and_then(|ca| {
+                        env.get(ca).map(|v| v.to_display_string())
+                    });
+
+                    let saved_program = ctx.current_program.clone();
+                    *ctx.current_program = link_target.to_uppercase();
+                    bridge.link_program = None;
+                    bridge.commarea_var = None;
+                    bridge.runtime.eib.reset_for_command();
+                    env.cics_handler = Some(handler);
+
+                    if let Some(data) = commarea_data {
+                        let len = data.len();
+                        env.set("DFHCOMMAREA", CobolValue::Alphanumeric(data)).ok();
+                        env.set("EIBCALEN", CobolValue::from_i64(len as i64)).ok();
+                    }
+
+                    // Execute the linked program
+                    if !ctx.program_cache.contains_key(ctx.current_program.as_str()) {
+                        if let Some(path) = find_program_source(ctx.current_program, ctx.search_dir) {
+                            if let Ok(p) = load_interpret_program(&path, ctx.include_paths) {
+                                ctx.program_cache.insert(ctx.current_program.clone(), p);
+                            }
+                        }
+                    }
+                    if ctx.program_cache.contains_key(ctx.current_program.as_str()) {
+                        env.resume();
+                        let linked_prog = ctx.program_cache.get(ctx.current_program.as_str()).unwrap();
+                        let _ = zos_runtime::interpreter::execute(linked_prog, env);
+                        apply_pending_events(session, ctx.callback_state);
+                    }
+
+                    // Return to the calling program
+                    *ctx.current_program = saved_program;
+                    continue;
+                }
+
                 // Handle XCTL
                 if let Some(ref xctl_target) = bridge.xctl_program.clone() {
                     let commarea_data = bridge.commarea_var.as_ref().and_then(|ca| {
