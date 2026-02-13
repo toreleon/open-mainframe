@@ -24,6 +24,20 @@
 //! ```
 
 pub mod preprocess;
+pub mod runtime;
+pub mod utilities;
+
+pub use runtime::{
+    Cursor, CursorManager, CursorOptions, CursorState, Db2Connection, Db2ConnectionConfig,
+    Db2Runtime, Db2Type, RuntimeHostVariable, RuntimeStatement, Sqlca, SqlcaBuilder, SqlExecutor,
+    SqlRow, SqlTranslator, SqlValue, TransactionConfig, TransactionManager, TransactionState,
+    TypeMapping,
+};
+
+pub use utilities::{
+    BindAction, BindOptions, Binder, BoundPackage, ColumnInfo, Dclgen, DclgenLanguage,
+    DclgenOptions, IsolationLevel, ReleaseOption, TableInfo, ValidateOption,
+};
 
 use thiserror::Error;
 

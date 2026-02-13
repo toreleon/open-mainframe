@@ -1,0 +1,18 @@
+[package]
+name = "zos-assess"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Migration assessment tool for mainframe COBOL programs"
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true }
+serde_json = "1"
+
+# Internal crates
+zos-cobol = { workspace = true }
+
+[dev-dependencies]
