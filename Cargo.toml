@@ -13,6 +13,7 @@ members = [
     "crates/zos-assess",
     "crates/zos-ims",
     "crates/zos-deploy",
+    "crates/zos-tui",
 ]
 
 [workspace.package]
@@ -51,6 +52,10 @@ inkwell = { version = "0.5", features = ["llvm18-0"] }
 # Arena allocation
 bumpalo = "3"
 
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
 # Internal crates
 zos-encoding = { path = "crates/zos-encoding" }
 zos-runtime = { path = "crates/zos-runtime" }
@@ -63,3 +68,4 @@ zos-cics = { path = "crates/zos-cics" }
 zos-assess = { path = "crates/zos-assess" }
 zos-ims = { path = "crates/zos-ims" }
 zos-deploy = { path = "crates/zos-deploy" }
+zos-tui = { path = "crates/zos-tui" }

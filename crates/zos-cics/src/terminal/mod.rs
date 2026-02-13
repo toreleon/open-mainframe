@@ -15,6 +15,36 @@ use crate::bms::{BmsMap, ScreenSize, MapRenderer};
 use crate::{CicsError, CicsResult};
 use std::collections::HashMap;
 
+/// Callback trait for terminal I/O events.
+///
+/// Implement this trait to receive notifications when the CICS runtime
+/// needs to send output to or receive input from a terminal. This enables
+/// interactive TUI sessions to be driven by CICS program execution.
+pub trait TerminalCallback: Send {
+    /// Called when a SEND MAP command is executed.
+    /// The implementation should render the map to the user's screen.
+    fn on_send_map(
+        &mut self,
+        map: &BmsMap,
+        data: &HashMap<String, Vec<u8>>,
+        options: &SendMapOptions,
+    );
+
+    /// Called when a SEND TEXT command is executed.
+    fn on_send_text(&mut self, text: &str, erase: bool);
+
+    /// Called when a RECEIVE MAP command needs user input.
+    /// Returns the AID key pressed and a map of field name -> field data.
+    fn on_receive_map(
+        &mut self,
+        map: &BmsMap,
+    ) -> CicsResult<(u8, HashMap<String, Vec<u8>>)>;
+
+    /// Called when a RECEIVE command needs raw terminal input.
+    /// Returns raw input data and the AID key.
+    fn on_receive(&mut self, max_length: usize) -> CicsResult<(Vec<u8>, u8)>;
+}
+
 /// Terminal manager for CICS transactions.
 pub struct TerminalManager {
     /// Active terminals

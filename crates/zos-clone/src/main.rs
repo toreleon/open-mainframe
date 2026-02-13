@@ -186,6 +186,33 @@ enum Commands {
         all: bool,
     },
 
+    /// Run an interactive CICS terminal session (3270 TUI)
+    Cics {
+        /// Input COBOL source file (initial program)
+        #[arg(value_name = "FILE")]
+        input: PathBuf,
+
+        /// Additional copybook search paths
+        #[arg(short = 'I', long = "include", value_name = "DIR")]
+        include_paths: Vec<PathBuf>,
+
+        /// VSAM data files to load (format: DDNAME=path[:key_len[:rec_len]])
+        #[arg(long = "data", value_name = "DDNAME=FILE")]
+        data_files: Vec<String>,
+
+        /// Directory containing BMS map source files
+        #[arg(long = "bms-dir", value_name = "DIR")]
+        bms_dir: Option<PathBuf>,
+
+        /// Color theme (classic, modern, mono)
+        #[arg(long, default_value = "classic")]
+        theme: String,
+
+        /// Transaction-to-program mappings (format: TRANSID=PROGRAM)
+        #[arg(long = "transid", value_name = "TRANSID=PROGRAM")]
+        transid_map: Vec<String>,
+    },
+
     /// DB2 SQL preprocessing and utilities
     Db2(commands::db2::Db2Args),
 
@@ -238,6 +265,9 @@ fn main() -> Result<()> {
         Commands::Lex { input, format } => commands::lex::run(input, format),
         Commands::Interpret { input, include_paths, data_files, eibcalen, eibaid, set_vars } => {
             commands::interpret::interpret(input, include_paths, data_files, eibcalen, eibaid, set_vars)
+        }
+        Commands::Cics { input, include_paths, data_files, bms_dir, theme, transid_map } => {
+            commands::cics::run_session(input, include_paths, data_files, bms_dir, theme, transid_map)
         }
         Commands::Gdg { action } => commands::gdg::run(action),
         Commands::Idcams { action } => commands::idcams::run(action),

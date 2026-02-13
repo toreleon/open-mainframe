@@ -34,5 +34,6 @@ zos-cobol.workspace = true
 zos-jcl.workspace = true
 zos-cics.workspace = true
 zos-db2.workspace = true
+zos-tui.workspace = true
 
 [dev-dependencies]

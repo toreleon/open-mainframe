@@ -20,7 +20,7 @@ use super::cics_bridge::CicsBridge;
 
 /// Load and parse a single COBOL source file into a SimpleProgram.
 /// Preprocesses COPY statements using the given include paths.
-fn load_program(path: &std::path::Path, include_paths: &[PathBuf]) -> Result<SimpleProgram> {
+pub fn load_program(path: &std::path::Path, include_paths: &[PathBuf]) -> Result<SimpleProgram> {
     let source_text = std::fs::read_to_string(path)
         .into_diagnostic()
         .wrap_err_with(|| format!("Failed to read: {}", path.display()))?;
@@ -76,7 +76,7 @@ fn load_program(path: &std::path::Path, include_paths: &[PathBuf]) -> Result<Sim
 }
 
 /// Try to find a COBOL source file for a program name in a directory.
-fn find_program_source(program_name: &str, search_dir: &std::path::Path) -> Option<PathBuf> {
+pub fn find_program_source(program_name: &str, search_dir: &std::path::Path) -> Option<PathBuf> {
     let name_upper = program_name.to_uppercase();
     // Try common naming patterns: NAME.cbl, NAME.CBL, NAME.cob
     for ext in &["cbl", "CBL", "cob", "COB"] {
@@ -90,7 +90,7 @@ fn find_program_source(program_name: &str, search_dir: &std::path::Path) -> Opti
 
 /// Load fixed-length VSAM records from a data file.
 /// Each record is `rec_len` bytes, key is the first `key_len` bytes.
-fn load_vsam_data(
+pub fn load_vsam_data(
     path: &str,
     key_len: usize,
     rec_len: usize,

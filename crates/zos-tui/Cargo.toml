@@ -1,0 +1,19 @@
+[package]
+name = "zos-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Interactive 3270 terminal UI for zOS-clone CICS applications"
+
+[dependencies]
+zos-cics.workspace = true
+zos-cobol.workspace = true
+zos-runtime.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
