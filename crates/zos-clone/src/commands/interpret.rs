@@ -227,6 +227,7 @@ fn convert_literal(lit: &zos_cobol::ast::Literal) -> Result<SimpleExpr> {
                 FigurativeConstant::All => Ok(SimpleExpr::String("".to_string())),
             }
         }
+        LiteralKind::AllOf(inner) => convert_literal(inner),
     }
 }
 
@@ -389,6 +390,7 @@ fn convert_expr(expr: &Expression) -> Result<SimpleExpr> {
                     FigurativeConstant::All => Ok(SimpleExpr::String("".to_string())),
                 }
             }
+            LiteralKind::AllOf(inner) => convert_literal(inner),
         },
 
         Expression::Variable(q) => Ok(SimpleExpr::Variable(q.name.clone())),
@@ -431,6 +433,20 @@ fn convert_expr(expr: &Expression) -> Result<SimpleExpr> {
         Expression::Function(f) => {
             // Functions not fully supported, return 0
             tracing::warn!("Function {} not implemented, returning 0", f.name);
+            Ok(SimpleExpr::Integer(0))
+        }
+
+        Expression::LengthOf(l) => {
+            // LENGTH OF returns the length of a data item
+            // In interpreter mode, we just return a placeholder
+            tracing::debug!("LENGTH OF {} evaluated as placeholder", l.item.name);
+            Ok(SimpleExpr::Integer(0))
+        }
+
+        Expression::AddressOf(a) => {
+            // ADDRESS OF returns a pointer
+            // Not meaningful in interpreter mode
+            tracing::debug!("ADDRESS OF {} evaluated as placeholder", a.item.name);
             Ok(SimpleExpr::Integer(0))
         }
     }

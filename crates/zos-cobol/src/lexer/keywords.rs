@@ -47,6 +47,7 @@ static KEYWORDS: LazyLock<HashMap<&'static str, Keyword>> = LazyLock::new(|| {
     map.insert("FILE", Keyword::File);
     map.insert("WORKING", Keyword::Working);
     map.insert("STORAGE", Keyword::Storage);
+    map.insert("STATUS", Keyword::Status);
     map.insert("WORKING-STORAGE", Keyword::WorkingStorage);
     map.insert("LOCAL-STORAGE", Keyword::LocalStorage);
     map.insert("LINKAGE", Keyword::Linkage);
@@ -149,6 +150,7 @@ static KEYWORDS: LazyLock<HashMap<&'static str, Keyword>> = LazyLock::new(|| {
     map.insert("END-IF", Keyword::EndIf);
     map.insert("EVALUATE", Keyword::Evaluate);
     map.insert("ALSO", Keyword::Also);
+    map.insert("ANY", Keyword::Any);
     map.insert("TRUE", Keyword::True);
     map.insert("FALSE", Keyword::False);
     map.insert("OTHER", Keyword::Other);
@@ -257,6 +259,12 @@ static KEYWORDS: LazyLock<HashMap<&'static str, Keyword>> = LazyLock::new(|| {
     map.insert("NEGATIVE", Keyword::Negative);
     map.insert("CLASS", Keyword::Class);
     map.insert("OMITTED", Keyword::Omitted);
+
+    // EXEC CICS/SQL support
+    map.insert("EXEC", Keyword::Exec);
+    map.insert("CICS", Keyword::Cics);
+    map.insert("SQL", Keyword::Sql);
+    map.insert("END-EXEC", Keyword::EndExec);
 
     // COBOL-2002 / Extensions
     map.insert("FUNCTION", Keyword::Function);

@@ -412,7 +412,9 @@ impl SemanticAnalyzer {
             | Statement::StopRun(_)
             | Statement::Exit(_)
             | Statement::Continue(_)
-            | Statement::Inspect(_) => {}
+            | Statement::Inspect(_)
+            | Statement::ExecCics(_)
+            | Statement::ExecSql(_) => {}
         }
     }
 
@@ -773,6 +775,12 @@ impl SemanticAnalyzer {
                 self.validate_expression(inner);
             }
             Expression::Literal(_) => {}
+            Expression::LengthOf(len_of) => {
+                self.resolve_qualified_name(&len_of.item);
+            }
+            Expression::AddressOf(addr_of) => {
+                self.resolve_qualified_name(&addr_of.item);
+            }
         }
     }
 
@@ -853,6 +861,7 @@ impl SemanticAnalyzer {
                     | FigurativeConstant::Quote
                     | FigurativeConstant::All => Some(TypeCategory::Alphanumeric),
                 },
+                LiteralKind::AllOf(inner) => self.infer_expression_type(&Expression::Literal((**inner).clone())),
             },
             Expression::Variable(name) => self
                 .symbol_table
@@ -863,6 +872,8 @@ impl SemanticAnalyzer {
             Expression::Function(_) => None, // Would need function return type
             Expression::RefMod(_) => Some(TypeCategory::Alphanumeric),
             Expression::Paren(inner) => self.infer_expression_type(inner),
+            Expression::LengthOf(_) => Some(TypeCategory::Numeric), // LENGTH OF returns integer
+            Expression::AddressOf(_) => Some(TypeCategory::Pointer), // ADDRESS OF returns pointer
         }
     }
 }

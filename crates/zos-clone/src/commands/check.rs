@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use miette::{IntoDiagnostic, Result, WrapErr};
 
 /// Run the syntax check command.
-pub fn run(input: PathBuf, _include_paths: Vec<PathBuf>) -> Result<()> {
+pub fn run(input: PathBuf, include_paths: Vec<PathBuf>) -> Result<()> {
     // Read source file
     let source = std::fs::read_to_string(&input)
         .into_diagnostic()
@@ -13,10 +13,33 @@ pub fn run(input: PathBuf, _include_paths: Vec<PathBuf>) -> Result<()> {
 
     tracing::info!("Checking {}", input.display());
 
-    // Create source file
+    // Configure copybook paths
+    let mut copybook_config = zos_cobol::CopybookConfig::new();
+
+    // Add the directory containing the source file
+    if let Some(parent) = input.parent() {
+        copybook_config.add_path(parent);
+    }
+
+    // Add user-specified include paths
+    for path in &include_paths {
+        copybook_config.add_path(path);
+        tracing::debug!("Added include path: {}", path.display());
+    }
+
+    // Preprocess - expand COPY statements
+    let mut preprocessor =
+        zos_cobol::Preprocessor::new(copybook_config, zos_cobol::SourceFormat::Fixed);
+    let preprocessed = preprocessor.preprocess(&source).map_err(|e| {
+        miette::miette!("Preprocessing failed: {}", e)
+    })?;
+
+    println!("✓ Preprocessor: copybooks expanded");
+
+    // Create source file from preprocessed source
     let source_file = zos_cobol::SourceFile::from_text(
         zos_cobol::FileId::MAIN,
-        source,
+        preprocessed,
         zos_cobol::SourceFormat::Fixed,
     );
 

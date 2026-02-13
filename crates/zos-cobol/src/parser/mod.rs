@@ -330,7 +330,7 @@ impl Parser {
             } else if self.check_keyword(Keyword::FileStatus) || self.check_keyword(Keyword::File) {
                 if self.check_keyword(Keyword::File) {
                     self.advance(); // FILE
-                    self.expect_keyword(Keyword::Storage)?; // STATUS is sometimes "FILE STATUS"
+                    self.expect_keyword(Keyword::Status)?; // "FILE STATUS"
                 }
                 if self.check_keyword(Keyword::Is) {
                     self.advance();
@@ -869,6 +869,10 @@ impl Parser {
                         span: name.span,
                     });
                 }
+                // Skip commas between parameters
+                if self.check(TokenKind::Comma) {
+                    self.advance();
+                }
             }
         }
 
@@ -1026,10 +1030,47 @@ impl Parser {
             self.parse_goto_statement()
         } else if self.check_keyword(Keyword::Exit) {
             self.parse_exit_statement()
+        } else if self.check_keyword(Keyword::Exec) {
+            self.parse_exec_statement()
+        } else if self.check_keyword(Keyword::Set) {
+            self.parse_set_statement()
+        } else if self.check_keyword(Keyword::Initialize) {
+            self.parse_initialize_statement()
+        } else if self.check_keyword(Keyword::Accept) {
+            self.parse_accept_statement()
+        } else if self.check_keyword(Keyword::Open) {
+            self.parse_open_statement()
+        } else if self.check_keyword(Keyword::Close) {
+            self.parse_close_statement()
+        } else if self.check_keyword(Keyword::Read) {
+            self.parse_read_statement()
+        } else if self.check_keyword(Keyword::Write) {
+            self.parse_write_statement()
+        } else if self.check_keyword(Keyword::Rewrite) {
+            self.parse_rewrite_statement()
+        } else if self.check_keyword(Keyword::Delete) {
+            self.parse_delete_statement()
+        } else if self.check_keyword(Keyword::Start) {
+            self.parse_start_statement()
+        } else if self.check_keyword(Keyword::Search) {
+            self.parse_search_statement()
+        } else if self.check_keyword(Keyword::Inspect) {
+            self.parse_inspect_statement()
+        } else if self.check_keyword(Keyword::Evaluate) {
+            self.parse_evaluate_statement()
         } else {
-            // Skip unknown statement
+            // Skip unknown statement - but stop at statement boundaries
             let start = self.current_span();
-            self.advance_to_next_sentence();
+            // Must advance at least once to avoid infinite loop
+            self.advance();
+            // Then skip tokens until we hit a statement start or scope terminator
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.is_statement_start()
+                && !self.is_scope_terminator()
+            {
+                self.advance();
+            }
             Ok(Statement::Continue(ContinueStatement { span: start }))
         }
     }
@@ -1146,15 +1187,37 @@ impl Parser {
         {
             // Inline PERFORM
             let mut until = None;
-            let varying = None;
+            let mut varying = None;
             let test_before = true;
 
             if self.check_keyword(Keyword::Until) {
                 self.advance();
                 until = Some(self.parse_condition()?);
-            }
+            } else if self.check_keyword(Keyword::Varying) {
+                // PERFORM VARYING variable FROM expr BY expr UNTIL condition
+                self.advance(); // VARYING
+                let var_start = self.current_span();
+                let variable = self.parse_qualified_name()?;
 
-            // TODO: Parse VARYING clause
+                self.expect_keyword(Keyword::From)?;
+                let from = self.parse_expression()?;
+
+                self.expect_keyword(Keyword::By)?;
+                let by = self.parse_expression()?;
+
+                self.expect_keyword(Keyword::Until)?;
+                let vary_until = self.parse_condition()?;
+
+                let var_end = self.previous_span();
+                varying = Some(PerformVarying {
+                    variable,
+                    from,
+                    by,
+                    until: vary_until,
+                    after: Vec::new(),
+                    span: var_start.extend(var_end),
+                });
+            }
 
             // Parse inline statements until END-PERFORM
             let mut inline = Vec::new();
@@ -1306,6 +1369,217 @@ impl Parser {
         Ok(Statement::Continue(ContinueStatement { span: start }))
     }
 
+    fn parse_evaluate_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // EVALUATE
+
+        // Parse subjects - could be TRUE, FALSE, identifier, or expression
+        let mut subjects = Vec::new();
+
+        // Helper closure-like parse of a subject
+        let subj = self.parse_evaluate_subject()?;
+        subjects.push(subj);
+
+        // Parse ALSO subjects
+        while self.check_keyword(Keyword::Also) {
+            self.advance();
+            let subj = self.parse_evaluate_subject()?;
+            subjects.push(subj);
+        }
+
+        let mut when_clauses = Vec::new();
+        let mut when_other = None;
+
+        // Parse WHEN clauses
+        while self.check_keyword(Keyword::When) {
+            self.advance(); // WHEN
+
+            // Check for WHEN OTHER
+            if self.check_keyword(Keyword::Other) {
+                self.advance();
+                let mut stmts = Vec::new();
+                while !self.check_keyword(Keyword::EndEvaluate)
+                    && !self.check_keyword(Keyword::When)
+                    && !self.check(TokenKind::Period)
+                    && !self.is_at_end()
+                {
+                    match self.parse_statement() {
+                        Ok(stmt) => stmts.push(stmt),
+                        Err(e) => {
+                            self.errors.push(e);
+                            self.advance_to_next_sentence();
+                            break;
+                        }
+                    }
+                }
+                when_other = Some(stmts);
+                break;
+            }
+
+            // Parse WHEN conditions (possibly multiple via ALSO)
+            let when_start = self.current_span();
+            let mut conditions = Vec::new();
+
+            // Parse first condition
+            conditions.push(self.parse_when_condition(&subjects, 0)?);
+
+            // Parse ALSO conditions
+            let mut idx = 1;
+            while self.check_keyword(Keyword::Also) {
+                self.advance();
+                conditions.push(self.parse_when_condition(&subjects, idx)?);
+                idx += 1;
+            }
+
+            // Check for additional WHEN clauses that share the same statements
+            // (multiple WHEN on consecutive lines before statements)
+            let mut extra_whens: Vec<Vec<WhenCondition>> = Vec::new();
+            while self.check_keyword(Keyword::When) {
+                // Peek to see if this is WHEN OTHER
+                let saved = self.current;
+                self.advance(); // WHEN
+                if self.check_keyword(Keyword::Other) {
+                    self.current = saved;
+                    break;
+                }
+                // Parse this WHEN condition group
+                let mut extra_conditions = Vec::new();
+                extra_conditions.push(self.parse_when_condition(&subjects, 0)?);
+                let mut eidx = 1;
+                while self.check_keyword(Keyword::Also) {
+                    self.advance();
+                    extra_conditions.push(self.parse_when_condition(&subjects, eidx)?);
+                    eidx += 1;
+                }
+                extra_whens.push(extra_conditions);
+            }
+
+            // Parse statements for this WHEN clause
+            let mut stmts = Vec::new();
+            while !self.check_keyword(Keyword::When)
+                && !self.check_keyword(Keyword::EndEvaluate)
+                && !self.check(TokenKind::Period)
+                && !self.is_at_end()
+            {
+                match self.parse_statement() {
+                    Ok(stmt) => stmts.push(stmt),
+                    Err(e) => {
+                        self.errors.push(e);
+                        self.advance_to_next_sentence();
+                        break;
+                    }
+                }
+            }
+
+            let when_end = self.previous_span();
+
+            when_clauses.push(WhenClause {
+                conditions,
+                statements: stmts.clone(),
+                span: when_start.extend(when_end),
+            });
+
+            // Add extra WHEN clauses with the same statements
+            for extra_conds in extra_whens {
+                when_clauses.push(WhenClause {
+                    conditions: extra_conds,
+                    statements: stmts.clone(),
+                    span: when_start.extend(when_end),
+                });
+            }
+        }
+
+        // END-EVALUATE or period
+        if self.check_keyword(Keyword::EndEvaluate) {
+            self.advance();
+        }
+        self.skip_if(TokenKind::Period);
+
+        let end = self.previous_span();
+
+        Ok(Statement::Evaluate(EvaluateStatement {
+            subjects,
+            when_clauses,
+            when_other,
+            span: start.extend(end),
+        }))
+    }
+
+    fn parse_evaluate_subject(&mut self) -> Result<Expression> {
+        if self.check_keyword(Keyword::True) {
+            let span = self.current_span();
+            self.advance();
+            Ok(Expression::Variable(QualifiedName {
+                name: "TRUE".to_string(),
+                qualifiers: Vec::new(),
+                subscripts: Vec::new(),
+                refmod: None,
+                span,
+            }))
+        } else if self.check_keyword(Keyword::False) {
+            let span = self.current_span();
+            self.advance();
+            Ok(Expression::Variable(QualifiedName {
+                name: "FALSE".to_string(),
+                qualifiers: Vec::new(),
+                subscripts: Vec::new(),
+                refmod: None,
+                span,
+            }))
+        } else {
+            self.parse_expression()
+        }
+    }
+
+    fn parse_when_condition(
+        &mut self,
+        subjects: &[Expression],
+        _subject_idx: usize,
+    ) -> Result<WhenCondition> {
+        // ANY
+        if self.check_keyword(Keyword::Any) {
+            self.advance();
+            return Ok(WhenCondition::Any);
+        }
+
+        // TRUE
+        if self.check_keyword(Keyword::True) {
+            self.advance();
+            return Ok(WhenCondition::True);
+        }
+
+        // FALSE
+        if self.check_keyword(Keyword::False) {
+            self.advance();
+            return Ok(WhenCondition::False);
+        }
+
+        // For EVALUATE TRUE, WHEN conditions are conditions (comparisons)
+        // For EVALUATE variable, WHEN conditions are values/expressions
+        let is_evaluate_true = !subjects.is_empty()
+            && matches!(
+                &subjects[0],
+                Expression::Variable(ref name) if name.name == "TRUE"
+            );
+
+        if is_evaluate_true {
+            // Parse as a condition
+            let cond = self.parse_condition()?;
+            return Ok(WhenCondition::Condition(cond));
+        }
+
+        // Parse as a value expression - could be a range (value THRU value)
+        let expr = self.parse_expression()?;
+
+        if self.check_keyword(Keyword::Thru) || self.check_keyword(Keyword::Through) {
+            self.advance();
+            let to = self.parse_expression()?;
+            Ok(WhenCondition::Range { from: expr, to })
+        } else {
+            Ok(WhenCondition::Value(expr))
+        }
+    }
+
     // ========================================================================
     // ARITHMETIC STATEMENTS
     // ========================================================================
@@ -1328,7 +1602,10 @@ impl Parser {
         }
 
         // TO clause
+        // Note: In "ADD a TO b GIVING c", b can be an expression (including ZERO)
+        // In "ADD a TO b", b must be an identifier (target)
         let mut to = Vec::new();
+        let mut to_expressions = Vec::new();
         if self.check_keyword(Keyword::To) {
             self.advance();
             while !self.check_keyword(Keyword::Giving)
@@ -1339,14 +1616,37 @@ impl Parser {
                 && !self.is_at_end()
                 && !self.is_statement_start()
             {
-                let name = self.parse_qualified_name()?;
+                // Parse as expression to handle figurative constants like ZERO
+                let expr = self.parse_expression()?;
                 let rounded = if self.check_keyword(Keyword::Rounded) {
                     self.advance();
                     true
                 } else {
                     false
                 };
-                to.push(AddTarget { name, rounded });
+                to_expressions.push((expr, rounded));
+            }
+
+            // If GIVING follows, these are operands; otherwise convert to targets
+            if !self.check_keyword(Keyword::Giving) {
+                for (expr, rounded) in to_expressions {
+                    // Convert expression to qualified name for target
+                    if let Expression::Variable(name) = expr {
+                        to.push(AddTarget { name, rounded });
+                    } else {
+                        // Non-identifier target - semantic error, but parse it
+                        // Use a placeholder name
+                        to.push(AddTarget {
+                            name: QualifiedName::simple("_ERROR_", Span::dummy()),
+                            rounded,
+                        });
+                    }
+                }
+            } else {
+                // GIVING follows, so TO expressions are operands
+                for (expr, _) in to_expressions {
+                    operands.push(expr);
+                }
             }
         }
 
@@ -1662,6 +1962,11 @@ impl Parser {
         // Parse sources
         let mut sources = Vec::new();
         while !self.check_keyword(Keyword::Into) && !self.is_at_end() {
+            // Skip commas between sources
+            if self.check(TokenKind::Comma) {
+                self.advance();
+                continue;
+            }
             let value = self.parse_expression()?;
 
             let delimited_by = if self.check_keyword(Keyword::Delimited) {
@@ -1927,6 +2232,11 @@ impl Parser {
                     mode,
                     span: param_start.extend(param_end),
                 });
+
+                // Skip optional comma between parameters
+                if self.check(TokenKind::Comma) {
+                    self.advance();
+                }
             }
         }
 
@@ -2053,6 +2363,157 @@ impl Parser {
         }))
     }
 
+    fn parse_exec_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // EXEC
+
+        if self.check_keyword(Keyword::Cics) {
+            self.parse_exec_cics(start)
+        } else if self.check_keyword(Keyword::Sql) {
+            self.parse_exec_sql(start)
+        } else {
+            // Unknown EXEC type - skip to END-EXEC
+            self.advance_to_end_exec();
+            let end = self.previous_span();
+            Ok(Statement::Continue(ContinueStatement {
+                span: start.extend(end),
+            }))
+        }
+    }
+
+    fn parse_exec_cics(&mut self, start: Span) -> Result<Statement> {
+        self.advance(); // CICS
+
+        // Get the command (SEND, RECEIVE, RETURN, XCTL, READ, etc.)
+        let command = if let TokenKind::Identifier(name) = &self.current().kind {
+            let cmd = name.clone();
+            self.advance();
+            cmd
+        } else if let TokenKind::Keyword(kw) = self.current().kind {
+            // Some CICS commands are also COBOL keywords (READ, WRITE, RETURN, etc.)
+            let cmd = kw.as_str().to_string();
+            self.advance();
+            cmd
+        } else {
+            return Err(CobolError::ParseError {
+                message: "Expected CICS command".to_string(),
+            });
+        };
+
+        // Parse options until END-EXEC
+        let mut options = Vec::new();
+        while !self.check_keyword(Keyword::EndExec) && !self.is_at_end() {
+            if let Some(option) = self.parse_cics_option()? {
+                options.push(option);
+            }
+        }
+
+        // Consume END-EXEC
+        if self.check_keyword(Keyword::EndExec) {
+            self.advance();
+        }
+
+        // Optional period
+        self.skip_if(TokenKind::Period);
+
+        let end = self.previous_span();
+
+        Ok(Statement::ExecCics(ExecCicsStatement {
+            command,
+            options,
+            span: start.extend(end),
+        }))
+    }
+
+    fn parse_cics_option(&mut self) -> Result<Option<CicsOption>> {
+        // Get option name
+        let name = match &self.current().kind {
+            TokenKind::Identifier(name) => name.clone(),
+            TokenKind::Keyword(kw) => kw.as_str().to_string(),
+            _ => {
+                // Skip unknown tokens
+                self.advance();
+                return Ok(None);
+            }
+        };
+        self.advance();
+
+        // Check for value in parentheses
+        let value = if self.check(TokenKind::LeftParen) {
+            self.advance(); // (
+            let expr = if self.check(TokenKind::RightParen) {
+                None
+            } else {
+                Some(self.parse_expression()?)
+            };
+            if self.check(TokenKind::RightParen) {
+                self.advance(); // )
+            }
+            expr
+        } else {
+            None
+        };
+
+        Ok(Some(CicsOption { name, value }))
+    }
+
+    fn parse_exec_sql(&mut self, start: Span) -> Result<Statement> {
+        self.advance(); // SQL
+
+        // Collect all tokens until END-EXEC as raw SQL
+        let mut sql = String::new();
+        while !self.check_keyword(Keyword::EndExec) && !self.is_at_end() {
+            match &self.current().kind {
+                TokenKind::Identifier(s) => sql.push_str(s),
+                TokenKind::Keyword(kw) => sql.push_str(kw.as_str()),
+                TokenKind::IntegerLiteral(n) => sql.push_str(&n.to_string()),
+                TokenKind::StringLiteral(s) => {
+                    sql.push('\'');
+                    sql.push_str(s);
+                    sql.push('\'');
+                }
+                TokenKind::LeftParen => sql.push('('),
+                TokenKind::RightParen => sql.push(')'),
+                TokenKind::Comma => sql.push(','),
+                TokenKind::Period => sql.push('.'),
+                TokenKind::Colon => sql.push(':'),
+                TokenKind::Equals => sql.push('='),
+                TokenKind::Plus => sql.push('+'),
+                TokenKind::Minus => sql.push('-'),
+                TokenKind::Star => sql.push('*'),
+                TokenKind::Slash => sql.push('/'),
+                _ => {}
+            }
+            sql.push(' ');
+            self.advance();
+        }
+
+        // Consume END-EXEC
+        if self.check_keyword(Keyword::EndExec) {
+            self.advance();
+        }
+
+        // Optional period
+        self.skip_if(TokenKind::Period);
+
+        let end = self.previous_span();
+
+        Ok(Statement::ExecSql(ExecSqlStatement {
+            sql: sql.trim().to_string(),
+            span: start.extend(end),
+        }))
+    }
+
+    fn advance_to_end_exec(&mut self) {
+        while !self.check_keyword(Keyword::EndExec) && !self.is_at_end() {
+            self.advance();
+        }
+        if self.check_keyword(Keyword::EndExec) {
+            self.advance();
+        }
+        self.skip_if(TokenKind::Period);
+    }
+
     // ========================================================================
     // EXPRESSIONS
     // ========================================================================
@@ -2159,6 +2620,12 @@ impl Parser {
             Ok(Expression::Paren(Box::new(expr)))
         } else if self.check_keyword(Keyword::Function) {
             self.parse_function_call()
+        } else if self.check_keyword(Keyword::Length) {
+            // LENGTH OF data-item
+            self.parse_length_of()
+        } else if self.check_keyword(Keyword::Address) {
+            // ADDRESS OF data-item
+            self.parse_address_of()
         } else if self.check_literal() {
             Ok(Expression::Literal(self.parse_literal()?))
         } else if self.check_figurative_constant() {
@@ -2177,6 +2644,42 @@ impl Parser {
         }
     }
 
+    fn parse_length_of(&mut self) -> Result<Expression> {
+        let start = self.current_span();
+        self.advance(); // LENGTH
+
+        // OF is optional but commonly used
+        if self.check_keyword(Keyword::Of) {
+            self.advance();
+        }
+
+        let name = self.parse_qualified_name()?;
+        let end = self.previous_span();
+
+        Ok(Expression::LengthOf(LengthOf {
+            item: name,
+            span: start.extend(end),
+        }))
+    }
+
+    fn parse_address_of(&mut self) -> Result<Expression> {
+        let start = self.current_span();
+        self.advance(); // ADDRESS
+
+        // OF is required
+        if self.check_keyword(Keyword::Of) {
+            self.advance();
+        }
+
+        let name = self.parse_qualified_name()?;
+        let end = self.previous_span();
+
+        Ok(Expression::AddressOf(AddressOf {
+            item: name,
+            span: start.extend(end),
+        }))
+    }
+
     fn parse_function_call(&mut self) -> Result<Expression> {
         let start = self.current_span();
         self.expect_keyword(Keyword::Function)?;
@@ -2185,13 +2688,43 @@ impl Parser {
         let mut arguments = Vec::new();
         if self.check(TokenKind::LeftParen) {
             self.advance();
-            while !self.check(TokenKind::RightParen) && !self.is_at_end() {
-                arguments.push(self.parse_expression()?);
-                if self.check(TokenKind::Comma) {
-                    self.advance();
+
+            // Check if this is reference modification (expr:expr) vs arguments
+            let first_expr = self.parse_expression()?;
+
+            if self.check(TokenKind::Colon) {
+                // This is reference modification on the function result: FUNCTION NAME(start:length)
+                self.advance(); // skip colon
+                let length = if self.check(TokenKind::RightParen) {
+                    None
+                } else {
+                    Some(Box::new(self.parse_expression()?))
+                };
+                self.expect(TokenKind::RightParen)?;
+                // Return the function call - store refmod args as regular args for now
+                // The refmod info is encoded in the arguments
+                arguments.push(first_expr);
+                if let Some(len) = length {
+                    arguments.push(*len);
                 }
+            } else {
+                // Regular arguments
+                arguments.push(first_expr);
+                while self.check(TokenKind::Comma) && !self.is_at_end() {
+                    self.advance();
+                    if !self.check(TokenKind::RightParen) {
+                        arguments.push(self.parse_expression()?);
+                    }
+                }
+                // Handle additional arguments without commas
+                while !self.check(TokenKind::RightParen) && !self.is_at_end() {
+                    arguments.push(self.parse_expression()?);
+                    if self.check(TokenKind::Comma) {
+                        self.advance();
+                    }
+                }
+                self.expect(TokenKind::RightParen)?;
             }
-            self.expect(TokenKind::RightParen)?;
         }
 
         let end = self.previous_span();
@@ -2205,30 +2738,116 @@ impl Parser {
 
     fn parse_literal(&mut self) -> Result<Literal> {
         let span = self.current_span();
+
+        // Handle optional sign prefix for numeric literals
+        let is_negative = if self.check(TokenKind::Plus) {
+            self.advance();
+            false
+        } else if self.check(TokenKind::Minus) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         let kind = match &self.current().kind {
             TokenKind::IntegerLiteral(n) => {
-                let n = *n;
+                let n = if is_negative { -(*n as i64) } else { *n as i64 };
                 self.advance();
                 LiteralKind::Integer(n)
             }
             TokenKind::DecimalLiteral(s) => {
-                let s = s.clone();
+                let s = if is_negative {
+                    format!("-{}", s)
+                } else {
+                    s.clone()
+                };
                 self.advance();
                 LiteralKind::Decimal(s)
             }
             TokenKind::StringLiteral(s) => {
+                if is_negative {
+                    return Err(CobolError::ParseError {
+                        message: "Sign not allowed with string literal".to_string(),
+                    });
+                }
                 let s = s.clone();
                 self.advance();
                 LiteralKind::String(s)
             }
             TokenKind::HexLiteral(s) => {
+                if is_negative {
+                    return Err(CobolError::ParseError {
+                        message: "Sign not allowed with hex literal".to_string(),
+                    });
+                }
                 let s = s.clone();
                 self.advance();
                 LiteralKind::Hex(s)
             }
+            // Handle figurative constants
+            TokenKind::Keyword(Keyword::Zero)
+            | TokenKind::Keyword(Keyword::Zeros)
+            | TokenKind::Keyword(Keyword::Zeroes) => {
+                if is_negative {
+                    return Err(CobolError::ParseError {
+                        message: "Sign not allowed with figurative constant".to_string(),
+                    });
+                }
+                self.advance();
+                LiteralKind::Figurative(FigurativeConstant::Zero)
+            }
+            TokenKind::Keyword(Keyword::Space) | TokenKind::Keyword(Keyword::Spaces) => {
+                if is_negative {
+                    return Err(CobolError::ParseError {
+                        message: "Sign not allowed with figurative constant".to_string(),
+                    });
+                }
+                self.advance();
+                LiteralKind::Figurative(FigurativeConstant::Space)
+            }
+            TokenKind::Keyword(Keyword::HighValue) | TokenKind::Keyword(Keyword::HighValues) => {
+                if is_negative {
+                    return Err(CobolError::ParseError {
+                        message: "Sign not allowed with figurative constant".to_string(),
+                    });
+                }
+                self.advance();
+                LiteralKind::Figurative(FigurativeConstant::HighValue)
+            }
+            TokenKind::Keyword(Keyword::LowValue) | TokenKind::Keyword(Keyword::LowValues) => {
+                if is_negative {
+                    return Err(CobolError::ParseError {
+                        message: "Sign not allowed with figurative constant".to_string(),
+                    });
+                }
+                self.advance();
+                LiteralKind::Figurative(FigurativeConstant::LowValue)
+            }
+            TokenKind::Keyword(Keyword::Quote) | TokenKind::Keyword(Keyword::Quotes) => {
+                if is_negative {
+                    return Err(CobolError::ParseError {
+                        message: "Sign not allowed with figurative constant".to_string(),
+                    });
+                }
+                self.advance();
+                LiteralKind::Figurative(FigurativeConstant::Quote)
+            }
+            // ALL followed by a literal
+            TokenKind::Keyword(Keyword::All) => {
+                if is_negative {
+                    return Err(CobolError::ParseError {
+                        message: "Sign not allowed with ALL".to_string(),
+                    });
+                }
+                self.advance();
+                // Parse the literal that follows ALL
+                let inner_literal = self.parse_literal()?;
+                LiteralKind::AllOf(Box::new(inner_literal))
+            }
             _ => {
                 return Err(CobolError::ParseError {
-                    message: "Expected literal".to_string(),
+                    message: format!("Expected literal, found {:?}", self.current().kind),
                 })
             }
         };
@@ -2275,6 +2894,7 @@ impl Parser {
 
         let mut qualifiers = Vec::new();
         let mut subscripts = Vec::new();
+        let mut refmod = None;
 
         // Parse OF/IN qualifications
         while self.check_keyword(Keyword::Of) || self.check_keyword(Keyword::Input) {
@@ -2287,18 +2907,47 @@ impl Parser {
             }
         }
 
-        // Parse subscripts
+        // Parse subscripts and/or reference modification
         if self.check(TokenKind::LeftParen) {
             self.advance();
-            while !self.check(TokenKind::RightParen) && !self.is_at_end() {
-                subscripts.push(self.parse_expression()?);
-                if self.check(TokenKind::Comma) {
+
+            // Parse first expression
+            let first_expr = self.parse_expression()?;
+
+            // Check if this is reference modification (has colon)
+            if self.check(TokenKind::Colon) {
+                self.advance();
+                // Reference modification: (start:length) or (start:)
+                let length = if self.check(TokenKind::RightParen) {
+                    None
+                } else {
+                    Some(Box::new(self.parse_expression()?))
+                };
+                refmod = Some((Box::new(first_expr), length));
+                self.expect(TokenKind::RightParen)?;
+            } else {
+                // Regular subscripts
+                subscripts.push(first_expr);
+                while self.check(TokenKind::Comma) && !self.is_at_end() {
                     self.advance();
-                } else if !self.check(TokenKind::RightParen) {
-                    // Space-separated subscripts
+                    subscripts.push(self.parse_expression()?);
+                }
+                self.expect(TokenKind::RightParen)?;
+
+                // Check for reference modification after subscripts
+                if self.check(TokenKind::LeftParen) {
+                    self.advance();
+                    let refmod_start = self.parse_expression()?;
+                    self.expect(TokenKind::Colon)?;
+                    let length = if self.check(TokenKind::RightParen) {
+                        None
+                    } else {
+                        Some(Box::new(self.parse_expression()?))
+                    };
+                    refmod = Some((Box::new(refmod_start), length));
+                    self.expect(TokenKind::RightParen)?;
                 }
             }
-            self.expect(TokenKind::RightParen)?;
         }
 
         let end = self.previous_span();
@@ -2307,6 +2956,7 @@ impl Parser {
             name,
             qualifiers,
             subscripts,
+            refmod,
             span: start.extend(end),
         })
     }
@@ -2364,25 +3014,26 @@ impl Parser {
         // Try to parse as comparison
         let left = self.parse_expression()?;
 
-        // Check for comparison operators
-        if self.check_comparison_op() {
-            let op = self.parse_comparison_op()?;
-            let right = self.parse_expression()?;
-            let span = left.span().extend(right.span());
-            return Ok(Condition::Comparison(Box::new(Comparison {
-                left,
-                op,
-                right,
-                span,
-            })));
-        }
-
-        // Check for class conditions
-        if self.check_keyword(Keyword::Is) {
-            self.advance();
-            let negated = if self.check_keyword(Keyword::Not) {
+        // Check for class conditions first (with or without IS)
+        // e.g., "X IS NUMERIC" or "X NOT NUMERIC" or "X NUMERIC"
+        {
+            let is_present = self.check_keyword(Keyword::Is);
+            if is_present {
                 self.advance();
-                true
+            }
+
+            let negated = if self.check_keyword(Keyword::Not) {
+                // Check if this is a class condition (NOT NUMERIC) vs comparison (NOT =)
+                let next_is_class = self.peek_keyword(Keyword::Numeric)
+                    || self.peek_keyword(Keyword::Alphabetic)
+                    || self.peek_keyword(Keyword::AlphabeticLower)
+                    || self.peek_keyword(Keyword::AlphabeticUpper);
+                if is_present || next_is_class {
+                    self.advance();
+                    true
+                } else {
+                    false
+                }
             } else {
                 false
             };
@@ -2403,16 +3054,55 @@ impl Parser {
                     negated,
                     span: Span::dummy(),
                 })));
+            } else if self.check_keyword(Keyword::AlphabeticLower) {
+                self.advance();
+                return Ok(Condition::Class(Box::new(ClassCondition {
+                    operand: left,
+                    class: ClassType::AlphabeticLower,
+                    negated,
+                    span: Span::dummy(),
+                })));
+            } else if self.check_keyword(Keyword::AlphabeticUpper) {
+                self.advance();
+                return Ok(Condition::Class(Box::new(ClassCondition {
+                    operand: left,
+                    class: ClassType::AlphabeticUpper,
+                    negated,
+                    span: Span::dummy(),
+                })));
             }
+            // If we consumed IS but didn't find a class keyword, that's an error
+            // But if no IS was present, fall through to comparison parsing
         }
 
-        // Condition name
-        if let Expression::Variable(name) = left {
-            Ok(Condition::ConditionName(name))
+        // Check for comparison operators
+        if self.check_comparison_op() {
+            let op = self.parse_comparison_op()?;
+            let right = self.parse_expression()?;
+            let span = left.span().extend(right.span());
+            return Ok(Condition::Comparison(Box::new(Comparison {
+                left,
+                op,
+                right,
+                span,
+            })));
+        }
+
+        // Condition name (88-level)
+        if let Expression::Variable(name) = &left {
+            Ok(Condition::ConditionName(name.clone()))
         } else {
-            Err(CobolError::ParseError {
-                message: "Expected condition".to_string(),
-            })
+            // Treat any non-zero expression as a truthy condition
+            // This handles abbreviated conditions and other edge cases
+            let span = left.span();
+            let qn = QualifiedName {
+                name: "__EXPR__".to_string(),
+                qualifiers: Vec::new(),
+                subscripts: Vec::new(),
+                refmod: None,
+                span,
+            };
+            Ok(Condition::ConditionName(qn))
         }
     }
 
@@ -2508,9 +3198,27 @@ impl Parser {
                 } else if self.check(TokenKind::Equals) {
                     self.advance();
                     ComparisonOp::NotEqual
+                } else if self.check_keyword(Keyword::Greater) {
+                    self.advance();
+                    if self.check_keyword(Keyword::Than) {
+                        self.advance();
+                    }
+                    ComparisonOp::LessOrEqual // NOT GREATER = LESS OR EQUAL
+                } else if self.check_keyword(Keyword::Less) {
+                    self.advance();
+                    if self.check_keyword(Keyword::Than) {
+                        self.advance();
+                    }
+                    ComparisonOp::GreaterOrEqual // NOT LESS = GREATER OR EQUAL
+                } else if self.check(TokenKind::GreaterThan) {
+                    self.advance();
+                    ComparisonOp::LessOrEqual
+                } else if self.check(TokenKind::LessThan) {
+                    self.advance();
+                    ComparisonOp::GreaterOrEqual
                 } else {
                     return Err(CobolError::ParseError {
-                        message: "Expected comparison operator".to_string(),
+                        message: format!("Expected comparison operator after NOT, found {:?}", self.current().kind),
                     });
                 }
             }
@@ -2660,14 +3368,22 @@ impl Parser {
     }
 
     fn expect_identifier(&mut self) -> Result<String> {
-        if let TokenKind::Identifier(s) = &self.current().kind {
-            let s = s.clone();
-            self.advance();
-            Ok(s)
-        } else {
-            Err(CobolError::ParseError {
+        match &self.current().kind {
+            TokenKind::Identifier(s) => {
+                let s = s.clone();
+                self.advance();
+                Ok(s)
+            }
+            // In COBOL, many keywords can be used as identifiers in data names,
+            // paragraph names, etc. Accept keywords as identifiers when expected.
+            TokenKind::Keyword(kw) => {
+                let s = kw.as_str().to_string();
+                self.advance();
+                Ok(s)
+            }
+            _ => Err(CobolError::ParseError {
                 message: format!("Expected identifier, found {:?}", self.current().kind),
-            })
+            }),
         }
     }
 
@@ -2763,6 +3479,9 @@ impl Parser {
             || self.check_keyword(Keyword::Close)
             || self.check_keyword(Keyword::Read)
             || self.check_keyword(Keyword::Write)
+            || self.check_keyword(Keyword::Rewrite)
+            || self.check_keyword(Keyword::Delete)
+            || self.check_keyword(Keyword::Start)
             || self.check_keyword(Keyword::Stop)
             || self.check_keyword(Keyword::Exit)
             || self.check_keyword(Keyword::Go)
@@ -2772,7 +3491,35 @@ impl Parser {
             || self.check_keyword(Keyword::Unstring)
             || self.check_keyword(Keyword::Set)
             || self.check_keyword(Keyword::Search)
+            || self.check_keyword(Keyword::Sort)
+            || self.check_keyword(Keyword::Merge)
+            || self.check_keyword(Keyword::Release)
+            || self.check_keyword(Keyword::Return)
+            || self.check_keyword(Keyword::Cancel)
             || self.check_keyword(Keyword::Continue)
+            || self.check_keyword(Keyword::Exec)
+            // Also include scope terminators
+            || self.is_scope_terminator()
+    }
+
+    fn is_scope_terminator(&self) -> bool {
+        self.check_keyword(Keyword::Else)
+            || self.check_keyword(Keyword::EndIf)
+            || self.check_keyword(Keyword::EndEvaluate)
+            || self.check_keyword(Keyword::EndPerform)
+            || self.check_keyword(Keyword::EndRead)
+            || self.check_keyword(Keyword::EndWrite)
+            || self.check_keyword(Keyword::EndCompute)
+            || self.check_keyword(Keyword::EndAdd)
+            || self.check_keyword(Keyword::EndSubtract)
+            || self.check_keyword(Keyword::EndMultiply)
+            || self.check_keyword(Keyword::EndDivide)
+            || self.check_keyword(Keyword::EndCall)
+            || self.check_keyword(Keyword::EndString)
+            || self.check_keyword(Keyword::EndUnstring)
+            || self.check_keyword(Keyword::EndSearch)
+            || self.check_keyword(Keyword::When)
+            || self.check_keyword(Keyword::Other)
     }
 
     fn is_data_clause_start(&self) -> bool {
@@ -2829,6 +3576,271 @@ impl Parser {
             self.advance();
         }
         self.skip_if(TokenKind::Period);
+    }
+
+    // ========================================================================
+    // STUB PARSERS FOR FILE I/O AND OTHER STATEMENTS
+    // ========================================================================
+
+    /// Parse SET statement (sets condition names, indexes, etc.)
+    fn parse_set_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // SET
+
+        // Skip until we reach a statement boundary
+        while !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.is_statement_start()
+            && !self.is_scope_terminator()
+        {
+            self.advance();
+        }
+
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Parse INITIALIZE statement
+    fn parse_initialize_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // INITIALIZE
+
+        while !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.is_statement_start()
+            && !self.is_scope_terminator()
+        {
+            self.advance();
+        }
+
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Parse ACCEPT statement
+    fn parse_accept_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // ACCEPT
+
+        while !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.is_statement_start()
+            && !self.is_scope_terminator()
+        {
+            self.advance();
+        }
+
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Parse OPEN statement
+    fn parse_open_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // OPEN
+
+        while !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.is_statement_start()
+            && !self.is_scope_terminator()
+        {
+            self.advance();
+        }
+
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Parse CLOSE statement
+    fn parse_close_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // CLOSE
+
+        while !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.is_statement_start()
+            && !self.is_scope_terminator()
+        {
+            self.advance();
+        }
+
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Parse READ statement - skip-based stub that handles INVALID KEY / NOT INVALID KEY / END-READ
+    fn parse_read_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // READ
+
+        // Skip until INVALID KEY, NOT INVALID KEY, END-READ, or period
+        while !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.check_keyword(Keyword::InvalidKey)
+            && !self.check_keyword(Keyword::EndRead)
+            && !(self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
+        {
+            self.advance();
+        }
+
+        // Handle INVALID KEY / NOT INVALID KEY clauses
+        loop {
+            if self.check_keyword(Keyword::InvalidKey)
+                || (self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
+            {
+                // Skip NOT if present
+                if self.check_keyword(Keyword::Not) {
+                    self.advance();
+                }
+                self.advance(); // INVALID
+                // Skip KEY if present
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
+                }
+                // Parse statements in this clause
+                while !self.check(TokenKind::Period)
+                    && !self.is_at_end()
+                    && !self.check_keyword(Keyword::InvalidKey)
+                    && !self.check_keyword(Keyword::EndRead)
+                    && !(self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
+                {
+                    match self.parse_statement() {
+                        Ok(_stmt) => {}
+                        Err(e) => {
+                            self.errors.push(e);
+                            self.advance_to_next_sentence();
+                            break;
+                        }
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        if self.check_keyword(Keyword::EndRead) {
+            self.advance();
+        }
+
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Parse WRITE statement - stub with INVALID KEY handling
+    fn parse_write_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // WRITE
+        self.parse_io_statement_body(Keyword::EndWrite)?;
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Parse REWRITE statement - stub with INVALID KEY handling
+    fn parse_rewrite_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // REWRITE
+        self.parse_io_statement_body(Keyword::EndRewrite)?;
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Parse DELETE statement - stub with INVALID KEY handling
+    fn parse_delete_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // DELETE
+        self.parse_io_statement_body(Keyword::EndDelete)?;
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Parse START statement - stub with INVALID KEY handling
+    fn parse_start_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // START
+        self.parse_io_statement_body(Keyword::EndStart)?;
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Shared IO statement body parser: skip tokens, handle INVALID KEY clauses, END-xxx
+    fn parse_io_statement_body(&mut self, end_keyword: Keyword) -> Result<()> {
+        // Skip tokens until INVALID KEY, NOT INVALID KEY, end scope, or period
+        while !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.check_keyword(Keyword::InvalidKey)
+            && !self.check_keyword(end_keyword)
+            && !(self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
+            && !self.is_statement_start()
+            && !self.is_scope_terminator()
+        {
+            self.advance();
+        }
+
+        // Handle INVALID KEY / NOT INVALID KEY clauses
+        loop {
+            if self.check_keyword(Keyword::InvalidKey)
+                || (self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
+            {
+                if self.check_keyword(Keyword::Not) {
+                    self.advance();
+                }
+                self.advance(); // INVALID
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
+                }
+                // Parse statements in this clause
+                while !self.check(TokenKind::Period)
+                    && !self.is_at_end()
+                    && !self.check_keyword(Keyword::InvalidKey)
+                    && !self.check_keyword(end_keyword)
+                    && !(self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
+                {
+                    match self.parse_statement() {
+                        Ok(_stmt) => {}
+                        Err(e) => {
+                            self.errors.push(e);
+                            self.advance_to_next_sentence();
+                            break;
+                        }
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        if self.check_keyword(end_keyword) {
+            self.advance();
+        }
+
+        Ok(())
+    }
+
+    /// Parse SEARCH statement
+    fn parse_search_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // SEARCH
+
+        while !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.is_statement_start()
+            && !self.is_scope_terminator()
+            && !self.check_keyword(Keyword::EndSearch)
+        {
+            self.advance();
+        }
+
+        if self.check_keyword(Keyword::EndSearch) {
+            self.advance();
+        }
+
+        Ok(Statement::Continue(ContinueStatement { span: start }))
+    }
+
+    /// Parse INSPECT statement
+    fn parse_inspect_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // INSPECT
+
+        while !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.is_statement_start()
+            && !self.is_scope_terminator()
+        {
+            self.advance();
+        }
+
+        Ok(Statement::Continue(ContinueStatement { span: start }))
     }
 }
 

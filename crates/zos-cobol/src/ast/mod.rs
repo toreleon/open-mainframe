@@ -500,6 +500,10 @@ pub enum Statement {
     Search(SearchStatement),
     /// CONTINUE statement.
     Continue(ContinueStatement),
+    /// EXEC CICS statement.
+    ExecCics(ExecCicsStatement),
+    /// EXEC SQL statement.
+    ExecSql(ExecSqlStatement),
 }
 
 impl Statement {
@@ -532,6 +536,8 @@ impl Statement {
             Statement::Set(s) => s.span,
             Statement::Search(s) => s.span,
             Statement::Continue(s) => s.span,
+            Statement::ExecCics(s) => s.span,
+            Statement::ExecSql(s) => s.span,
         }
     }
 }
@@ -1229,6 +1235,39 @@ pub struct ContinueStatement {
     pub span: Span,
 }
 
+/// EXEC CICS statement.
+///
+/// Represents embedded CICS commands like SEND MAP, RECEIVE MAP, RETURN, etc.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecCicsStatement {
+    /// The CICS command (e.g., "SEND", "RECEIVE", "RETURN", "XCTL").
+    pub command: String,
+    /// Command options as key-value pairs.
+    pub options: Vec<CicsOption>,
+    /// Source span.
+    pub span: Span,
+}
+
+/// CICS command option.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CicsOption {
+    /// Option name (e.g., "MAP", "MAPSET", "FROM", "ERASE").
+    pub name: String,
+    /// Option value (if present).
+    pub value: Option<Expression>,
+}
+
+/// EXEC SQL statement.
+///
+/// Represents embedded SQL commands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecSqlStatement {
+    /// The SQL statement text.
+    pub sql: String,
+    /// Source span.
+    pub span: Span,
+}
+
 // ============================================================================
 // EXPRESSIONS AND CONDITIONS
 // ============================================================================
@@ -1250,6 +1289,10 @@ pub enum Expression {
     Unary(Box<UnaryExpr>),
     /// Parenthesized expression.
     Paren(Box<Expression>),
+    /// LENGTH OF data-item.
+    LengthOf(LengthOf),
+    /// ADDRESS OF data-item.
+    AddressOf(AddressOf),
 }
 
 impl Expression {
@@ -1263,8 +1306,28 @@ impl Expression {
             Expression::Binary(b) => b.span,
             Expression::Unary(u) => u.span,
             Expression::Paren(e) => e.span(),
+            Expression::LengthOf(l) => l.span,
+            Expression::AddressOf(a) => a.span,
         }
     }
+}
+
+/// LENGTH OF expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LengthOf {
+    /// Data item to get length of.
+    pub item: QualifiedName,
+    /// Source span.
+    pub span: Span,
+}
+
+/// ADDRESS OF expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddressOf {
+    /// Data item to get address of.
+    pub item: QualifiedName,
+    /// Source span.
+    pub span: Span,
 }
 
 /// A literal value.
@@ -1289,6 +1352,8 @@ pub enum LiteralKind {
     Hex(String),
     /// Figurative constant.
     Figurative(FigurativeConstant),
+    /// ALL followed by a literal (the literal is repeated).
+    AllOf(Box<Literal>),
 }
 
 /// Figurative constants.
@@ -1317,6 +1382,8 @@ pub struct QualifiedName {
     pub qualifiers: Vec<String>,
     /// Subscripts.
     pub subscripts: Vec<Expression>,
+    /// Reference modification (start:length).
+    pub refmod: Option<(Box<Expression>, Option<Box<Expression>>)>,
     /// Source span.
     pub span: Span,
 }
@@ -1328,6 +1395,7 @@ impl QualifiedName {
             name: name.into(),
             qualifiers: Vec::new(),
             subscripts: Vec::new(),
+            refmod: None,
             span,
         }
     }

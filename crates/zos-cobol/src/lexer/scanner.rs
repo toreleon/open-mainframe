@@ -356,6 +356,29 @@ impl<'a> Scanner<'a> {
             self.pos += 1;
         }
 
+        // Check if this is actually a numeric-prefixed paragraph name (e.g., 2000-OUTFILE-OPEN)
+        // In COBOL, paragraph names can start with digits if they contain letters
+        if self.pos < chars.len() && chars[self.pos] == '-' {
+            let peek_pos = self.pos + 1;
+            if peek_pos < chars.len() && chars[peek_pos].is_ascii_alphabetic() {
+                // This is a paragraph name, scan as identifier
+                while self.pos < chars.len() {
+                    let ch = chars[self.pos];
+                    if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                        self.pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                // Trim trailing hyphens
+                while self.pos > start && chars[self.pos - 1] == '-' {
+                    self.pos -= 1;
+                }
+                let text: String = chars[start..self.pos].iter().collect();
+                return Some(TokenKind::Identifier(text.to_uppercase()));
+            }
+        }
+
         // Check for decimal point
         let has_decimal =
             self.pos < chars.len() && chars[self.pos] == '.' && self.pos + 1 < chars.len() && {
