@@ -38,6 +38,7 @@ pub mod color;
 pub mod error;
 pub mod fields;
 pub mod input;
+pub mod mock;
 pub mod renderer;
 pub mod session;
 pub mod status;

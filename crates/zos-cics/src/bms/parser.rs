@@ -49,7 +49,7 @@ impl BmsMapset {
 }
 
 /// A single BMS map.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BmsMap {
     /// Map name
     pub name: String,

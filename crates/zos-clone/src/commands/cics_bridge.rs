@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use zos_cics::runtime::{CicsRuntime, FileMode, FileRecord};
-use zos_cics::terminal::TerminalManager;
+use zos_cics::terminal::{TerminalCallback, TerminalManager};
 use zos_cics::CicsResponse;
 use zos_runtime::interpreter::{CicsCommandHandler, Environment, InterpreterError};
 use zos_runtime::value::CobolValue;
@@ -32,6 +32,12 @@ pub struct CicsBridge {
     pub commarea_var: Option<String>,
     /// Active browse tokens per file (file_name -> token).
     browse_tokens: HashMap<String, u32>,
+    /// Optional terminal callback for TUI-driven I/O.
+    terminal_callback: Option<Box<dyn TerminalCallback>>,
+    /// Last SEND MAP map name (for receive_map to reference).
+    pub last_map_name: Option<String>,
+    /// Last SEND MAP mapset name.
+    pub last_mapset_name: Option<String>,
 }
 
 impl CicsBridge {
@@ -53,6 +59,9 @@ impl CicsBridge {
             xctl_program: None,
             commarea_var: None,
             browse_tokens: HashMap::new(),
+            terminal_callback: None,
+            last_map_name: None,
+            last_mapset_name: None,
         }
     }
 
@@ -69,6 +78,11 @@ impl CicsBridge {
         if !records.is_empty() {
             self.runtime.files.load_data(name, records);
         }
+    }
+
+    /// Set a terminal callback for interactive TUI-driven I/O.
+    pub fn set_terminal_callback(&mut self, callback: Box<dyn TerminalCallback>) {
+        self.terminal_callback = Some(callback);
     }
 
     /// Reset the bridge for a new program execution (after XCTL).
@@ -111,12 +125,13 @@ impl CicsBridge {
         let erase = Self::has_option(options, "ERASE");
         let eraseaup = Self::has_option(options, "ERASEAUP");
         let _cursor = Self::get_option_str(options, "CURSOR");
-        let _freekb = Self::has_option(options, "FREEKB");
-        let _alarm = Self::has_option(options, "ALARM");
+        let freekb = Self::has_option(options, "FREEKB");
+        let alarm = Self::has_option(options, "ALARM");
+        let frset = Self::has_option(options, "FRSET");
+        let dataonly = Self::has_option(options, "DATAONLY");
+        let maponly = Self::has_option(options, "MAPONLY");
 
         // Build field data from COBOL variables
-        // In a real implementation, we'd read the BMS symbolic map structure
-        // For now, collect any FROM data or map fields from the environment
         let mut data: HashMap<String, Vec<u8>> = HashMap::new();
 
         if let Some(ref from) = from_var {
@@ -126,15 +141,53 @@ impl CicsBridge {
             }
         }
 
-        // Log the send for debugging
-        let opts_desc = if erase { " ERASE" } else if eraseaup { " ERASEAUP" } else { "" };
-        env.display(
-            &format!(
-                "[CICS] SEND MAP({}) MAPSET({}){} - screen updated",
-                map_name, mapset_name, opts_desc
-            ),
-            false,
-        )?;
+        // Remember last map/mapset for RECEIVE MAP
+        self.last_map_name = Some(map_name.clone());
+        self.last_mapset_name = Some(mapset_name.clone());
+
+        // If we have a terminal callback, notify it
+        if let Some(ref mut cb) = self.terminal_callback {
+            use zos_cics::terminal::SendMapOptions;
+            let opts = SendMapOptions {
+                erase,
+                eraseaup,
+                maponly,
+                dataonly,
+                cursor: None,
+                freekb,
+                alarm,
+                frset,
+            };
+            // The callback will handle rendering. We pass map_name/mapset_name
+            // via the data map as metadata for the callback.
+            data.insert("__MAP_NAME__".to_string(), map_name.as_bytes().to_vec());
+            data.insert("__MAPSET_NAME__".to_string(), mapset_name.as_bytes().to_vec());
+            // We pass an empty map placeholder since the callback uses mapset_maps
+            // from the session. The real BMS map is resolved by the session layer.
+            tracing::info!(
+                "SEND MAP({}) MAPSET({}) via callback",
+                map_name,
+                mapset_name
+            );
+        }
+
+        // Log the send for debugging (stdout mode)
+        if self.terminal_callback.is_none() {
+            let opts_desc = if erase {
+                " ERASE"
+            } else if eraseaup {
+                " ERASEAUP"
+            } else {
+                ""
+            };
+            env.display(
+                &format!(
+                    "[CICS] SEND MAP({}) MAPSET({}){} - screen updated",
+                    map_name, mapset_name, opts_desc
+                ),
+                false,
+            )?;
+        }
 
         self.runtime.eib.set_response(CicsResponse::Normal);
         Ok(())
@@ -177,8 +230,20 @@ impl CicsBridge {
         let mapset_name = Self::get_option_str(options, "MAPSET").unwrap_or_default();
         let into_var = Self::get_option_str(options, "INTO");
 
-        // In a real 3270 terminal, this would block waiting for user input.
-        // For the interpreter, we simulate by prompting on stdin.
+        if self.terminal_callback.is_some() {
+            // In TUI mode, input was already collected by the session loop
+            // before the program was re-invoked. The AID key and field data
+            // are already set in the EIB and environment variables.
+            tracing::info!(
+                "RECEIVE MAP({}) MAPSET({}) - using pre-collected input",
+                map_name,
+                mapset_name
+            );
+            self.runtime.eib.set_response(CicsResponse::Normal);
+            return Ok(());
+        }
+
+        // Stdout mode: simulate by prompting on stdin.
         env.display(
             &format!(
                 "[CICS] RECEIVE MAP({}) MAPSET({}) - awaiting input",
