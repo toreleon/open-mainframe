@@ -2,6 +2,7 @@
 
 pub mod check;
 pub mod compile;
+pub mod interpret;
 pub mod lex;
 pub mod parse_jcl;
 pub mod run;

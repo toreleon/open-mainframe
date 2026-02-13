@@ -115,6 +115,13 @@ enum Commands {
         format: String,
     },
 
+    /// Interpret a COBOL program (run without compiling)
+    Interpret {
+        /// Input COBOL source file
+        #[arg(value_name = "FILE")]
+        input: PathBuf,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -159,6 +166,7 @@ fn main() -> Result<()> {
         Commands::Check { input, include_paths } => commands::check::run(input, include_paths),
         Commands::ParseJcl { input } => commands::parse_jcl::run(input),
         Commands::Lex { input, format } => commands::lex::run(input, format),
+        Commands::Interpret { input } => commands::interpret::interpret(input),
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "zos-clone", &mut std::io::stdout());

@@ -21,6 +21,7 @@
 
 pub mod decimal;
 pub mod error;
+pub mod interpreter;
 pub mod io;
 pub mod string;
 pub mod value;
