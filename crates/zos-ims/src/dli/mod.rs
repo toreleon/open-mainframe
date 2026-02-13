@@ -10,6 +10,7 @@
 //! - REPL (Replace)
 
 mod ssa;
+pub mod store;
 
 pub use ssa::{Ssa, SsaQualification, SsaOperator, CommandCode};
 
@@ -282,7 +283,7 @@ impl DliProcessor {
         Ok(DliResult::end_of_db())
     }
 
-    fn execute_gnp(&mut self, call: &DliCall, pcb: &mut ProgramCommBlock) -> ImsResult<DliResult> {
+    fn execute_gnp(&mut self, _call: &DliCall, pcb: &mut ProgramCommBlock) -> ImsResult<DliResult> {
         // Get next within parent - limited to children of current parent
         self.held_segment = None;
 

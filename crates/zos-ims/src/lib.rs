@@ -27,6 +27,7 @@ pub mod dli;
 pub mod preprocess;
 pub mod psb;
 pub mod runtime;
+pub mod schema;
 
 use thiserror::Error;
 
