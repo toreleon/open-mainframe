@@ -26,6 +26,8 @@
 
 mod btree;
 mod cluster;
+mod ksds;
 
 pub use btree::{BPlusTree, DEFAULT_ORDER};
 pub use cluster::{ClusterParams, KeySpec, VsamCluster, VsamType};
+pub use ksds::{FileStatus, Ksds, KsdsResult};

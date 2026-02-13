@@ -4,12 +4,12 @@
 
 ```yaml
 active: true
-iteration: 3
+iteration: 4
 started: 2026-02-13
 last_updated: 2026-02-13
 current_version: v1.1
 current_epic: 15
-current_story: 15.3
+current_story: 15.5
 status: in_progress
 ```
 
@@ -48,7 +48,7 @@ status: in_progress
 
 | Epic | Name | Stories | Status | Progress |
 |------|------|---------|--------|----------|
-| 15 | VSAM Core (KSDS) | 8 | 🔄 In Progress | 2/8 |
+| 15 | VSAM Core (KSDS) | 8 | 🔄 In Progress | 4/8 |
 | 16 | VSAM ESDS/RRDS | 5 | ⏳ Pending | 0/5 |
 | 17 | SORT Utility | 9 | ⏳ Pending | 0/9 |
 | 18 | GDG Support | 7 | ⏳ Pending | 0/7 |
@@ -58,8 +58,8 @@ status: in_progress
 **v1.1 Metrics:**
 - Total Epics: 6
 - Total Stories: 42
-- Completed: 2
-- Remaining: 40
+- Completed: 4
+- Remaining: 38
 
 ---
 
@@ -77,10 +77,9 @@ status: in_progress
 |-------|------|--------|-------|
 | 15.1 | B+ Tree Index | ✅ Complete | B+ tree with insert, search, range, delete |
 | 15.2 | Cluster Definition | ✅ Complete | VsamCluster, KeySpec, file format |
-| 15.3 | Keyed Read | ⏳ Next | |
-| 15.3 | Keyed Read | ⏳ Pending | |
-| 15.4 | Keyed Write | ⏳ Pending | |
-| 15.5 | Update/Delete | ⏳ Pending | |
+| 15.3 | Keyed Read | ✅ Complete | read_key(), read_key_generic(), FileStatus |
+| 15.4 | Keyed Write | ✅ Complete | write() with duplicate key detection |
+| 15.5 | Update/Delete | ⏳ Next | |
 | 15.6 | Sequential Access | ⏳ Pending | |
 | 15.7 | File Status Codes | ⏳ Pending | |
 | 15.8 | JCL Integration | ⏳ Pending | |
@@ -107,12 +106,23 @@ status: in_progress
 - [x] Add 10 cluster tests
 
 ### Iteration 3 - 2026-02-13
-**Focus:** KSDS Keyed Read
+**Focus:** KSDS Read/Write
+**Status:** Complete
+**Actions:**
+- [x] Implement Ksds struct with index loading
+- [x] Implement read_key() with FileStatus 00/23
+- [x] Implement read_key_generic() for partial keys
+- [x] Implement write() with duplicate key detection
+- [x] Add FileStatus enum (00, 10, 22, 23, 44, 41, 92, 90)
+- [x] Add 8 KSDS tests
+
+### Iteration 4 - 2026-02-13
+**Focus:** KSDS Update/Delete
 **Status:** Starting
 **Actions:**
-- [ ] Implement read_key() method
-- [ ] Implement read_key_generic() method
-- [ ] Add file status code support
+- [ ] Implement rewrite() for record updates
+- [ ] Implement delete() for record removal
+- [ ] Add sequential read methods
 
 ---
 
