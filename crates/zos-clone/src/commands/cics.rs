@@ -5,10 +5,13 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use miette::Result;
 
 use zos_cics::bms::{BmsMap, BmsParser};
+use zos_cics::terminal::{SendMapOptions, TerminalCallback};
+use zos_cics::CicsResult;
 use zos_runtime::interpreter::Environment;
 use zos_runtime::value::CobolValue;
 
@@ -16,6 +19,123 @@ use zos_tui::session::{Session, SessionConfig, TuiTerminal, setup_terminal, rest
 
 use super::cics_bridge::CicsBridge;
 use super::interpret::{load_program as load_interpret_program, find_program_source, load_vsam_data};
+
+// ---------- TUI Callback (connects CicsBridge → Session) ----------
+
+/// An accumulated SEND MAP event captured by the TUI callback.
+#[derive(Clone)]
+struct PendingSendMap {
+    map: BmsMap,
+    data: HashMap<String, Vec<u8>>,
+    options: SendMapOptions,
+}
+
+/// An accumulated SEND TEXT event captured by the TUI callback.
+#[derive(Clone)]
+struct PendingSendText {
+    text: String,
+    erase: bool,
+}
+
+/// Shared state between the TUI callback and the session loop.
+struct TuiCallbackState {
+    /// BMS mapset definitions for resolving map names.
+    mapset_maps: HashMap<String, HashMap<String, BmsMap>>,
+    /// Pending SEND MAP events (accumulated during program execution).
+    pending_maps: Vec<PendingSendMap>,
+    /// Pending SEND TEXT events.
+    pending_texts: Vec<PendingSendText>,
+}
+
+/// TerminalCallback implementation that captures events for the TUI session.
+///
+/// During program execution, SEND MAP/SEND TEXT calls go through the CicsBridge
+/// to this callback. It resolves map names to actual BmsMap objects and stores
+/// the events. After execution, the session loop drains these events and applies
+/// them to the Session, which then renders them to the TUI.
+struct TuiCallback {
+    state: Arc<Mutex<TuiCallbackState>>,
+}
+
+impl TuiCallback {
+    fn new(mapset_maps: HashMap<String, HashMap<String, BmsMap>>) -> (Self, Arc<Mutex<TuiCallbackState>>) {
+        let state = Arc::new(Mutex::new(TuiCallbackState {
+            mapset_maps,
+            pending_maps: Vec::new(),
+            pending_texts: Vec::new(),
+        }));
+        (Self { state: state.clone() }, state)
+    }
+}
+
+impl TerminalCallback for TuiCallback {
+    fn on_send_map(
+        &mut self,
+        _map: &BmsMap,
+        data: &HashMap<String, Vec<u8>>,
+        options: &SendMapOptions,
+    ) {
+        let mut state = self.state.lock().unwrap();
+
+        // Resolve the real BMS map from the metadata passed via the data map.
+        let map_name = data.get("__MAP_NAME__")
+            .map(|v| String::from_utf8_lossy(v).trim().to_uppercase())
+            .unwrap_or_default();
+        let mapset_name = data.get("__MAPSET_NAME__")
+            .map(|v| String::from_utf8_lossy(v).trim().to_uppercase())
+            .unwrap_or_default();
+
+        // Look up the BMS map definition.
+        let resolved_map = state.mapset_maps
+            .get(&mapset_name)
+            .and_then(|maps| maps.get(&map_name))
+            .cloned();
+
+        if let Some(bms_map) = resolved_map {
+            // Filter out metadata keys from data.
+            let clean_data: HashMap<String, Vec<u8>> = data.iter()
+                .filter(|(k, _)| !k.starts_with("__"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+
+            state.pending_maps.push(PendingSendMap {
+                map: bms_map,
+                data: clean_data,
+                options: options.clone(),
+            });
+            tracing::info!("TUI callback: captured SEND MAP({}) MAPSET({})", map_name, mapset_name);
+        } else {
+            tracing::warn!(
+                "TUI callback: BMS map not found: MAP({}) MAPSET({})",
+                map_name,
+                mapset_name
+            );
+        }
+    }
+
+    fn on_send_text(&mut self, text: &str, erase: bool) {
+        let mut state = self.state.lock().unwrap();
+        state.pending_texts.push(PendingSendText {
+            text: text.to_string(),
+            erase,
+        });
+        tracing::info!("TUI callback: captured SEND TEXT");
+    }
+
+    fn on_receive_map(
+        &mut self,
+        _map: &BmsMap,
+    ) -> CicsResult<(u8, HashMap<String, Vec<u8>>)> {
+        // In the TUI model, input is collected by the session loop before
+        // re-invocation, so this should not be called during execution.
+        // Return default ENTER with no fields.
+        Ok((zos_cics::runtime::eib::aid::ENTER, HashMap::new()))
+    }
+
+    fn on_receive(&mut self, _max_length: usize) -> CicsResult<(Vec<u8>, u8)> {
+        Ok((Vec::new(), zos_cics::runtime::eib::aid::ENTER))
+    }
+}
 
 /// Run an interactive CICS session with TUI rendering.
 pub fn run_session(
@@ -82,6 +202,12 @@ pub fn run_session(
         }
     }
 
+    // Create the TUI callback and wire it into the bridge.
+    // The callback captures SEND MAP/TEXT events during execution,
+    // which the session loop then applies to the TUI after each program run.
+    let (tui_callback, callback_state) = TuiCallback::new(mapset_maps);
+    bridge.set_terminal_callback(Box::new(tui_callback));
+
     // Initialize TUI
     let config = SessionConfig {
         initial_program: input.clone(),
@@ -111,16 +237,19 @@ pub fn run_session(
     let mut current_program = program_name.clone();
 
     // Main session loop: execute program, show screen, wait for input, repeat
+    let mut ctx = SessionContext {
+        program_cache: &mut program_cache,
+        current_program: &mut current_program,
+        search_dir: &search_dir,
+        include_paths: &include_paths,
+        transid_programs: &transid_programs,
+        callback_state: &callback_state,
+    };
     let result = run_session_loop(
         &mut session,
         &mut terminal,
         &mut env,
-        &mut program_cache,
-        &mut current_program,
-        &search_dir,
-        &include_paths,
-        &transid_programs,
-        &mapset_maps,
+        &mut ctx,
     );
 
     // Restore terminal before handling result
@@ -143,50 +272,77 @@ pub fn run_session(
     }
 }
 
+/// Drain pending events from the TUI callback state and apply them to the session.
+fn apply_pending_events(
+    session: &mut Session,
+    callback_state: &Arc<Mutex<TuiCallbackState>>,
+) {
+    let mut state = callback_state.lock().unwrap();
+
+    // Apply pending SEND MAP events
+    for event in state.pending_maps.drain(..) {
+        session.on_send_map(&event.map, &event.data, &event.options);
+    }
+
+    // Apply pending SEND TEXT events
+    for event in state.pending_texts.drain(..) {
+        session.on_send_text(&event.text, event.erase);
+    }
+}
+
+/// Runtime context for the session loop, grouping related parameters.
+struct SessionContext<'a> {
+    program_cache: &'a mut HashMap<String, zos_runtime::interpreter::SimpleProgram>,
+    current_program: &'a mut String,
+    search_dir: &'a std::path::Path,
+    include_paths: &'a [PathBuf],
+    transid_programs: &'a HashMap<String, String>,
+    callback_state: &'a Arc<Mutex<TuiCallbackState>>,
+}
+
 /// Main session loop: run programs, display screens, get input.
 fn run_session_loop(
     session: &mut Session,
     terminal: &mut TuiTerminal,
     env: &mut Environment,
-    program_cache: &mut HashMap<String, zos_runtime::interpreter::SimpleProgram>,
-    current_program: &mut String,
-    search_dir: &std::path::Path,
-    include_paths: &[PathBuf],
-    transid_programs: &HashMap<String, String>,
-    _mapset_maps: &HashMap<String, HashMap<String, BmsMap>>,
+    ctx: &mut SessionContext<'_>,
 ) -> std::result::Result<(), zos_tui::SessionError> {
     loop {
         // Ensure program is loaded
-        if !program_cache.contains_key(current_program.as_str()) {
-            match find_program_source(current_program, search_dir) {
+        if !ctx.program_cache.contains_key(ctx.current_program.as_str()) {
+            match find_program_source(ctx.current_program, ctx.search_dir) {
                 Some(path) => {
-                    tracing::info!("Loading program {} from {}", current_program, path.display());
-                    let p = load_interpret_program(&path, include_paths)
+                    tracing::info!("Loading program {} from {}", ctx.current_program, path.display());
+                    let p = load_interpret_program(&path, ctx.include_paths)
                         .map_err(|e| zos_tui::SessionError::Execution {
-                            program: current_program.clone(),
+                            program: ctx.current_program.clone(),
                             message: e.to_string(),
                         })?;
-                    program_cache.insert(current_program.clone(), p);
+                    ctx.program_cache.insert(ctx.current_program.clone(), p);
                 }
                 None => {
                     return Err(zos_tui::SessionError::ProgramNotFound {
-                        name: current_program.clone(),
+                        name: ctx.current_program.clone(),
                     });
                 }
             }
         }
 
-        session.set_program(current_program);
+        session.set_program(ctx.current_program);
 
         // Execute the program
         env.resume();
-        let program = program_cache.get(current_program.as_str()).unwrap();
+        let program = ctx.program_cache.get(ctx.current_program.as_str()).unwrap();
 
         let _rc = zos_runtime::interpreter::execute(program, env)
             .map_err(|e| zos_tui::SessionError::Execution {
-                program: current_program.clone(),
+                program: ctx.current_program.clone(),
                 message: e.to_string(),
             })?;
+
+        // After execution, apply any SEND MAP/TEXT events captured by the callback
+        // to the session so the TUI renders the correct screen.
+        apply_pending_events(session, ctx.callback_state);
 
         // Check bridge state
         if let Some(mut handler) = env.cics_handler.take() {
@@ -201,7 +357,7 @@ fn run_session_loop(
                         env.get(ca).map(|v| v.to_display_string())
                     });
 
-                    *current_program = xctl_target.to_uppercase();
+                    *ctx.current_program = xctl_target.to_uppercase();
                     bridge.reset_for_xctl();
                     env.cics_handler = Some(handler);
 
@@ -229,12 +385,12 @@ fn run_session_loop(
                         }
 
                         // Look up which program to run for this TRANSID
-                        let next_program = transid_programs
+                        let next_program = ctx.transid_programs
                             .get(&transid.to_uppercase())
                             .cloned()
-                            .unwrap_or_else(|| current_program.clone());
+                            .unwrap_or_else(|| ctx.current_program.clone());
 
-                        *current_program = next_program;
+                        *ctx.current_program = next_program;
 
                         // Update bridge for next iteration
                         bridge.returned = false;

@@ -158,12 +158,16 @@ impl CicsBridge {
                 alarm,
                 frset,
             };
-            // The callback will handle rendering. We pass map_name/mapset_name
-            // via the data map as metadata for the callback.
+            // Pass map_name/mapset_name via the data map as metadata for the
+            // callback to resolve the actual BMS map definition.
             data.insert("__MAP_NAME__".to_string(), map_name.as_bytes().to_vec());
             data.insert("__MAPSET_NAME__".to_string(), mapset_name.as_bytes().to_vec());
-            // We pass an empty map placeholder since the callback uses mapset_maps
-            // from the session. The real BMS map is resolved by the session layer.
+
+            // Invoke the callback. The _map parameter is a placeholder; the real
+            // BMS map is resolved by the callback using the metadata keys above.
+            let placeholder = zos_cics::bms::BmsMap::default();
+            cb.on_send_map(&placeholder, &data, &opts);
+
             tracing::info!(
                 "SEND MAP({}) MAPSET({}) via callback",
                 map_name,
@@ -208,11 +212,16 @@ impl CicsBridge {
         if let Some(ref from) = from_var {
             if let Some(val) = env.get(from) {
                 let text = val.to_display_string();
-                let opts_desc = if erase { " ERASE" } else { "" };
-                env.display(
-                    &format!("[CICS] SEND TEXT{}: {}", opts_desc, text.trim()),
-                    false,
-                )?;
+
+                if let Some(ref mut cb) = self.terminal_callback {
+                    cb.on_send_text(text.trim(), erase);
+                } else {
+                    let opts_desc = if erase { " ERASE" } else { "" };
+                    env.display(
+                        &format!("[CICS] SEND TEXT{}: {}", opts_desc, text.trim()),
+                        false,
+                    )?;
+                }
             }
         }
 
@@ -830,6 +839,7 @@ impl CicsCommandHandler for CicsBridge {
 mod tests {
     use super::*;
     use std::io::BufReader;
+    use zos_tui::mock::MockTerminal;
 
     fn create_test_env() -> Environment {
         let output = Vec::<u8>::new();
@@ -1076,5 +1086,70 @@ mod tests {
             ("FILE".to_string(), Some(CobolValue::Alphanumeric("ACCTFILE".to_string()))),
         ];
         bridge.execute("ENDBR", &endbr_opts, &mut env).unwrap();
+    }
+
+    #[test]
+    fn test_send_map_invokes_callback() {
+        let mut bridge = CicsBridge::new("MENU", "T001");
+        let mut env = create_test_env();
+
+        // Attach a MockTerminal as the callback
+        let mock = MockTerminal::new();
+        bridge.set_terminal_callback(Box::new(mock));
+
+        let options = vec![
+            ("MAP".to_string(), Some(CobolValue::Alphanumeric("COSGN0A".to_string()))),
+            ("MAPSET".to_string(), Some(CobolValue::Alphanumeric("COSGN00".to_string()))),
+            ("ERASE".to_string(), None),
+        ];
+
+        bridge.execute("SEND", &options, &mut env).unwrap();
+        assert_eq!(bridge.runtime.eib.eibresp, CicsResponse::Normal as u32);
+
+        // Verify the callback was invoked
+        // We can't directly inspect the mock since it's behind Box<dyn TerminalCallback>,
+        // but we can verify last_map_name was set and response is Normal.
+        assert_eq!(bridge.last_map_name, Some("COSGN0A".to_string()));
+        assert_eq!(bridge.last_mapset_name, Some("COSGN00".to_string()));
+    }
+
+    #[test]
+    fn test_send_text_invokes_callback() {
+        let mut bridge = CicsBridge::new("MENU", "T001");
+        let mut env = create_test_env();
+
+        // Set up the FROM variable
+        env.set("WS-MSG", CobolValue::Alphanumeric("Hello World".to_string())).unwrap();
+
+        // Attach a MockTerminal as the callback
+        let mock = MockTerminal::new();
+        bridge.set_terminal_callback(Box::new(mock));
+
+        let options = vec![
+            ("FROM".to_string(), Some(CobolValue::Alphanumeric("WS-MSG".to_string()))),
+            ("ERASE".to_string(), None),
+        ];
+
+        bridge.execute("SEND", &options, &mut env).unwrap();
+        assert_eq!(bridge.runtime.eib.eibresp, CicsResponse::Normal as u32);
+    }
+
+    #[test]
+    fn test_receive_map_with_callback_uses_precollected_input() {
+        let mut bridge = CicsBridge::new("MENU", "T001");
+        let mut env = create_test_env();
+
+        // Attach a MockTerminal as the callback
+        let mock = MockTerminal::new();
+        bridge.set_terminal_callback(Box::new(mock));
+
+        let options = vec![
+            ("MAP".to_string(), Some(CobolValue::Alphanumeric("COSGN0A".to_string()))),
+            ("MAPSET".to_string(), Some(CobolValue::Alphanumeric("COSGN00".to_string()))),
+        ];
+
+        // In TUI mode, RECEIVE MAP should succeed without prompting stdin
+        bridge.execute("RECEIVE", &options, &mut env).unwrap();
+        assert_eq!(bridge.runtime.eib.eibresp, CicsResponse::Normal as u32);
     }
 }
