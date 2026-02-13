@@ -400,6 +400,62 @@ pub fn decompose_from_display_string(
     result
 }
 
+/// Compose individual BMS field values into a symbolic map display string.
+///
+/// This is the reverse of [`decompose_from_display_string`]. It takes a
+/// `HashMap` of field name → data values and produces a flat string that
+/// matches the symbolic map layout: 12 chars TIOAPFX, then for each named
+/// field: 2 chars L (length as 2-digit decimal, zero-padded), 1 char F
+/// (flag), 1 char A (attribute), then `field.length` chars of data
+/// (right-padded with spaces).
+///
+/// This is used by RECEIVE MAP to compose the collected TUI input fields
+/// back into the format a COBOL program expects in its `INTO` data area.
+pub fn compose_to_display_string(
+    map: &BmsMap,
+    fields: &std::collections::HashMap<String, Vec<u8>>,
+) -> String {
+    let size = calculate_map_size(map, true, true, true);
+    let mut buffer = vec![b' '; size];
+
+    // TIOAPFX: 12 spaces (already initialized)
+    let mut offset = 12;
+
+    for field in &map.fields {
+        if field.name.is_empty() {
+            continue;
+        }
+
+        let data = fields.get(&field.name);
+        let data_len = data.map(|d| d.len().min(field.length)).unwrap_or(0);
+
+        // L field: 2 characters representing data length (zero-padded decimal)
+        if offset + 2 <= buffer.len() {
+            let len_str = format!("{:02}", data_len.min(99));
+            buffer[offset] = len_str.as_bytes()[0];
+            buffer[offset + 1] = len_str.as_bytes()[1];
+        }
+        offset += 2;
+
+        // F field: 1 byte flag (space = no flags)
+        offset += 1;
+
+        // A field: 1 byte attribute (space = default)
+        offset += 1;
+
+        // Data field: field.length bytes, right-padded with spaces
+        if let Some(d) = data {
+            let copy_len = d.len().min(field.length);
+            if offset + copy_len <= buffer.len() {
+                buffer[offset..offset + copy_len].copy_from_slice(&d[..copy_len]);
+            }
+        }
+        offset += field.length;
+    }
+
+    String::from_utf8_lossy(&buffer).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,6 +652,68 @@ FLD2     DFHMDF POS=(2,1),LENGTH=5,ATTRB=(UNPROT)
 
         let fld2 = String::from_utf8_lossy(&result["FLD2"]);
         assert_eq!(fld2.trim(), "World");
+    }
+
+    #[test]
+    fn test_compose_to_display_string() {
+        let source = r#"
+TEST     DFHMSD TYPE=MAP,LANG=COBOL
+TESTM    DFHMDI SIZE=(24,80)
+FLD1     DFHMDF POS=(1,1),LENGTH=10,ATTRB=(UNPROT)
+FLD2     DFHMDF POS=(2,1),LENGTH=5,ATTRB=(UNPROT)
+         DFHMSD TYPE=FINAL
+"#;
+        let mut parser = BmsParser::new();
+        let mapset = parser.parse(source).unwrap();
+        let map = &mapset.maps[0];
+
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("FLD1".to_string(), b"Hello".to_vec());
+        fields.insert("FLD2".to_string(), b"World".to_vec());
+
+        let result = super::compose_to_display_string(map, &fields);
+
+        // Total size = 12 + (2+1+1+10) + (2+1+1+5) = 35
+        assert_eq!(result.len(), 35, "Composed string should be 35 chars");
+
+        // Decompose it back and verify round-trip
+        let decomposed = super::decompose_from_display_string(map, &result);
+        assert!(decomposed.contains_key("FLD1"));
+        assert!(decomposed.contains_key("FLD2"));
+
+        let fld1 = String::from_utf8_lossy(&decomposed["FLD1"]);
+        assert!(fld1.starts_with("Hello"), "FLD1 = '{}'", fld1);
+
+        let fld2 = String::from_utf8_lossy(&decomposed["FLD2"]);
+        assert_eq!(fld2.trim(), "World");
+    }
+
+    #[test]
+    fn test_compose_round_trip_empty_fields() {
+        let source = r#"
+TEST     DFHMSD TYPE=MAP,LANG=COBOL
+TESTM    DFHMDI SIZE=(24,80)
+FLD1     DFHMDF POS=(1,1),LENGTH=8,ATTRB=(UNPROT)
+FLD2     DFHMDF POS=(2,1),LENGTH=8,ATTRB=(UNPROT)
+         DFHMSD TYPE=FINAL
+"#;
+        let mut parser = BmsParser::new();
+        let mapset = parser.parse(source).unwrap();
+        let map = &mapset.maps[0];
+
+        // Only FLD1 has data, FLD2 is not present
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("FLD1".to_string(), b"ADMIN".to_vec());
+
+        let composed = super::compose_to_display_string(map, &fields);
+
+        // Decompose back
+        let decomposed = super::decompose_from_display_string(map, &composed);
+        assert!(decomposed.contains_key("FLD1"));
+        assert!(!decomposed.contains_key("FLD2"), "FLD2 should be absent (all spaces)");
+
+        let fld1 = String::from_utf8_lossy(&decomposed["FLD1"]);
+        assert!(fld1.starts_with("ADMIN"), "FLD1 = '{}'", fld1);
     }
 
     #[test]

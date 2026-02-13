@@ -239,14 +239,46 @@ impl CicsBridge {
         let mapset_name = Self::get_option_str(options, "MAPSET").unwrap_or_default();
         let into_var = Self::get_option_str(options, "INTO");
 
-        if self.terminal_callback.is_some() {
-            // In TUI mode, input was already collected by the session loop
-            // before the program was re-invoked. The AID key and field data
-            // are already set in the EIB and environment variables.
+        if let Some(ref mut cb) = self.terminal_callback {
+            // In TUI mode, use the callback to get pre-collected input.
+            let placeholder = zos_cics::bms::BmsMap::default();
+            let (aid, mut fields) = cb.on_receive_map(&placeholder)
+                .map_err(|e| InterpreterError { message: format!("RECEIVE MAP failed: {}", e) })?;
+
+            // Extract the composed display string before processing fields.
+            let composed_data = fields.remove("__COMPOSED__");
+
+            // Set EIB AID
+            self.runtime.eib.set_aid(aid);
+
+            // Set individual field variables into environment.
+            // COBOL symbolic maps use suffixed names: <field>I for input, <field>O for output.
+            // Programs reference these through the symbolic map overlay.
+            let field_count = fields.len();
+            for (name, data) in &fields {
+                let value = String::from_utf8_lossy(data).to_string();
+                // Set as <field>I (input suffix per COBOL symbolic map convention)
+                let input_var = format!("{}I", name);
+                env.set(&input_var, CobolValue::Alphanumeric(value.clone())).ok();
+                // Also set without suffix for programs that reference fields directly
+                env.set(name, CobolValue::Alphanumeric(value)).ok();
+            }
+
+            // If INTO is specified, set the composed symbolic map display string.
+            // This is the full data area matching the symbolic map layout that the
+            // COBOL program declared as its INTO variable.
+            if let Some(ref into) = into_var {
+                if let Some(composed) = composed_data {
+                    let composed_str = String::from_utf8_lossy(&composed).to_string();
+                    env.set(into, CobolValue::Alphanumeric(composed_str)).ok();
+                }
+            }
+
             tracing::info!(
-                "RECEIVE MAP({}) MAPSET({}) - using pre-collected input",
+                "RECEIVE MAP({}) MAPSET({}) - {} fields from pre-collected input",
                 map_name,
-                mapset_name
+                mapset_name,
+                field_count
             );
             self.runtime.eib.set_response(CicsResponse::Normal);
             return Ok(());
@@ -1151,5 +1183,41 @@ mod tests {
         // In TUI mode, RECEIVE MAP should succeed without prompting stdin
         bridge.execute("RECEIVE", &options, &mut env).unwrap();
         assert_eq!(bridge.runtime.eib.eibresp, CicsResponse::Normal as u32);
+    }
+
+    #[test]
+    fn test_receive_map_sets_field_variables() {
+        let mut bridge = CicsBridge::new("MENU", "T001");
+        let mut env = create_test_env();
+
+        // Create a MockTerminal with pre-queued input
+        let mut mock = MockTerminal::new();
+        let mut fields = HashMap::new();
+        fields.insert("USRIDI".to_string(), b"ADMIN".to_vec());
+        fields.insert("PASSWI".to_string(), b"SECRET".to_vec());
+        mock.queue_input(zos_cics::runtime::eib::aid::ENTER, fields);
+        bridge.set_terminal_callback(Box::new(mock));
+
+        let options = vec![
+            ("MAP".to_string(), Some(CobolValue::Alphanumeric("COSGN0A".to_string()))),
+            ("MAPSET".to_string(), Some(CobolValue::Alphanumeric("COSGN00".to_string()))),
+        ];
+
+        bridge.execute("RECEIVE", &options, &mut env).unwrap();
+        assert_eq!(bridge.runtime.eib.eibresp, CicsResponse::Normal as u32);
+
+        // Verify individual field variables were set
+        let usridi = env.get("USRIDII").unwrap();
+        assert_eq!(usridi.to_display_string(), "ADMIN");
+
+        let passwi = env.get("PASSWII").unwrap();
+        assert_eq!(passwi.to_display_string(), "SECRET");
+
+        // Also verify plain field names
+        let usridi_plain = env.get("USRIDI").unwrap();
+        assert_eq!(usridi_plain.to_display_string(), "ADMIN");
+
+        // Verify AID was set
+        assert_eq!(bridge.runtime.eib.eibaid, zos_cics::runtime::eib::aid::ENTER);
     }
 }

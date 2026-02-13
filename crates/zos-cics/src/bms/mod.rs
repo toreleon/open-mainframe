@@ -15,7 +15,7 @@ mod symbolic;
 pub use parser::{BmsParser, BmsMap, BmsMapset};
 pub use field::{BmsField, FieldAttribute, FieldJustify, FieldType};
 pub use render::MapRenderer;
-pub use symbolic::{SymbolicMapGenerator, decompose_from_buffer, decompose_from_display_string};
+pub use symbolic::{SymbolicMapGenerator, decompose_from_buffer, decompose_from_display_string, compose_to_display_string};
 
 
 /// Screen dimensions for 3270 terminals.

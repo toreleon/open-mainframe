@@ -45,6 +45,12 @@ struct TuiCallbackState {
     pending_maps: Vec<PendingSendMap>,
     /// Pending SEND TEXT events.
     pending_texts: Vec<PendingSendText>,
+    /// Pre-collected input from the TUI (set by session loop before re-execution).
+    /// Contains the AID key and field name → data mappings from user input.
+    precollected_aid: u8,
+    precollected_fields: HashMap<String, Vec<u8>>,
+    /// Last resolved BMS map from SEND MAP (for composing INTO on RECEIVE MAP).
+    last_resolved_map: Option<BmsMap>,
 }
 
 /// TerminalCallback implementation that captures events for the TUI session.
@@ -63,6 +69,9 @@ impl TuiCallback {
             mapset_maps,
             pending_maps: Vec::new(),
             pending_texts: Vec::new(),
+            precollected_aid: zos_cics::runtime::eib::aid::ENTER,
+            precollected_fields: HashMap::new(),
+            last_resolved_map: None,
         }));
         (Self { state: state.clone() }, state)
     }
@@ -92,6 +101,9 @@ impl TerminalCallback for TuiCallback {
             .cloned();
 
         if let Some(bms_map) = resolved_map {
+            // Store the last resolved map for RECEIVE MAP composition.
+            state.last_resolved_map = Some(bms_map.clone());
+
             // Filter out metadata keys from data.
             let mut clean_data: HashMap<String, Vec<u8>> = data.iter()
                 .filter(|(k, _)| !k.starts_with("__"))
@@ -140,10 +152,19 @@ impl TerminalCallback for TuiCallback {
         &mut self,
         _map: &BmsMap,
     ) -> CicsResult<(u8, HashMap<String, Vec<u8>>)> {
-        // In the TUI model, input is collected by the session loop before
-        // re-invocation, so this should not be called during execution.
-        // Return default ENTER with no fields.
-        Ok((zos_cics::runtime::eib::aid::ENTER, HashMap::new()))
+        // Return the pre-collected input from the session loop.
+        // The session loop sets this before re-invoking the program.
+        let state = self.state.lock().unwrap();
+        let mut fields = state.precollected_fields.clone();
+
+        // If we have a resolved BMS map, compose the display string and include
+        // it as __COMPOSED__ so the bridge can set the INTO variable.
+        if let Some(ref bms_map) = state.last_resolved_map {
+            let composed = zos_cics::bms::compose_to_display_string(bms_map, &fields);
+            fields.insert("__COMPOSED__".to_string(), composed.into_bytes());
+        }
+
+        Ok((state.precollected_aid, fields))
     }
 
     fn on_receive(&mut self, _max_length: usize) -> CicsResult<(Vec<u8>, u8)> {
@@ -437,6 +458,14 @@ fn run_session_loop(
 
                         // Set EIBAID for the next program iteration
                         env.set("EIBAID", CobolValue::alphanumeric(String::from(aid as char))).ok();
+
+                        // Store pre-collected input in callback state so RECEIVE MAP
+                        // can access it during the next program execution.
+                        {
+                            let mut cb_state = ctx.callback_state.lock().unwrap();
+                            cb_state.precollected_aid = aid;
+                            cb_state.precollected_fields = fields.clone();
+                        }
 
                         // Set input fields into environment
                         for (name, data) in &fields {
