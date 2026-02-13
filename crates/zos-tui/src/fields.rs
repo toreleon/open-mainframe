@@ -151,6 +151,20 @@ impl FieldTable {
         self.fields.get_mut(fi)
     }
 
+    /// Set the active field to the one containing the given screen position.
+    /// Used for SEND MAP CURSOR(n) support.
+    pub fn set_cursor_to_position(&mut self, pos: &ScreenPosition) {
+        for (input_idx, &field_idx) in self.input_order.iter().enumerate() {
+            let field = &self.fields[field_idx];
+            if field.row == pos.row && pos.col >= field.col && pos.col < field.col + field.length {
+                self.active_input = Some(input_idx);
+                let offset = pos.col - field.col;
+                self.fields[field_idx].cursor_offset = offset;
+                return;
+            }
+        }
+    }
+
     /// Get the cursor screen position based on the active field.
     pub fn cursor_position(&self) -> Option<ScreenPosition> {
         self.active_field()
@@ -332,6 +346,62 @@ impl FieldTable {
             if field.cursor_offset < field.length - 1 {
                 field.cursor_offset += 1;
             }
+        }
+    }
+
+    /// Move cursor up: find the input field on the row above that overlaps
+    /// the current cursor column, or wrap to the last row.
+    pub fn cursor_up(&mut self) {
+        let (cur_row, cur_col) = match self.active_field() {
+            Some(f) => (f.row, f.col + f.cursor_offset),
+            None => return,
+        };
+        // Find the closest input field on a preceding row at same column
+        let target_row = if cur_row > 1 { cur_row - 1 } else { 24 };
+        self.move_to_row(target_row, cur_col);
+    }
+
+    /// Move cursor down: find the input field on the row below that overlaps
+    /// the current cursor column, or wrap to the first row.
+    pub fn cursor_down(&mut self) {
+        let (cur_row, cur_col) = match self.active_field() {
+            Some(f) => (f.row, f.col + f.cursor_offset),
+            None => return,
+        };
+        let target_row = if cur_row < 24 { cur_row + 1 } else { 1 };
+        self.move_to_row(target_row, cur_col);
+    }
+
+    /// Move to the input field on `target_row` closest to `target_col`.
+    fn move_to_row(&mut self, target_row: usize, target_col: usize) {
+        let mut best: Option<(usize, usize)> = None; // (input_idx, col_distance)
+        for (input_idx, &field_idx) in self.input_order.iter().enumerate() {
+            let field = &self.fields[field_idx];
+            if field.row == target_row {
+                // Check if target_col is within or near this field
+                let field_end = field.col + field.length;
+                let dist = if target_col >= field.col && target_col < field_end {
+                    0
+                } else if target_col < field.col {
+                    field.col - target_col
+                } else {
+                    target_col - field_end + 1
+                };
+                if best.is_none() || dist < best.unwrap().1 {
+                    best = Some((input_idx, dist));
+                }
+            }
+        }
+        if let Some((input_idx, _)) = best {
+            let field_idx = self.input_order[input_idx];
+            let field = &self.fields[field_idx];
+            let offset = if target_col >= field.col && target_col < field.col + field.length {
+                target_col - field.col
+            } else {
+                0
+            };
+            self.active_input = Some(input_idx);
+            self.fields[field_idx].cursor_offset = offset;
         }
     }
 

@@ -14,6 +14,31 @@ use zos_runtime::value::CobolValue;
 
 type Result<T> = std::result::Result<T, InterpreterError>;
 
+/// Convert an AID byte to its CICS name for HANDLE AID lookup.
+fn aid_byte_to_name(byte: u8) -> Option<&'static str> {
+    use zos_cics::runtime::eib::aid;
+    match byte {
+        aid::ENTER => Some("ENTER"),
+        aid::PF1 => Some("PF1"),
+        aid::PF2 => Some("PF2"),
+        aid::PF3 => Some("PF3"),
+        aid::PF4 => Some("PF4"),
+        aid::PF5 => Some("PF5"),
+        aid::PF6 => Some("PF6"),
+        aid::PF7 => Some("PF7"),
+        aid::PF8 => Some("PF8"),
+        aid::PF9 => Some("PF9"),
+        aid::PF10 => Some("PF10"),
+        aid::PF11 => Some("PF11"),
+        aid::PF12 => Some("PF12"),
+        aid::PA1 => Some("PA1"),
+        aid::PA2 => Some("PA2"),
+        aid::PA3 => Some("PA3"),
+        aid::CLEAR => Some("CLEAR"),
+        _ => None,
+    }
+}
+
 /// Concrete CICS command handler that dispatches to zos-cics runtime.
 pub struct CicsBridge {
     /// CICS runtime (EIB, program control, file manager).
@@ -42,6 +67,8 @@ pub struct CicsBridge {
     pub last_map_name: Option<String>,
     /// Last SEND MAP mapset name.
     pub last_mapset_name: Option<String>,
+    /// AID key handlers: AID_NAME → paragraph label (from HANDLE AID).
+    aid_handlers: HashMap<String, String>,
     /// System values for EXEC CICS ASSIGN — a generic key→value map.
     /// The bridge performs a plain lookup; it has zero knowledge of which
     /// option names exist or how the values are derived.
@@ -67,6 +94,7 @@ impl CicsBridge {
             xctl_program: None,
             commarea_var: None,
             abend_label: None,
+            aid_handlers: HashMap::new(),
             browse_tokens: HashMap::new(),
             terminal_callback: None,
             last_map_name: None,
@@ -141,7 +169,14 @@ impl CicsBridge {
         let from_var = Self::get_option_str(options, "FROM");
         let erase = Self::has_option(options, "ERASE");
         let eraseaup = Self::has_option(options, "ERASEAUP");
-        let _cursor = Self::get_option_str(options, "CURSOR");
+        let cursor_pos = Self::get_option_str(options, "CURSOR")
+            .and_then(|s| s.parse::<usize>().ok())
+            .map(|offset| {
+                // CICS CURSOR(n) is a linear buffer offset (0-based) in the 80-column screen.
+                let row = (offset / 80) + 1; // 1-based
+                let col = (offset % 80) + 1; // 1-based
+                zos_cics::terminal::ScreenPosition::new(row, col)
+            });
         let freekb = Self::has_option(options, "FREEKB");
         let alarm = Self::has_option(options, "ALARM");
         let frset = Self::has_option(options, "FRSET");
@@ -170,7 +205,7 @@ impl CicsBridge {
                 eraseaup,
                 maponly,
                 dataonly,
-                cursor: None,
+                cursor: cursor_pos,
                 freekb,
                 alarm,
                 frset,
@@ -628,6 +663,35 @@ impl CicsBridge {
         Ok(())
     }
 
+    /// Handle HANDLE AID command.
+    ///
+    /// Registers handlers for specific AID keys (PF1, PF3, ENTER, etc.).
+    /// When the corresponding AID is received, the registered paragraph
+    /// should be invoked.
+    fn handle_handle_aid(
+        &mut self,
+        options: &[(String, Option<CobolValue>)],
+        _env: &mut Environment,
+    ) -> Result<()> {
+        for (name, label_val) in options {
+            if name.eq_ignore_ascii_case("AID") {
+                continue; // Skip the "AID" flag itself
+            }
+            if let Some(val) = label_val {
+                let label = val.to_display_string().trim().to_string();
+                self.aid_handlers.insert(name.to_uppercase(), label);
+            }
+        }
+        self.runtime.eib.set_response(CicsResponse::Normal);
+        Ok(())
+    }
+
+    /// Look up the handler label for the given AID byte, if registered.
+    pub fn get_aid_handler_for_byte(&self, aid_byte: u8) -> Option<&str> {
+        let name = aid_byte_to_name(aid_byte)?;
+        self.aid_handlers.get(name).map(|s| s.as_str())
+    }
+
     /// Handle HANDLE ABEND command.
     fn handle_handle_abend(
         &mut self,
@@ -841,9 +905,11 @@ impl CicsCommandHandler for CicsBridge {
                 self.handle_endbr(options, env)
             }
             "HANDLE" => {
-                // HANDLE ABEND or HANDLE CONDITION
+                // HANDLE ABEND, HANDLE AID, or HANDLE CONDITION
                 if Self::has_option(options, "ABEND") {
                     self.handle_handle_abend(options, env)
+                } else if Self::has_option(options, "AID") {
+                    self.handle_handle_aid(options, env)
                 } else {
                     self.handle_handle_condition(options, env)
                 }
@@ -1048,6 +1114,35 @@ mod tests {
 
         bridge.execute("UNKNOWN_CMD", &[], &mut env).unwrap();
         assert_eq!(bridge.runtime.eib.eibresp, CicsResponse::Normal as u32);
+    }
+
+    #[test]
+    fn test_handle_aid_command() {
+        let mut bridge = CicsBridge::new("MENU", "T001");
+        let mut env = create_test_env();
+
+        let options = vec![
+            ("AID".to_string(), None),
+            ("PF3".to_string(), Some(CobolValue::Alphanumeric("END-PARA".to_string()))),
+            ("ENTER".to_string(), Some(CobolValue::Alphanumeric("PROCESS-PARA".to_string()))),
+        ];
+
+        bridge.execute("HANDLE", &options, &mut env).unwrap();
+        assert_eq!(bridge.runtime.eib.eibresp, CicsResponse::Normal as u32);
+        // Verify handlers registered
+        assert_eq!(
+            bridge.get_aid_handler_for_byte(zos_cics::runtime::eib::aid::PF3),
+            Some("END-PARA")
+        );
+        assert_eq!(
+            bridge.get_aid_handler_for_byte(zos_cics::runtime::eib::aid::ENTER),
+            Some("PROCESS-PARA")
+        );
+        // No handler for PF1
+        assert_eq!(
+            bridge.get_aid_handler_for_byte(zos_cics::runtime::eib::aid::PF1),
+            None
+        );
     }
 
     #[test]

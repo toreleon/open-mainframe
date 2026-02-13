@@ -161,7 +161,10 @@ impl Session {
             self.field_table.reset_mdt();
         }
 
-        // Update cursor position
+        // Apply CURSOR option if specified; otherwise use the IC field.
+        if let Some(ref pos) = options.cursor {
+            self.field_table.set_cursor_to_position(pos);
+        }
         if let Some(pos) = self.field_table.cursor_position() {
             self.status.cursor_row = pos.row;
             self.status.cursor_col = pos.col;
@@ -286,6 +289,18 @@ impl Session {
 
                 InputAction::CursorRight => {
                     self.field_table.cursor_right();
+                    self.update_cursor_status();
+                    self.needs_redraw = true;
+                }
+
+                InputAction::CursorUp => {
+                    self.field_table.cursor_up();
+                    self.update_cursor_status();
+                    self.needs_redraw = true;
+                }
+
+                InputAction::CursorDown => {
+                    self.field_table.cursor_down();
                     self.update_cursor_status();
                     self.needs_redraw = true;
                 }
