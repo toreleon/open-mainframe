@@ -193,22 +193,18 @@ impl JobExecutor {
                 DdDefinition::Dataset(def) => self.resolve_dataset(&def.dsn, &def.disp)?,
                 DdDefinition::Inline(def) => {
                     // Write inline data to temp file
-                    let path = self.config.work_dir.join(format!(
-                        "{}_{}.inline",
-                        dd.name,
-                        step_idx
-                    ));
+                    let path = self
+                        .config
+                        .work_dir
+                        .join(format!("{}_{}.inline", dd.name, step_idx));
                     self.write_inline_data(&path, &def.data)?;
                     path
                 }
                 DdDefinition::Sysout(def) => {
                     // Create sysout file
-                    self.config.sysout_dir.join(format!(
-                        "{}_{}.{}.txt",
-                        dd.name,
-                        step_idx,
-                        def.class
-                    ))
+                    self.config
+                        .sysout_dir
+                        .join(format!("{}_{}.{}.txt", dd.name, step_idx, def.class))
                 }
                 DdDefinition::Dummy => {
                     // Dummy - use /dev/null equivalent
@@ -355,7 +351,9 @@ impl JobExecutor {
             self.config.program_dir.join(pgm),
             self.config.program_dir.join(format!("{}.exe", pgm)),
             self.config.program_dir.join(pgm.to_lowercase()),
-            self.config.program_dir.join(format!("{}.exe", pgm.to_lowercase())),
+            self.config
+                .program_dir
+                .join(format!("{}.exe", pgm.to_lowercase())),
         ];
 
         for path in &candidates {

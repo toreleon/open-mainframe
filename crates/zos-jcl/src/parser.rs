@@ -48,7 +48,10 @@ impl<'a> Parser<'a> {
         let first = &self.statements[0];
         if first.operation != "JOB" {
             return Err(JclError::ParseError {
-                message: format!("JCL must start with JOB statement, found {}", first.operation),
+                message: format!(
+                    "JCL must start with JOB statement, found {}",
+                    first.operation
+                ),
             });
         }
 
@@ -230,7 +233,9 @@ impl<'a> Parser<'a> {
                                 // Parse condition (simplified)
                                 if let Token::LParen = &tokens[idx] {
                                     // Skip condition parsing for now
-                                    while idx < tokens.len() && !matches!(tokens[idx], Token::RParen) {
+                                    while idx < tokens.len()
+                                        && !matches!(tokens[idx], Token::RParen)
+                                    {
                                         idx += 1;
                                     }
                                 }
@@ -422,7 +427,9 @@ impl<'a> Parser<'a> {
                                 if let Token::Ident(v) = &tokens[idx] {
                                     if v == "SER" {
                                         idx += 1;
-                                        if idx < tokens.len() && matches!(tokens[idx], Token::Equals) {
+                                        if idx < tokens.len()
+                                            && matches!(tokens[idx], Token::Equals)
+                                        {
                                             idx += 1;
                                             if let Token::Ident(ser) = &tokens[idx] {
                                                 def.vol_ser = Some(ser.clone());
@@ -503,7 +510,11 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse DISP parameter.
-    fn parse_disposition(&self, tokens: &[Token], idx: &mut usize) -> Result<Disposition, JclError> {
+    fn parse_disposition(
+        &self,
+        tokens: &[Token],
+        idx: &mut usize,
+    ) -> Result<Disposition, JclError> {
         let mut status = DispStatus::Shr;
         let mut normal = None;
         let mut abnormal = None;

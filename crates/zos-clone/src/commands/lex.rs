@@ -19,7 +19,12 @@ pub fn run(input: PathBuf, format: String) -> Result<()> {
         "free" => zos_cobol::SourceFormat::Free,
         _ => {
             // Auto-detect: check if first line looks like free format
-            if source.lines().next().map(|l| !l.starts_with(' ')).unwrap_or(false) {
+            if source
+                .lines()
+                .next()
+                .map(|l| !l.starts_with(' '))
+                .unwrap_or(false)
+            {
                 tracing::debug!("Auto-detected: Free format");
                 zos_cobol::SourceFormat::Free
             } else {
@@ -33,11 +38,8 @@ pub fn run(input: PathBuf, format: String) -> Result<()> {
     println!();
 
     // Create source file
-    let source_file = zos_cobol::SourceFile::from_text(
-        zos_cobol::FileId::MAIN,
-        source,
-        source_format,
-    );
+    let source_file =
+        zos_cobol::SourceFile::from_text(zos_cobol::FileId::MAIN, source, source_format);
 
     // Scan the source file
     let (tokens, errors) = zos_cobol::scan(&source_file);
@@ -55,11 +57,7 @@ pub fn run(input: PathBuf, format: String) -> Result<()> {
     println!("───────────────────────────────────────────────────────────────");
 
     for (i, token) in tokens.iter().enumerate() {
-        println!(
-            "{:4}: {:?}",
-            i + 1,
-            token.kind,
-        );
+        println!("{:4}: {:?}", i + 1, token.kind,);
     }
 
     println!("───────────────────────────────────────────────────────────────");
@@ -68,6 +66,9 @@ pub fn run(input: PathBuf, format: String) -> Result<()> {
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(miette::miette!("Lexing completed with {} error(s)", errors.len()))
+        Err(miette::miette!(
+            "Lexing completed with {} error(s)",
+            errors.len()
+        ))
     }
 }

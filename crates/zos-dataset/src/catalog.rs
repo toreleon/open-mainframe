@@ -318,7 +318,10 @@ mod tests {
         assert!(Catalog::matches_pattern("USER.DATA.FILE", "USER.*.FILE"));
         assert!(Catalog::matches_pattern("USER.DATA.FILE", "*"));
         assert!(!Catalog::matches_pattern("USER.DATA.FILE", "OTHER.*"));
-        assert!(!Catalog::matches_pattern("USER.DATA.FILE", "USER.DATA.OTHER"));
+        assert!(!Catalog::matches_pattern(
+            "USER.DATA.FILE",
+            "USER.DATA.OTHER"
+        ));
     }
 
     #[test]

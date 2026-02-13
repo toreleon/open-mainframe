@@ -170,9 +170,8 @@ impl<'a> Lexer<'a> {
                 // NOT by SYSOUT=* which means output class
                 if stmt.operation.eq_ignore_ascii_case("DD") {
                     let trimmed = stmt.operands.trim();
-                    let is_inline = trimmed == "*" ||
-                                   trimmed.starts_with("*,") ||
-                                   trimmed.starts_with("* ");
+                    let is_inline =
+                        trimmed == "*" || trimmed.starts_with("*,") || trimmed.starts_with("* ");
                     if is_inline {
                         self.in_inline_data = true;
                         // Check for DLM= parameter
@@ -183,7 +182,8 @@ impl<'a> Lexer<'a> {
                                 .find([',', ' ', ')'])
                                 .map(|p| dlm_start + p)
                                 .unwrap_or(stmt.operands.len());
-                            self.inline_delimiter = Some(stmt.operands[dlm_start..dlm_end].to_string());
+                            self.inline_delimiter =
+                                Some(stmt.operands[dlm_start..dlm_end].to_string());
                         }
                     }
                 }

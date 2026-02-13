@@ -39,9 +39,12 @@ pub struct QsamReader {
 impl QsamReader {
     /// Open a dataset for reading.
     pub fn open(dataset: DatasetRef) -> Result<Self, DatasetError> {
-        let path = dataset.path.as_ref().ok_or_else(|| DatasetError::NotFound {
-            name: dataset.dsn.clone(),
-        })?;
+        let path = dataset
+            .path
+            .as_ref()
+            .ok_or_else(|| DatasetError::NotFound {
+                name: dataset.dsn.clone(),
+            })?;
 
         let file = File::open(path).map_err(|e| DatasetError::IoError {
             message: format!("Failed to open {}: {}", path.display(), e),
@@ -68,15 +71,9 @@ impl QsamReader {
         let lrecl = self.dataset.attributes.lrecl as usize;
 
         match self.dataset.attributes.recfm {
-            RecordFormat::Fixed | RecordFormat::FixedBlocked => {
-                self.read_fixed_record(lrecl)
-            }
-            RecordFormat::Variable | RecordFormat::VariableBlocked => {
-                self.read_variable_record()
-            }
-            RecordFormat::Undefined => {
-                self.read_line_record()
-            }
+            RecordFormat::Fixed | RecordFormat::FixedBlocked => self.read_fixed_record(lrecl),
+            RecordFormat::Variable | RecordFormat::VariableBlocked => self.read_variable_record(),
+            RecordFormat::Undefined => self.read_line_record(),
             _ => self.read_line_record(),
         }
     }
@@ -120,19 +117,20 @@ impl QsamReader {
         // RDW length is big-endian, includes the RDW itself
         let length = ((rdw[0] as usize) << 8) | (rdw[1] as usize);
         if length < 4 {
-            return Err(DatasetError::InvalidRecordFormat(
-                format!("Invalid RDW length: {}", length),
-            ));
+            return Err(DatasetError::InvalidRecordFormat(format!(
+                "Invalid RDW length: {}",
+                length
+            )));
         }
 
         let data_len = length - 4;
         self.record_buffer.resize(data_len, 0);
 
-        self.reader.read_exact(&mut self.record_buffer).map_err(|e| {
-            DatasetError::IoError {
+        self.reader
+            .read_exact(&mut self.record_buffer)
+            .map_err(|e| DatasetError::IoError {
                 message: format!("Failed to read record data: {}", e),
-            }
-        })?;
+            })?;
 
         self.record_number += 1;
         Ok(Some(&self.record_buffer))
@@ -154,7 +152,8 @@ impl QsamReader {
 
                 // Pad to LRECL if fixed format
                 let lrecl = self.dataset.attributes.lrecl as usize;
-                if !self.dataset.attributes.recfm.is_variable() && self.record_buffer.len() < lrecl {
+                if !self.dataset.attributes.recfm.is_variable() && self.record_buffer.len() < lrecl
+                {
                     self.record_buffer.resize(lrecl, b' ');
                 }
 
@@ -196,9 +195,12 @@ pub struct QsamWriter {
 impl QsamWriter {
     /// Open a dataset for writing.
     pub fn open(dataset: DatasetRef, mode: OpenMode) -> Result<Self, DatasetError> {
-        let path = dataset.path.as_ref().ok_or_else(|| DatasetError::NotFound {
-            name: dataset.dsn.clone(),
-        })?;
+        let path = dataset
+            .path
+            .as_ref()
+            .ok_or_else(|| DatasetError::NotFound {
+                name: dataset.dsn.clone(),
+            })?;
 
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
@@ -208,27 +210,18 @@ impl QsamWriter {
         }
 
         let file = match mode {
-            OpenMode::Output => {
-                OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(true)
-                    .open(path)
-            }
-            OpenMode::Extend => {
-                OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-            }
-            OpenMode::InputOutput => {
-                OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create(true)
-                    .truncate(false)
-                    .open(path)
-            }
+            OpenMode::Output => OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path),
+            OpenMode::Extend => OpenOptions::new().create(true).append(true).open(path),
+            OpenMode::InputOutput => OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(path),
             OpenMode::Input => {
                 return Err(DatasetError::IoError {
                     message: "Cannot open writer in Input mode".to_string(),
@@ -269,9 +262,11 @@ impl QsamWriter {
         let copy_len = data.len().min(lrecl);
         record[..copy_len].copy_from_slice(&data[..copy_len]);
 
-        self.writer.write_all(&record).map_err(|e| DatasetError::IoError {
-            message: format!("Write error at record {}: {}", self.record_number + 1, e),
-        })?;
+        self.writer
+            .write_all(&record)
+            .map_err(|e| DatasetError::IoError {
+                message: format!("Write error at record {}: {}", self.record_number + 1, e),
+            })?;
 
         self.record_number += 1;
         Ok(())
@@ -281,25 +276,25 @@ impl QsamWriter {
     fn write_variable_record(&mut self, data: &[u8]) -> Result<(), DatasetError> {
         let length = data.len() + 4; // Include RDW size
         if length > 65535 {
-            return Err(DatasetError::InvalidRecordFormat(
-                format!("Record too long: {} bytes", data.len()),
-            ));
+            return Err(DatasetError::InvalidRecordFormat(format!(
+                "Record too long: {} bytes",
+                data.len()
+            )));
         }
 
         // Write RDW (big-endian length + 2 reserved bytes)
-        let rdw = [
-            ((length >> 8) & 0xFF) as u8,
-            (length & 0xFF) as u8,
-            0,
-            0,
-        ];
-        self.writer.write_all(&rdw).map_err(|e| DatasetError::IoError {
-            message: format!("Failed to write RDW: {}", e),
-        })?;
+        let rdw = [((length >> 8) & 0xFF) as u8, (length & 0xFF) as u8, 0, 0];
+        self.writer
+            .write_all(&rdw)
+            .map_err(|e| DatasetError::IoError {
+                message: format!("Failed to write RDW: {}", e),
+            })?;
 
-        self.writer.write_all(data).map_err(|e| DatasetError::IoError {
-            message: format!("Failed to write record: {}", e),
-        })?;
+        self.writer
+            .write_all(data)
+            .map_err(|e| DatasetError::IoError {
+                message: format!("Failed to write record: {}", e),
+            })?;
 
         self.record_number += 1;
         Ok(())
@@ -307,13 +302,17 @@ impl QsamWriter {
 
     /// Write a line-based record.
     fn write_line_record(&mut self, data: &[u8]) -> Result<(), DatasetError> {
-        self.writer.write_all(data).map_err(|e| DatasetError::IoError {
-            message: format!("Write error: {}", e),
-        })?;
+        self.writer
+            .write_all(data)
+            .map_err(|e| DatasetError::IoError {
+                message: format!("Write error: {}", e),
+            })?;
 
-        self.writer.write_all(b"\n").map_err(|e| DatasetError::IoError {
-            message: format!("Write error: {}", e),
-        })?;
+        self.writer
+            .write_all(b"\n")
+            .map_err(|e| DatasetError::IoError {
+                message: format!("Write error: {}", e),
+            })?;
 
         self.record_number += 1;
         Ok(())
@@ -370,8 +369,8 @@ pub fn write_records(dataset: DatasetRef, records: &[&[u8]]) -> Result<u64, Data
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use crate::types::DatasetAttributes;
+    use std::path::PathBuf;
 
     fn test_dataset(path: &str) -> DatasetRef {
         DatasetRef {

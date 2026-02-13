@@ -19,8 +19,7 @@ pub fn run(
     tracing::info!("Executing JCL: {}", input.display());
 
     // Parse JCL
-    let job = zos_jcl::parse(&source)
-        .map_err(|e| miette::miette!("JCL parse error: {}", e))?;
+    let job = zos_jcl::parse(&source).map_err(|e| miette::miette!("JCL parse error: {}", e))?;
 
     tracing::info!("Job: {}", job.name);
     tracing::info!("Steps: {}", job.steps.len());
@@ -45,7 +44,15 @@ pub fn run(
     // Print results
     println!();
     println!("═══════════════════════════════════════════════════════════════");
-    println!("JOB {} - {}", result.name, if result.success { "COMPLETED" } else { "FAILED" });
+    println!(
+        "JOB {} - {}",
+        result.name,
+        if result.success {
+            "COMPLETED"
+        } else {
+            "FAILED"
+        }
+    );
     println!("═══════════════════════════════════════════════════════════════");
     println!();
 
@@ -73,7 +80,10 @@ pub fn run(
                 println!("      {}", line);
             }
             if step.stdout.lines().count() > 10 {
-                println!("      ... ({} more lines)", step.stdout.lines().count() - 10);
+                println!(
+                    "      ... ({} more lines)",
+                    step.stdout.lines().count() - 10
+                );
             }
         }
 
@@ -93,6 +103,10 @@ pub fn run(
     if result.success {
         Ok(())
     } else {
-        Err(miette::miette!("Job {} failed with RC={}", result.name, result.return_code))
+        Err(miette::miette!(
+            "Job {} failed with RC={}",
+            result.name,
+            result.return_code
+        ))
     }
 }

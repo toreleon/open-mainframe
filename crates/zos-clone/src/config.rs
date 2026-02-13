@@ -288,10 +288,7 @@ impl Config {
             self.compiler.source_format = val;
         }
         if let Ok(val) = std::env::var("ZOS_CLONE_COPYBOOK_PATH") {
-            self.compiler.copybook_paths = val
-                .split(':')
-                .map(PathBuf::from)
-                .collect();
+            self.compiler.copybook_paths = val.split(':').map(PathBuf::from).collect();
         }
         if let Ok(val) = std::env::var("ZOS_CLONE_OPTIMIZATION") {
             if let Ok(level) = val.parse() {

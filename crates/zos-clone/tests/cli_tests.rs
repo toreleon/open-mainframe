@@ -91,7 +91,11 @@ fn test_interpret_conditions() {
         stdout
     );
     assert!(stdout.contains("NUM EQUALS 50"), "Output: {}", stdout);
-    assert!(stdout.contains("NUM IS GREATER THAN 25"), "Output: {}", stdout);
+    assert!(
+        stdout.contains("NUM IS GREATER THAN 25"),
+        "Output: {}",
+        stdout
+    );
 }
 
 #[test]

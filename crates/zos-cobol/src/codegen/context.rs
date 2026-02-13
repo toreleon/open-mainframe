@@ -8,10 +8,11 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple as LlvmTargetTriple,
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+    TargetTriple as LlvmTargetTriple,
 };
-use inkwell::OptimizationLevel as LlvmOptLevel;
 use inkwell::values::{FunctionValue, GlobalValue, PointerValue};
+use inkwell::OptimizationLevel as LlvmOptLevel;
 
 use crate::ast::Program;
 use crate::error::CobolError;
@@ -138,10 +139,7 @@ pub struct CodeGenerator<'ctx> {
 
 impl<'ctx> CodeGenerator<'ctx> {
     /// Create a new code generator.
-    pub fn new(
-        context: &'ctx Context,
-        options: CodegenOptions,
-    ) -> Result<Self, CobolError> {
+    pub fn new(context: &'ctx Context, options: CodegenOptions) -> Result<Self, CobolError> {
         // Initialize LLVM targets
         Target::initialize_all(&InitializationConfig::default());
 
@@ -217,20 +215,15 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // Verify module
-        self.module
-            .verify()
-            .map_err(|e| CobolError::CodegenError {
-                message: format!("Module verification failed: {}", e),
-            })?;
+        self.module.verify().map_err(|e| CobolError::CodegenError {
+            message: format!("Module verification failed: {}", e),
+        })?;
 
         Ok(())
     }
 
     /// Generate data layout for DATA DIVISION.
-    fn generate_data_layout(
-        &mut self,
-        data: &crate::ast::DataDivision,
-    ) -> Result<(), CobolError> {
+    fn generate_data_layout(&mut self, data: &crate::ast::DataDivision) -> Result<(), CobolError> {
         // Generate globals for WORKING-STORAGE
         for item in &data.working_storage {
             self.generate_data_item_global(item, "WS")?;
@@ -271,7 +264,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Generate the main entry function.
-    fn generate_main_function(&mut self, program: &Program) -> Result<FunctionValue<'ctx>, CobolError> {
+    fn generate_main_function(
+        &mut self,
+        program: &Program,
+    ) -> Result<FunctionValue<'ctx>, CobolError> {
         // Create main function: i32 main()
         let i32_type = self.context.i32_type();
         let main_type = i32_type.fn_type(&[], false);
@@ -283,9 +279,11 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // For now, just return 0
         let zero = i32_type.const_int(0, false);
-        self.builder.build_return(Some(&zero)).map_err(|e| CobolError::CodegenError {
-            message: format!("Failed to build return: {:?}", e),
-        })?;
+        self.builder
+            .build_return(Some(&zero))
+            .map_err(|e| CobolError::CodegenError {
+                message: format!("Failed to build return: {:?}", e),
+            })?;
 
         Ok(main_fn)
     }

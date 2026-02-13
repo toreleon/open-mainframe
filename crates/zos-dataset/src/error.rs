@@ -8,7 +8,10 @@ use thiserror::Error;
 pub enum DatasetError {
     /// Dataset not found.
     #[error("Dataset not found: {name}")]
-    #[diagnostic(code(dataset::not_found), help("Check that the dataset exists and is cataloged"))]
+    #[diagnostic(
+        code(dataset::not_found),
+        help("Check that the dataset exists and is cataloged")
+    )]
     NotFound {
         /// Name of the dataset.
         name: String,
@@ -37,7 +40,10 @@ pub enum DatasetError {
 
     /// Invalid dataset name.
     #[error("Invalid dataset name: {name}")]
-    #[diagnostic(code(dataset::invalid_name), help("Dataset names must be 1-44 characters, qualifiers 1-8 characters"))]
+    #[diagnostic(
+        code(dataset::invalid_name),
+        help("Dataset names must be 1-44 characters, qualifiers 1-8 characters")
+    )]
     InvalidName {
         /// The invalid name.
         name: String,
@@ -71,7 +77,10 @@ pub enum DatasetError {
 
     /// Dataset is in use.
     #[error("Dataset {name} is in use")]
-    #[diagnostic(code(dataset::in_use), help("Wait for other jobs to complete or use DISP=SHR"))]
+    #[diagnostic(
+        code(dataset::in_use),
+        help("Wait for other jobs to complete or use DISP=SHR")
+    )]
     InUse {
         /// Name of the dataset.
         name: String,

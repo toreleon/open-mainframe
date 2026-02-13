@@ -27,7 +27,10 @@ pub fn run(input: PathBuf, _include_paths: Vec<PathBuf>) -> Result<()> {
         for err in &lex_errors {
             println!("Lexer error: {}", err);
         }
-        return Err(miette::miette!("Lexical analysis failed with {} error(s)", lex_errors.len()));
+        return Err(miette::miette!(
+            "Lexical analysis failed with {} error(s)",
+            lex_errors.len()
+        ));
     }
 
     println!("✓ Lexical analysis: {} tokens", tokens.len());
@@ -40,7 +43,10 @@ pub fn run(input: PathBuf, _include_paths: Vec<PathBuf>) -> Result<()> {
         for err in &parse_errors {
             println!("Parse error: {}", err);
         }
-        return Err(miette::miette!("Parse failed with {} error(s)", parse_errors.len()));
+        return Err(miette::miette!(
+            "Parse failed with {} error(s)",
+            parse_errors.len()
+        ));
     }
 
     let program = program_opt.ok_or_else(|| miette::miette!("Failed to parse program"))?;
@@ -51,13 +57,19 @@ pub fn run(input: PathBuf, _include_paths: Vec<PathBuf>) -> Result<()> {
     // Semantic analysis
     let semantic_result = zos_cobol::analyze(&program);
 
-    let errors: Vec<_> = semantic_result.diagnostics.iter()
+    let errors: Vec<_> = semantic_result
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, zos_cobol::Severity::Error))
         .collect();
-    let warnings: Vec<_> = semantic_result.diagnostics.iter()
+    let warnings: Vec<_> = semantic_result
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, zos_cobol::Severity::Warning))
         .collect();
-    let infos: Vec<_> = semantic_result.diagnostics.iter()
+    let infos: Vec<_> = semantic_result
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, zos_cobol::Severity::Info))
         .collect();
 
@@ -81,8 +93,12 @@ pub fn run(input: PathBuf, _include_paths: Vec<PathBuf>) -> Result<()> {
     // Print summary
     println!();
     println!("Summary:");
-    println!("  {} error(s), {} warning(s), {} info(s)",
-             errors.len(), warnings.len(), infos.len());
+    println!(
+        "  {} error(s), {} warning(s), {} info(s)",
+        errors.len(),
+        warnings.len(),
+        infos.len()
+    );
 
     // Print symbol table info
     println!();
@@ -90,7 +106,10 @@ pub fn run(input: PathBuf, _include_paths: Vec<PathBuf>) -> Result<()> {
     println!("  {} symbols defined", semantic_result.symbol_table.len());
 
     if semantic_result.has_errors {
-        Err(miette::miette!("Check failed with {} error(s)", errors.len()))
+        Err(miette::miette!(
+            "Check failed with {} error(s)",
+            errors.len()
+        ))
     } else {
         Ok(())
     }

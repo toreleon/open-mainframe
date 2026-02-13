@@ -304,7 +304,10 @@ mod tests {
     #[test]
     fn test_record_format_parse() {
         assert_eq!(RecordFormat::parse("FB"), Some(RecordFormat::FixedBlocked));
-        assert_eq!(RecordFormat::parse("vb"), Some(RecordFormat::VariableBlocked));
+        assert_eq!(
+            RecordFormat::parse("vb"),
+            Some(RecordFormat::VariableBlocked)
+        );
         assert_eq!(RecordFormat::parse("F"), Some(RecordFormat::Fixed));
         assert_eq!(RecordFormat::parse("XX"), None);
     }

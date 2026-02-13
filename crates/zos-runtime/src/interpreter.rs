@@ -77,10 +77,7 @@ impl Environment {
     }
 
     /// Create environment with custom I/O.
-    pub fn with_io(
-        stdout: Box<dyn Write>,
-        stdin: Box<dyn BufRead>,
-    ) -> Self {
+    pub fn with_io(stdout: Box<dyn Write>, stdin: Box<dyn BufRead>) -> Self {
         Self {
             variables: HashMap::new(),
             metadata: HashMap::new(),
@@ -141,9 +138,11 @@ impl Environment {
     /// Read from stdin.
     pub fn accept(&mut self) -> Result<String> {
         let mut line = String::new();
-        self.stdin.read_line(&mut line).map_err(|e| InterpreterError {
-            message: format!("Accept error: {}", e),
-        })?;
+        self.stdin
+            .read_line(&mut line)
+            .map_err(|e| InterpreterError {
+                message: format!("Accept error: {}", e),
+            })?;
         Ok(line.trim_end().to_string())
     }
 
@@ -185,15 +184,9 @@ pub enum SimpleStatement {
     /// ACCEPT variable
     Accept { target: String },
     /// MOVE value TO targets
-    Move {
-        from: SimpleExpr,
-        to: Vec<String>,
-    },
+    Move { from: SimpleExpr, to: Vec<String> },
     /// COMPUTE target = expr
-    Compute {
-        target: String,
-        expr: SimpleExpr,
-    },
+    Compute { target: String, expr: SimpleExpr },
     /// ADD values TO targets
     Add {
         values: Vec<SimpleExpr>,
@@ -330,7 +323,10 @@ fn execute_statement(
     env: &mut Environment,
 ) -> Result<()> {
     match stmt {
-        SimpleStatement::Display { items, no_advancing } => {
+        SimpleStatement::Display {
+            items,
+            no_advancing,
+        } => {
             let mut output = String::new();
             for item in items {
                 let value = eval_expr(item, env)?;
@@ -393,14 +389,19 @@ fn execute_statement(
             }
         }
 
-        SimpleStatement::Divide { value, into, giving } => {
+        SimpleStatement::Divide {
+            value,
+            into,
+            giving,
+        } => {
             let v1 = eval_expr(value, env)?;
             let v2 = eval_expr(into, env)?;
-            let result = to_numeric(&v2)
-                .divide(&to_numeric(&v1))
-                .ok_or_else(|| InterpreterError {
-                    message: "Division by zero".to_string(),
-                })?;
+            let result =
+                to_numeric(&v2)
+                    .divide(&to_numeric(&v1))
+                    .ok_or_else(|| InterpreterError {
+                        message: "Division by zero".to_string(),
+                    })?;
             if let Some(target) = giving {
                 env.set(target, CobolValue::Numeric(result))?;
             }
@@ -464,13 +465,9 @@ fn eval_expr(expr: &SimpleExpr, env: &Environment) -> Result<CobolValue> {
 
         SimpleExpr::String(s) => Ok(CobolValue::Alphanumeric(s.clone())),
 
-        SimpleExpr::Variable(name) => {
-            env.get(name)
-                .cloned()
-                .ok_or_else(|| InterpreterError {
-                    message: format!("Undefined variable: {}", name),
-                })
-        }
+        SimpleExpr::Variable(name) => env.get(name).cloned().ok_or_else(|| InterpreterError {
+            message: format!("Undefined variable: {}", name),
+        }),
 
         SimpleExpr::Binary { left, op, right } => {
             let l = to_numeric(&eval_expr(left, env)?);
@@ -493,12 +490,8 @@ fn compare_values(left: &CobolValue, right: &CobolValue) -> std::cmp::Ordering {
     match (left, right) {
         (CobolValue::Numeric(l), CobolValue::Numeric(r)) => l.value.cmp(&r.value),
         (CobolValue::Alphanumeric(l), CobolValue::Alphanumeric(r)) => l.cmp(r),
-        (CobolValue::Numeric(l), CobolValue::Alphanumeric(r)) => {
-            l.to_display_string().cmp(r)
-        }
-        (CobolValue::Alphanumeric(l), CobolValue::Numeric(r)) => {
-            l.cmp(&r.to_display_string())
-        }
+        (CobolValue::Numeric(l), CobolValue::Alphanumeric(r)) => l.to_display_string().cmp(r),
+        (CobolValue::Alphanumeric(l), CobolValue::Numeric(r)) => l.cmp(&r.to_display_string()),
         _ => std::cmp::Ordering::Equal,
     }
 }
@@ -513,9 +506,15 @@ fn eval_condition(cond: &SimpleCondition, env: &Environment) -> Result<bool> {
                 SimpleCompareOp::Equal => compare_values(&l, &r) == std::cmp::Ordering::Equal,
                 SimpleCompareOp::NotEqual => compare_values(&l, &r) != std::cmp::Ordering::Equal,
                 SimpleCompareOp::LessThan => compare_values(&l, &r) == std::cmp::Ordering::Less,
-                SimpleCompareOp::LessOrEqual => compare_values(&l, &r) != std::cmp::Ordering::Greater,
-                SimpleCompareOp::GreaterThan => compare_values(&l, &r) == std::cmp::Ordering::Greater,
-                SimpleCompareOp::GreaterOrEqual => compare_values(&l, &r) != std::cmp::Ordering::Less,
+                SimpleCompareOp::LessOrEqual => {
+                    compare_values(&l, &r) != std::cmp::Ordering::Greater
+                }
+                SimpleCompareOp::GreaterThan => {
+                    compare_values(&l, &r) == std::cmp::Ordering::Greater
+                }
+                SimpleCompareOp::GreaterOrEqual => {
+                    compare_values(&l, &r) != std::cmp::Ordering::Less
+                }
             })
         }
 
@@ -538,29 +537,32 @@ mod tests {
     fn create_test_env() -> Environment {
         let output = Vec::<u8>::new();
         let input = std::io::Cursor::new(Vec::<u8>::new());
-        Environment::with_io(
-            Box::new(output),
-            Box::new(std::io::BufReader::new(input)),
-        )
+        Environment::with_io(Box::new(output), Box::new(std::io::BufReader::new(input)))
     }
 
     #[test]
     fn test_move_and_compute() {
         let mut env = create_test_env();
 
-        env.define("X", DataItemMeta {
-            size: 5,
-            decimals: 0,
-            is_numeric: true,
-            picture: Some("9(5)".to_string()),
-        });
+        env.define(
+            "X",
+            DataItemMeta {
+                size: 5,
+                decimals: 0,
+                is_numeric: true,
+                picture: Some("9(5)".to_string()),
+            },
+        );
 
-        env.define("Y", DataItemMeta {
-            size: 5,
-            decimals: 0,
-            is_numeric: true,
-            picture: Some("9(5)".to_string()),
-        });
+        env.define(
+            "Y",
+            DataItemMeta {
+                size: 5,
+                decimals: 0,
+                is_numeric: true,
+                picture: Some("9(5)".to_string()),
+            },
+        );
 
         let program = SimpleProgram {
             name: "TEST".to_string(),
@@ -592,19 +594,25 @@ mod tests {
     fn test_if_statement() {
         let mut env = create_test_env();
 
-        env.define("X", DataItemMeta {
-            size: 5,
-            decimals: 0,
-            is_numeric: true,
-            picture: Some("9(5)".to_string()),
-        });
+        env.define(
+            "X",
+            DataItemMeta {
+                size: 5,
+                decimals: 0,
+                is_numeric: true,
+                picture: Some("9(5)".to_string()),
+            },
+        );
 
-        env.define("RESULT", DataItemMeta {
-            size: 10,
-            decimals: 0,
-            is_numeric: false,
-            picture: Some("X(10)".to_string()),
-        });
+        env.define(
+            "RESULT",
+            DataItemMeta {
+                size: 10,
+                decimals: 0,
+                is_numeric: false,
+                picture: Some("X(10)".to_string()),
+            },
+        );
 
         env.set("X", CobolValue::from_i64(5)).unwrap();
 
@@ -639,12 +647,15 @@ mod tests {
     fn test_add_statement() {
         let mut env = create_test_env();
 
-        env.define("X", DataItemMeta {
-            size: 5,
-            decimals: 0,
-            is_numeric: true,
-            picture: Some("9(5)".to_string()),
-        });
+        env.define(
+            "X",
+            DataItemMeta {
+                size: 5,
+                decimals: 0,
+                is_numeric: true,
+                picture: Some("9(5)".to_string()),
+            },
+        );
 
         env.set("X", CobolValue::from_i64(10)).unwrap();
 
@@ -672,7 +683,9 @@ mod tests {
             name: "TEST".to_string(),
             data_items: vec![],
             statements: vec![
-                SimpleStatement::StopRun { return_code: Some(4) },
+                SimpleStatement::StopRun {
+                    return_code: Some(4),
+                },
                 // This should not execute
                 SimpleStatement::Move {
                     from: SimpleExpr::Integer(999),

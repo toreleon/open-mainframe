@@ -157,11 +157,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize tracing
-    let filter = if cli.verbose {
-        "debug"
-    } else {
-        "info"
-    };
+    let filter = if cli.verbose { "debug" } else { "info" };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -177,52 +173,51 @@ fn main() -> Result<()> {
             emit_asm,
             emit_llvm,
             include_paths,
-        } => {
-            commands::compile::run(input, output, optimize, emit_asm, emit_llvm, include_paths)
-        }
+        } => commands::compile::run(input, output, optimize, emit_asm, emit_llvm, include_paths),
         Commands::Run {
             input,
             program_dir,
             dataset_dir,
             work_dir,
         } => commands::run::run(input, program_dir, dataset_dir, work_dir),
-        Commands::Check { input, include_paths } => commands::check::run(input, include_paths),
+        Commands::Check {
+            input,
+            include_paths,
+        } => commands::check::run(input, include_paths),
         Commands::ParseJcl { input } => commands::parse_jcl::run(input),
         Commands::Lex { input, format } => commands::lex::run(input, format),
         Commands::Interpret { input } => commands::interpret::interpret(input),
-        Commands::Config { action } => {
-            match action {
-                ConfigAction::Show => {
-                    let config = config::Config::load();
-                    let toml = toml::to_string_pretty(&config)
-                        .map_err(|e| miette::miette!("Failed to serialize config: {}", e))?;
-                    println!("{}", toml);
-                    Ok(())
-                }
-                ConfigAction::Init { output } => {
-                    let content = config::Config::generate_default();
-                    std::fs::write(&output, content)
-                        .map_err(|e| miette::miette!("Failed to write config: {}", e))?;
-                    println!("Created configuration file: {}", output.display());
-                    Ok(())
-                }
-                ConfigAction::Paths => {
-                    println!("Configuration file search paths:");
-                    println!("  1. ./zos-clone.toml (project config)");
-                    if let Some(user_path) = config::Config::user_config_path() {
-                        println!("  2. {} (user config)", user_path.display());
-                    }
-                    println!("\nEnvironment variables:");
-                    println!("  ZOS_CLONE_SOURCE_FORMAT     - Source format (fixed/free/auto)");
-                    println!("  ZOS_CLONE_COPYBOOK_PATH     - Colon-separated copybook paths");
-                    println!("  ZOS_CLONE_OPTIMIZATION      - Optimization level (0-3)");
-                    println!("  ZOS_CLONE_DATASET_DIR       - Base directory for datasets");
-                    println!("  ZOS_CLONE_PROGRAM_DIR       - Directory for compiled programs");
-                    println!("  ZOS_CLONE_WORK_DIR          - Working directory for jobs");
-                    Ok(())
-                }
+        Commands::Config { action } => match action {
+            ConfigAction::Show => {
+                let config = config::Config::load();
+                let toml = toml::to_string_pretty(&config)
+                    .map_err(|e| miette::miette!("Failed to serialize config: {}", e))?;
+                println!("{}", toml);
+                Ok(())
             }
-        }
+            ConfigAction::Init { output } => {
+                let content = config::Config::generate_default();
+                std::fs::write(&output, content)
+                    .map_err(|e| miette::miette!("Failed to write config: {}", e))?;
+                println!("Created configuration file: {}", output.display());
+                Ok(())
+            }
+            ConfigAction::Paths => {
+                println!("Configuration file search paths:");
+                println!("  1. ./zos-clone.toml (project config)");
+                if let Some(user_path) = config::Config::user_config_path() {
+                    println!("  2. {} (user config)", user_path.display());
+                }
+                println!("\nEnvironment variables:");
+                println!("  ZOS_CLONE_SOURCE_FORMAT     - Source format (fixed/free/auto)");
+                println!("  ZOS_CLONE_COPYBOOK_PATH     - Colon-separated copybook paths");
+                println!("  ZOS_CLONE_OPTIMIZATION      - Optimization level (0-3)");
+                println!("  ZOS_CLONE_DATASET_DIR       - Base directory for datasets");
+                println!("  ZOS_CLONE_PROGRAM_DIR       - Directory for compiled programs");
+                println!("  ZOS_CLONE_WORK_DIR          - Working directory for jobs");
+                Ok(())
+            }
+        },
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "zos-clone", &mut std::io::stdout());

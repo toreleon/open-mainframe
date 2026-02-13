@@ -54,11 +54,7 @@ impl<'ctx> DataLayout<'ctx> {
     }
 
     /// Process DATA DIVISION and build layout information.
-    pub fn process_data_division(
-        &mut self,
-        context: &'ctx Context,
-        data: &DataDivision,
-    ) {
+    pub fn process_data_division(&mut self, context: &'ctx Context, data: &DataDivision) {
         // Process WORKING-STORAGE
         self.ws_offset = 0;
         for item in &data.working_storage {
@@ -67,12 +63,7 @@ impl<'ctx> DataLayout<'ctx> {
     }
 
     /// Process a single data item.
-    fn process_item(
-        &mut self,
-        context: &'ctx Context,
-        item: &DataItem,
-        parent_offset: u32,
-    ) -> u32 {
+    fn process_item(&mut self, context: &'ctx Context, item: &DataItem, parent_offset: u32) -> u32 {
         let name = match &item.name {
             DataItemName::Named(n) => n.clone(),
             DataItemName::Filler => format!("FILLER_{}", self.items.len()),
@@ -106,7 +97,9 @@ impl<'ctx> DataLayout<'ctx> {
     fn calculate_item_size(&self, context: &'ctx Context, item: &DataItem) -> u32 {
         // If group item, sum children sizes
         if item.picture.is_none() && !item.children.is_empty() {
-            return item.children.iter()
+            return item
+                .children
+                .iter()
                 .map(|child| self.calculate_item_size(context, child))
                 .sum();
         }
@@ -132,7 +125,7 @@ impl Default for DataLayout<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Picture, PictureCategory, Usage, OccursClause};
+    use crate::ast::{OccursClause, Picture, PictureCategory, Usage};
     use crate::lexer::{FileId, Span};
 
     fn make_span() -> Span {

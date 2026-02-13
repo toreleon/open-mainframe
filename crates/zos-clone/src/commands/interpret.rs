@@ -33,7 +33,10 @@ pub fn interpret(input: PathBuf) -> Result<()> {
         for err in &lex_errors {
             tracing::error!("Lex error: {:?}", err);
         }
-        return Err(miette::miette!("Lexing failed with {} errors", lex_errors.len()));
+        return Err(miette::miette!(
+            "Lexing failed with {} errors",
+            lex_errors.len()
+        ));
     }
 
     // Parse
@@ -43,7 +46,10 @@ pub fn interpret(input: PathBuf) -> Result<()> {
         for err in &parse_errors {
             tracing::error!("Parse error: {:?}", err);
         }
-        return Err(miette::miette!("Parse failed with {} errors", parse_errors.len()));
+        return Err(miette::miette!(
+            "Parse failed with {} errors",
+            parse_errors.len()
+        ));
     }
 
     let program = program.ok_or_else(|| miette::miette!("Failed to parse program"))?;
@@ -64,7 +70,11 @@ pub fn interpret(input: PathBuf) -> Result<()> {
     if rc == 0 {
         Ok(())
     } else {
-        Err(miette::miette!("Program {} exited with RC={}", program_name, rc))
+        Err(miette::miette!(
+            "Program {} exited with RC={}",
+            program_name,
+            rc
+        ))
     }
 }
 
@@ -151,18 +161,31 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
 }
 
 /// Collect data items from DATA DIVISION.
-fn collect_data_items(items: &[DataItem], out: &mut Vec<(String, DataItemMeta)>, inits: &mut Vec<(String, SimpleExpr)>) {
+fn collect_data_items(
+    items: &[DataItem],
+    out: &mut Vec<(String, DataItemMeta)>,
+    inits: &mut Vec<(String, SimpleExpr)>,
+) {
     for item in items {
         if let DataItemName::Named(ref name) = item.name {
             let meta = DataItemMeta {
                 size: item.picture.as_ref().map(|p| p.size as usize).unwrap_or(80),
-                decimals: item.picture.as_ref().map(|p| p.decimal_positions).unwrap_or(0),
-                is_numeric: item.picture.as_ref().map(|p| {
-                    matches!(
-                        p.category,
-                        zos_cobol::ast::PictureCategory::Numeric | zos_cobol::ast::PictureCategory::NumericEdited
-                    )
-                }).unwrap_or(false),
+                decimals: item
+                    .picture
+                    .as_ref()
+                    .map(|p| p.decimal_positions)
+                    .unwrap_or(0),
+                is_numeric: item
+                    .picture
+                    .as_ref()
+                    .map(|p| {
+                        matches!(
+                            p.category,
+                            zos_cobol::ast::PictureCategory::Numeric
+                                | zos_cobol::ast::PictureCategory::NumericEdited
+                        )
+                    })
+                    .unwrap_or(false),
                 picture: item.picture.as_ref().map(|p| p.picture.clone()),
             };
             out.push((name.clone(), meta));
@@ -194,8 +217,12 @@ fn convert_literal(lit: &zos_cobol::ast::Literal) -> Result<SimpleExpr> {
             match f {
                 FigurativeConstant::Zero => Ok(SimpleExpr::Integer(0)),
                 FigurativeConstant::Space => Ok(SimpleExpr::String(" ".to_string())),
-                FigurativeConstant::HighValue => Ok(SimpleExpr::String(String::from_utf8_lossy(&[0xFF]).to_string())),
-                FigurativeConstant::LowValue => Ok(SimpleExpr::String(String::from_utf8_lossy(&[0x00]).to_string())),
+                FigurativeConstant::HighValue => Ok(SimpleExpr::String(
+                    String::from_utf8_lossy(&[0xFF]).to_string(),
+                )),
+                FigurativeConstant::LowValue => Ok(SimpleExpr::String(
+                    String::from_utf8_lossy(&[0x00]).to_string(),
+                )),
                 FigurativeConstant::Quote => Ok(SimpleExpr::String("\"".to_string())),
                 FigurativeConstant::All => Ok(SimpleExpr::String("".to_string())),
             }
@@ -207,7 +234,9 @@ fn convert_literal(lit: &zos_cobol::ast::Literal) -> Result<SimpleExpr> {
 fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
     match stmt {
         Statement::Display(d) => {
-            let items = d.items.iter()
+            let items = d
+                .items
+                .iter()
                 .filter_map(|e| convert_expr(e).ok())
                 .collect();
             Ok(Some(SimpleStatement::Display {
@@ -216,11 +245,9 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
             }))
         }
 
-        Statement::Accept(a) => {
-            Ok(Some(SimpleStatement::Accept {
-                target: a.target.name.clone(),
-            }))
-        }
+        Statement::Accept(a) => Ok(Some(SimpleStatement::Accept {
+            target: a.target.name.clone(),
+        })),
 
         Statement::Move(m) => {
             let from = convert_expr(&m.from)?;
@@ -241,7 +268,9 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
         }
 
         Statement::Add(a) => {
-            let values = a.operands.iter()
+            let values = a
+                .operands
+                .iter()
                 .filter_map(|e| convert_expr(e).ok())
                 .collect();
             let to = a.to.iter().map(|t| t.name.name.clone()).collect();
@@ -249,7 +278,9 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
         }
 
         Statement::Subtract(s) => {
-            let values = s.operands.iter()
+            let values = s
+                .operands
+                .iter()
                 .filter_map(|e| convert_expr(e).ok())
                 .collect();
             let from = s.from.iter().map(|t| t.name.name.clone()).collect();
@@ -267,16 +298,23 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
             let value = convert_expr(&d.operand)?;
             let into = convert_expr(&d.into_or_by)?;
             let giving = d.giving.first().map(|t| t.name.name.clone());
-            Ok(Some(SimpleStatement::Divide { value, into, giving }))
+            Ok(Some(SimpleStatement::Divide {
+                value,
+                into,
+                giving,
+            }))
         }
 
         Statement::If(i) => {
             let condition = convert_condition(&i.condition)?;
-            let then_branch = i.then_branch.iter()
+            let then_branch = i
+                .then_branch
+                .iter()
                 .filter_map(|s| convert_statement(s).ok().flatten())
                 .collect();
             let else_branch = i.else_branch.as_ref().map(|stmts| {
-                stmts.iter()
+                stmts
+                    .iter()
                     .filter_map(|s| convert_statement(s).ok().flatten())
                     .collect()
             });
@@ -288,7 +326,9 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
         }
 
         Statement::Perform(p) => {
-            let target = p.target.as_ref()
+            let target = p
+                .target
+                .as_ref()
                 .map(|t| t.name.clone())
                 .unwrap_or_default();
             let times = p.times.as_ref().and_then(|e| {
@@ -339,8 +379,12 @@ fn convert_expr(expr: &Expression) -> Result<SimpleExpr> {
                 match f {
                     FigurativeConstant::Zero => Ok(SimpleExpr::Integer(0)),
                     FigurativeConstant::Space => Ok(SimpleExpr::String(" ".to_string())),
-                    FigurativeConstant::HighValue => Ok(SimpleExpr::String(String::from_utf8_lossy(&[0xFF]).to_string())),
-                    FigurativeConstant::LowValue => Ok(SimpleExpr::String(String::from_utf8_lossy(&[0x00]).to_string())),
+                    FigurativeConstant::HighValue => Ok(SimpleExpr::String(
+                        String::from_utf8_lossy(&[0xFF]).to_string(),
+                    )),
+                    FigurativeConstant::LowValue => Ok(SimpleExpr::String(
+                        String::from_utf8_lossy(&[0x00]).to_string(),
+                    )),
                     FigurativeConstant::Quote => Ok(SimpleExpr::String("\"".to_string())),
                     FigurativeConstant::All => Ok(SimpleExpr::String("".to_string())),
                 }
@@ -413,46 +457,36 @@ fn convert_condition(cond: &zos_cobol::ast::Condition) -> Result<SimpleCondition
             Ok(SimpleCondition::Not(Box::new(convert_condition(inner)?)))
         }
 
-        zos_cobol::ast::Condition::And(left, right) => {
-            Ok(SimpleCondition::And(
-                Box::new(convert_condition(left)?),
-                Box::new(convert_condition(right)?),
-            ))
-        }
+        zos_cobol::ast::Condition::And(left, right) => Ok(SimpleCondition::And(
+            Box::new(convert_condition(left)?),
+            Box::new(convert_condition(right)?),
+        )),
 
-        zos_cobol::ast::Condition::Or(left, right) => {
-            Ok(SimpleCondition::Or(
-                Box::new(convert_condition(left)?),
-                Box::new(convert_condition(right)?),
-            ))
-        }
+        zos_cobol::ast::Condition::Or(left, right) => Ok(SimpleCondition::Or(
+            Box::new(convert_condition(left)?),
+            Box::new(convert_condition(right)?),
+        )),
 
         zos_cobol::ast::Condition::Paren(inner) => convert_condition(inner),
 
         // Class and sign conditions - evaluate to true for now
-        zos_cobol::ast::Condition::Class(_) => {
-            Ok(SimpleCondition::Compare {
-                left: SimpleExpr::Integer(1),
-                op: SimpleCompareOp::Equal,
-                right: SimpleExpr::Integer(1),
-            })
-        }
+        zos_cobol::ast::Condition::Class(_) => Ok(SimpleCondition::Compare {
+            left: SimpleExpr::Integer(1),
+            op: SimpleCompareOp::Equal,
+            right: SimpleExpr::Integer(1),
+        }),
 
-        zos_cobol::ast::Condition::Sign(_) => {
-            Ok(SimpleCondition::Compare {
-                left: SimpleExpr::Integer(1),
-                op: SimpleCompareOp::Equal,
-                right: SimpleExpr::Integer(1),
-            })
-        }
+        zos_cobol::ast::Condition::Sign(_) => Ok(SimpleCondition::Compare {
+            left: SimpleExpr::Integer(1),
+            op: SimpleCompareOp::Equal,
+            right: SimpleExpr::Integer(1),
+        }),
 
         // Condition name - evaluate to true for now
-        zos_cobol::ast::Condition::ConditionName(_) => {
-            Ok(SimpleCondition::Compare {
-                left: SimpleExpr::Integer(1),
-                op: SimpleCompareOp::Equal,
-                right: SimpleExpr::Integer(1),
-            })
-        }
+        zos_cobol::ast::Condition::ConditionName(_) => Ok(SimpleCondition::Compare {
+            left: SimpleExpr::Integer(1),
+            op: SimpleCompareOp::Equal,
+            right: SimpleExpr::Integer(1),
+        }),
     }
 }

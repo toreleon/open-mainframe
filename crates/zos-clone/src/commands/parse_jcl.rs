@@ -14,8 +14,7 @@ pub fn run(input: PathBuf) -> Result<()> {
     tracing::info!("Parsing JCL: {}", input.display());
 
     // Parse JCL
-    let job = zos_jcl::parse(&source)
-        .map_err(|e| miette::miette!("JCL parse error: {}", e))?;
+    let job = zos_jcl::parse(&source).map_err(|e| miette::miette!("JCL parse error: {}", e))?;
 
     // Print job structure
     println!("JCL Analysis: {}", input.display());
@@ -69,7 +68,9 @@ pub fn run(input: PathBuf) -> Result<()> {
             for dd in &step.dd_statements {
                 let dd_desc = match &dd.definition {
                     zos_jcl::DdDefinition::Dataset(def) => {
-                        let disp = def.disp.as_ref()
+                        let disp = def
+                            .disp
+                            .as_ref()
                             .map(|d| format!("{:?}", d.status))
                             .unwrap_or_else(|| "SHR".to_string());
                         format!("DSN={} DISP={}", def.dsn, disp)

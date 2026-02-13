@@ -47,7 +47,10 @@ pub fn run(
         for err in &lex_errors {
             tracing::error!("Lexer error: {}", err);
         }
-        return Err(miette::miette!("Lexical analysis failed with {} error(s)", lex_errors.len()));
+        return Err(miette::miette!(
+            "Lexical analysis failed with {} error(s)",
+            lex_errors.len()
+        ));
     }
 
     tracing::debug!("Scanned {} tokens", tokens.len());
@@ -60,7 +63,10 @@ pub fn run(
         for err in &parse_errors {
             tracing::error!("Parse error: {}", err);
         }
-        return Err(miette::miette!("Parse failed with {} error(s)", parse_errors.len()));
+        return Err(miette::miette!(
+            "Parse failed with {} error(s)",
+            parse_errors.len()
+        ));
     }
 
     let program = program_opt.ok_or_else(|| miette::miette!("Failed to parse program"))?;
@@ -94,13 +100,19 @@ pub fn run(
 
         let context = inkwell::context::Context::create();
         let options = zos_cobol::codegen::CodegenOptions::new(
-            input.file_stem().unwrap_or_default().to_string_lossy().to_string()
-        ).with_optimization(optimization);
+            input
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+        )
+        .with_optimization(optimization);
 
         let mut codegen = zos_cobol::codegen::CodeGenerator::new(&context, options)
             .map_err(|e| miette::miette!("Failed to create code generator: {}", e))?;
 
-        codegen.compile(&program)
+        codegen
+            .compile(&program)
             .map_err(|e| miette::miette!("Code generation failed: {}", e))?;
 
         if emit_llvm {
@@ -110,11 +122,13 @@ pub fn run(
                 .wrap_err("Failed to write LLVM IR")?;
             tracing::info!("Wrote LLVM IR to {}", output_path.display());
         } else if emit_asm {
-            codegen.write_assembly(&output_path)
+            codegen
+                .write_assembly(&output_path)
                 .map_err(|e| miette::miette!("Failed to write assembly: {}", e))?;
             tracing::info!("Wrote assembly to {}", output_path.display());
         } else {
-            codegen.write_object_file(&output_path)
+            codegen
+                .write_object_file(&output_path)
                 .map_err(|e| miette::miette!("Failed to write object file: {}", e))?;
             tracing::info!("Wrote object file to {}", output_path.display());
         }
