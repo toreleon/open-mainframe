@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use open_mainframe_lang_core::Span;
+
 use crate::ast::*;
 use crate::error::JclError;
 use crate::lexer::{tokenize_operands, JclStatement, Lexer, Token};
@@ -65,14 +67,18 @@ impl<'a> Parser<'a> {
             match stmt.operation.as_str() {
                 "EXEC" => {
                     let step = self.parse_step()?;
+                    // Extend job span to cover this step
+                    job.span = job.span.extend(step.span);
                     job.add_step(step);
                 }
                 "NULL" => {
-                    // Null statement marks end of JCL
+                    // Null statement marks end of JCL — extend span to cover it
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
                     break;
                 }
                 "SET" | "IF" | "ENDIF" | "INCLUDE" | "JCLLIB" => {
-                    // Skip these for now
+                    // Skip these for now but extend span
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
                     self.current += 1;
                 }
                 _ => {
@@ -95,6 +101,7 @@ impl<'a> Parser<'a> {
         let stmt = &self.statements[0];
         let name = stmt.name.clone().unwrap_or_else(|| "UNNAMED".to_string());
         let mut job = Job::new(name);
+        job.span = Span::main(stmt.byte_offset, stmt.byte_end);
 
         // Parse operands
         let tokens = tokenize_operands(&stmt.operands)?;
@@ -265,11 +272,13 @@ impl<'a> Parser<'a> {
             message: format!("EXEC statement missing PGM or PROC at line {}", stmt.line),
         })?;
 
+        let exec_span = Span::main(stmt.byte_offset, stmt.byte_end);
         let mut step = Step {
             name: step_name,
             exec: exec_type,
             params,
             dd_statements: Vec::new(),
+            span: exec_span,
         };
 
         self.current += 1;
@@ -281,6 +290,8 @@ impl<'a> Parser<'a> {
                 break;
             }
             let dd = self.parse_dd_statement()?;
+            // Extend step span to cover this DD
+            step.span = step.span.extend(dd.span);
             step.add_dd(dd);
             self.current += 1;
         }
@@ -341,28 +352,37 @@ impl<'a> Parser<'a> {
     fn parse_dd_statement(&self) -> Result<DdStatement, JclError> {
         let stmt = &self.statements[self.current];
         let dd_name = stmt.name.clone().unwrap_or_else(|| "UNNAMED".to_string());
+        let dd_span = Span::main(stmt.byte_offset, stmt.byte_end);
 
         let tokens = tokenize_operands(&stmt.operands)?;
 
         // Check for special DD types first
         if tokens.is_empty() {
-            return Ok(DdStatement::dummy(dd_name));
+            let mut dd = DdStatement::dummy(dd_name);
+            dd.span = dd_span;
+            return Ok(dd);
         }
 
         // Check for DUMMY
         if matches!(&tokens[0], Token::Ident(s) if s == "DUMMY") {
-            return Ok(DdStatement::dummy(dd_name));
+            let mut dd = DdStatement::dummy(dd_name);
+            dd.span = dd_span;
+            return Ok(dd);
         }
 
         // Check for inline data (*)
         if matches!(&tokens[0], Token::Asterisk) {
-            return Ok(DdStatement::inline(dd_name, Vec::new()));
+            let mut dd = DdStatement::inline(dd_name, Vec::new());
+            dd.span = dd_span;
+            return Ok(dd);
         }
 
         // Check for SYSOUT
         if matches!(&tokens[0], Token::Ident(s) if s == "SYSOUT") {
             let class = self.parse_sysout_class(&tokens)?;
-            return Ok(DdStatement::sysout(dd_name, class));
+            let mut dd = DdStatement::sysout(dd_name, class);
+            dd.span = dd_span;
+            return Ok(dd);
         }
 
         // Parse as dataset DD
@@ -370,6 +390,7 @@ impl<'a> Parser<'a> {
         Ok(DdStatement {
             name: dd_name,
             definition: DdDefinition::Dataset(def),
+            span: dd_span,
         })
     }
 
@@ -939,6 +960,42 @@ mod tests {
         } else {
             panic!("Expected Dataset definition");
         }
+    }
+
+    #[test]
+    fn test_span_tracking() {
+        //                       0         1         2
+        //                       0123456789012345678901_
+        let line1 = "//MYJOB    JOB CLASS=A";  // 22 chars
+        let line2 = "//STEP1    EXEC PGM=TEST"; // 24 chars
+        let line3 = "//INPUT    DD DSN=MY.DS,DISP=SHR"; // 32 chars
+        let line4 = "//";
+        let jcl = format!("{}\n{}\n{}\n{}", line1, line2, line3, line4);
+
+        let line2_start = line1.len() as u32 + 1; // +1 for \n
+        let line3_start = line2_start + line2.len() as u32 + 1;
+
+        let job = parse(&jcl).unwrap();
+
+        // Job span covers entire source (from JOB through NULL)
+        assert_eq!(job.span.start, 0);
+        assert!(job.span.end > 0, "Job span end should be non-zero");
+
+        // Step span covers EXEC through last DD
+        let step = &job.steps[0];
+        assert_eq!(step.span.start, line2_start);
+        assert!(step.span.end > step.span.start);
+
+        // DD span covers the DD statement
+        let dd = &step.dd_statements[0];
+        assert_eq!(dd.span.start, line3_start);
+        assert!(dd.span.end > dd.span.start);
+
+        // Step span extends to cover the DD
+        assert_eq!(step.span.end, dd.span.end);
+
+        // All spans are in the main file
+        assert_eq!(job.span.file, open_mainframe_lang_core::FileId::MAIN);
     }
 
     #[test]

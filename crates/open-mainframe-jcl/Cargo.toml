@@ -10,6 +10,7 @@ description = "JCL interpreter for OpenMainframe"
 [dependencies]
 miette.workspace = true
 thiserror.workspace = true
+open-mainframe-lang-core.workspace = true
 open-mainframe-dataset.workspace = true
 open-mainframe-sort.workspace = true
 

@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use open_mainframe_lang_core::{AstNode, Span};
+
 /// A complete JCL job.
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -14,6 +16,14 @@ pub struct Job {
     pub params: JobParams,
     /// Steps in the job.
     pub steps: Vec<Step>,
+    /// Source span covering the entire job.
+    pub span: Span,
+}
+
+impl AstNode for Job {
+    fn span(&self) -> Span {
+        self.span
+    }
 }
 
 /// Job-level parameters (from JOB statement).
@@ -50,6 +60,8 @@ pub struct Step {
     pub params: ExecParams,
     /// DD statements for this step.
     pub dd_statements: Vec<DdStatement>,
+    /// Source span covering from EXEC through last DD.
+    pub span: Span,
 }
 
 /// Type of EXEC statement.
@@ -111,6 +123,8 @@ pub struct DdStatement {
     pub name: String,
     /// Data definition type.
     pub definition: DdDefinition,
+    /// Source span of the DD statement.
+    pub span: Span,
 }
 
 /// Types of data definitions.
@@ -303,6 +317,7 @@ impl Job {
             name: name.into(),
             params: JobParams::default(),
             steps: Vec::new(),
+            span: Span::dummy(),
         }
     }
 
@@ -320,6 +335,7 @@ impl Step {
             exec: ExecType::Program(pgm.into()),
             params: ExecParams::default(),
             dd_statements: Vec::new(),
+            span: Span::dummy(),
         }
     }
 
@@ -330,6 +346,7 @@ impl Step {
             exec: ExecType::Procedure(proc.into()),
             params: ExecParams::default(),
             dd_statements: Vec::new(),
+            span: Span::dummy(),
         }
     }
 
@@ -348,6 +365,7 @@ impl DdStatement {
                 dsn: dsn.into(),
                 ..Default::default()
             }),
+            span: Span::dummy(),
         }
     }
 
@@ -359,6 +377,7 @@ impl DdStatement {
                 delimiter: None,
                 data,
             }),
+            span: Span::dummy(),
         }
     }
 
@@ -371,6 +390,7 @@ impl DdStatement {
                 writer: None,
                 form: None,
             }),
+            span: Span::dummy(),
         }
     }
 
@@ -379,6 +399,7 @@ impl DdStatement {
         Self {
             name: name.into(),
             definition: DdDefinition::Dummy,
+            span: Span::dummy(),
         }
     }
 }

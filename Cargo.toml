@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/open-mainframe",
+    "crates/open-mainframe-lang-core",
     "crates/open-mainframe-cobol",
     "crates/open-mainframe-jcl",
     "crates/open-mainframe-runtime",
@@ -57,6 +58,7 @@ ratatui = "0.29"
 crossterm = "0.28"
 
 # Internal crates
+open-mainframe-lang-core = { path = "crates/open-mainframe-lang-core" }
 open-mainframe-encoding = { path = "crates/open-mainframe-encoding" }
 open-mainframe-runtime = { path = "crates/open-mainframe-runtime" }
 open-mainframe-dataset = { path = "crates/open-mainframe-dataset" }

@@ -7,95 +7,22 @@
 //! - Column 72: continuation marker (non-blank)
 //! - Columns 73-80: sequence number (optional)
 
+pub mod scanner;
+pub mod token;
+
+pub use scanner::tokenize_operands;
+pub use token::{JclStatement, Token};
+
 use crate::error::JclError;
-
-/// Token types for JCL.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Token {
-    /// JOB statement.
-    Job,
-    /// EXEC statement.
-    Exec,
-    /// DD statement.
-    Dd,
-    /// SET statement.
-    Set,
-    /// IF statement.
-    If,
-    /// THEN keyword.
-    Then,
-    /// ELSE keyword.
-    Else,
-    /// ENDIF statement.
-    Endif,
-    /// INCLUDE statement.
-    Include,
-    /// JCLLIB statement.
-    Jcllib,
-    /// PROC statement.
-    Proc,
-    /// PEND statement.
-    Pend,
-    /// OUTPUT statement.
-    Output,
-    /// NULL statement (just //).
-    Null,
-
-    /// Identifier (name, keyword).
-    Ident(String),
-    /// String literal (in quotes).
-    String(String),
-    /// Numeric literal.
-    Number(i64),
-
-    /// = sign.
-    Equals,
-    /// , comma.
-    Comma,
-    /// ( open paren.
-    LParen,
-    /// ) close paren.
-    RParen,
-    /// . period.
-    Period,
-    /// * asterisk.
-    Asterisk,
-    /// & ampersand (symbolic parameter).
-    Ampersand,
-
-    /// Start of inline data.
-    InlineDataStart,
-    /// Inline data line.
-    InlineData(String),
-    /// End of inline data (/*).
-    InlineDataEnd,
-
-    /// Comment (//*, or /* ... */).
-    Comment(String),
-
-    /// End of statement.
-    EndStatement,
-    /// End of JCL.
-    Eof,
-}
-
-/// JCL statement as parsed from source.
-#[derive(Debug, Clone)]
-pub struct JclStatement {
-    /// The name field (columns 3-10 of first line).
-    pub name: Option<String>,
-    /// The operation (JOB, EXEC, DD, etc.).
-    pub operation: String,
-    /// The operands as a string (to be parsed further).
-    pub operands: String,
-    /// Line number in source.
-    pub line: u32,
-}
 
 /// JCL lexer.
 pub struct Lexer<'a> {
+    /// Original source text.
+    source: &'a str,
     /// Input lines.
     lines: Vec<&'a str>,
+    /// Byte offset of each line in the source.
+    line_offsets: Vec<u32>,
     /// Current line index.
     current_line: usize,
     /// In inline data mode.
@@ -108,12 +35,32 @@ impl<'a> Lexer<'a> {
     /// Create a new lexer for the given JCL source.
     pub fn new(source: &'a str) -> Self {
         let lines: Vec<&str> = source.lines().collect();
+        // Compute byte offset of each line
+        let mut line_offsets = Vec::with_capacity(lines.len());
+        let mut offset = 0u32;
+        for line in source.lines() {
+            line_offsets.push(offset);
+            // +1 for the newline character (or end of string)
+            offset += line.len() as u32 + 1;
+        }
         Self {
+            source,
             lines,
+            line_offsets,
             current_line: 0,
             in_inline_data: false,
             inline_delimiter: None,
         }
+    }
+
+    /// Get the byte offset of the start of the given line index.
+    fn line_byte_offset(&self, line_idx: usize) -> u32 {
+        self.line_offsets.get(line_idx).copied().unwrap_or(self.source.len() as u32)
+    }
+
+    /// Get the byte offset of the end of the given line index (exclusive, includes line content).
+    fn line_byte_end(&self, line_idx: usize) -> u32 {
+        self.line_byte_offset(line_idx) + self.lines.get(line_idx).map(|l| l.len() as u32).unwrap_or(0)
     }
 
     /// Parse all JCL statements from the source.
@@ -196,7 +143,9 @@ impl<'a> Lexer<'a> {
 
     /// Parse a single JCL statement (may span multiple lines due to continuation).
     fn parse_statement(&mut self) -> Result<Option<JclStatement>, JclError> {
+        let start_line_idx = self.current_line;
         let start_line = self.current_line as u32 + 1;
+        let byte_offset = self.line_byte_offset(start_line_idx);
         let first_line = self.lines[self.current_line];
         self.current_line += 1;
 
@@ -210,11 +159,14 @@ impl<'a> Lexer<'a> {
 
         // Check for null statement
         if content.trim().is_empty() {
+            let byte_end = self.line_byte_end(start_line_idx);
             return Ok(Some(JclStatement {
                 name: None,
                 operation: "NULL".to_string(),
                 operands: String::new(),
                 line: start_line,
+                byte_offset,
+                byte_end,
             }));
         }
 
@@ -234,6 +186,7 @@ impl<'a> Lexer<'a> {
 
         // Handle continuation lines
         let mut full_operands = operands.to_string();
+        let mut last_line_idx = start_line_idx;
         while self.is_continued(&full_operands) && self.current_line < self.lines.len() {
             let cont_line = self.lines[self.current_line];
             if !cont_line.starts_with("//") || cont_line.starts_with("//*") {
@@ -252,14 +205,19 @@ impl<'a> Lexer<'a> {
             }
             full_operands.push(',');
             full_operands.push_str(cont_content.trim());
+            last_line_idx = self.current_line;
             self.current_line += 1;
         }
+
+        let byte_end = self.line_byte_end(last_line_idx);
 
         Ok(Some(JclStatement {
             name,
             operation: operation.to_uppercase(),
             operands: full_operands,
             line: start_line,
+            byte_offset,
+            byte_end,
         }))
     }
 
@@ -337,114 +295,6 @@ impl<'a> Lexer<'a> {
     }
 }
 
-/// Tokenize operands string for further parsing.
-pub fn tokenize_operands(operands: &str) -> Result<Vec<Token>, JclError> {
-    let mut tokens = Vec::new();
-    let mut chars = operands.chars().peekable();
-
-    while let Some(&c) = chars.peek() {
-        match c {
-            ' ' | '\t' => {
-                chars.next();
-            }
-            '=' => {
-                chars.next();
-                tokens.push(Token::Equals);
-            }
-            ',' => {
-                chars.next();
-                tokens.push(Token::Comma);
-            }
-            '(' => {
-                chars.next();
-                tokens.push(Token::LParen);
-            }
-            ')' => {
-                chars.next();
-                tokens.push(Token::RParen);
-            }
-            '.' => {
-                chars.next();
-                tokens.push(Token::Period);
-            }
-            '*' => {
-                chars.next();
-                tokens.push(Token::Asterisk);
-            }
-            '&' => {
-                chars.next();
-                // Collect symbolic parameter name
-                let mut name = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c.is_ascii_alphanumeric() || c == '@' || c == '#' || c == '$' {
-                        name.push(c);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                tokens.push(Token::Ampersand);
-                if !name.is_empty() {
-                    tokens.push(Token::Ident(name));
-                }
-            }
-            '\'' => {
-                chars.next();
-                let mut s = String::new();
-                loop {
-                    match chars.next() {
-                        Some('\'') => {
-                            if chars.peek() == Some(&'\'') {
-                                // Escaped quote
-                                s.push('\'');
-                                chars.next();
-                            } else {
-                                break;
-                            }
-                        }
-                        Some(c) => s.push(c),
-                        None => {
-                            return Err(JclError::ParseError {
-                                message: "Unterminated string".to_string(),
-                            });
-                        }
-                    }
-                }
-                tokens.push(Token::String(s));
-            }
-            '0'..='9' => {
-                let mut num = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c.is_ascii_digit() {
-                        num.push(c);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                tokens.push(Token::Number(num.parse().unwrap_or(0)));
-            }
-            _ if c.is_ascii_alphabetic() || c == '@' || c == '#' || c == '$' => {
-                let mut ident = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c.is_ascii_alphanumeric() || c == '@' || c == '#' || c == '$' || c == '-' {
-                        ident.push(c);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                tokens.push(Token::Ident(ident.to_uppercase()));
-            }
-            _ => {
-                chars.next();
-            }
-        }
-    }
-
-    Ok(tokens)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,19 +343,6 @@ mod tests {
         let statements = lexer.parse_statements().unwrap();
 
         assert_eq!(statements.len(), 5); // JOB, EXEC, DD, DD, NULL
-    }
-
-    #[test]
-    fn test_tokenize_operands() {
-        let tokens = tokenize_operands("PGM=MYPROG,PARM='TEST'").unwrap();
-
-        assert!(matches!(tokens[0], Token::Ident(ref s) if s == "PGM"));
-        assert!(matches!(tokens[1], Token::Equals));
-        assert!(matches!(tokens[2], Token::Ident(ref s) if s == "MYPROG"));
-        assert!(matches!(tokens[3], Token::Comma));
-        assert!(matches!(tokens[4], Token::Ident(ref s) if s == "PARM"));
-        assert!(matches!(tokens[5], Token::Equals));
-        assert!(matches!(tokens[6], Token::String(ref s) if s == "TEST"));
     }
 
     #[test]

@@ -1232,6 +1232,7 @@ dependencies = [
  "inkwell",
  "miette",
  "open-mainframe-encoding",
+ "open-mainframe-lang-core",
  "open-mainframe-runtime",
  "thiserror",
 ]
@@ -1300,9 +1301,14 @@ version = "0.1.0"
 dependencies = [
  "miette",
  "open-mainframe-dataset",
+ "open-mainframe-lang-core",
  "open-mainframe-sort",
  "thiserror",
 ]
+
+[[package]]
+name = "open-mainframe-lang-core"
+version = "0.1.0"
 
 [[package]]
 name = "open-mainframe-runtime"

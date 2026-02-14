@@ -15,6 +15,7 @@ llvm = ["inkwell"]
 miette.workspace = true
 thiserror.workspace = true
 bumpalo.workspace = true
+open-mainframe-lang-core.workspace = true
 inkwell = { workspace = true, optional = true }
 open-mainframe-encoding.workspace = true
 open-mainframe-runtime.workspace = true

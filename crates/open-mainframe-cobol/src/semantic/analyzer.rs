@@ -11,61 +11,8 @@ use super::types::{CobolType, TypeCategory};
 use crate::ast::*;
 use crate::lexer::Span;
 
-/// Diagnostic severity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Severity {
-    /// Error - prevents compilation.
-    Error,
-    /// Warning - compilation continues.
-    Warning,
-    /// Info - informational message.
-    Info,
-}
-
-/// A semantic diagnostic message.
-#[derive(Debug, Clone)]
-pub struct Diagnostic {
-    /// Severity of the diagnostic.
-    pub severity: Severity,
-    /// Error code (e.g., "E001").
-    pub code: String,
-    /// Human-readable message.
-    pub message: String,
-    /// Source location.
-    pub span: Span,
-    /// Optional suggestion for fixing.
-    pub suggestion: Option<String>,
-}
-
-impl Diagnostic {
-    /// Create a new error diagnostic.
-    pub fn error(code: impl Into<String>, message: impl Into<String>, span: Span) -> Self {
-        Self {
-            severity: Severity::Error,
-            code: code.into(),
-            message: message.into(),
-            span,
-            suggestion: None,
-        }
-    }
-
-    /// Create a new warning diagnostic.
-    pub fn warning(code: impl Into<String>, message: impl Into<String>, span: Span) -> Self {
-        Self {
-            severity: Severity::Warning,
-            code: code.into(),
-            message: message.into(),
-            span,
-            suggestion: None,
-        }
-    }
-
-    /// Add a suggestion to this diagnostic.
-    pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {
-        self.suggestion = Some(suggestion.into());
-        self
-    }
-}
+// Re-export shared diagnostic types from lang-core.
+pub use open_mainframe_lang_core::{Diagnostic, Severity};
 
 /// Result of semantic analysis.
 pub struct SemanticResult {
