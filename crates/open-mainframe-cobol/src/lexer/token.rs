@@ -431,6 +431,22 @@ pub enum Keyword {
     SymbolicCharacters,
     ClassCondition,
     ConditionName,
+
+    // IBM COBOL extensions / missing reserved words
+    Alter,
+    Entry,
+    Invoke,
+    Allocate,
+    Free,
+    Json,
+    Xml,
+    Generate,
+    Parse,
+    Validate,
+    Raise,
+    Resume,
+    Typedef,
+    Strong,
     // Level indicators (special treatment)
     // Note: Level numbers are parsed as integers, not keywords
 }
@@ -700,6 +716,20 @@ impl Keyword {
             Keyword::SymbolicCharacters => "SYMBOLIC",
             Keyword::ClassCondition => "CLASS",
             Keyword::ConditionName => "CONDITION",
+            Keyword::Alter => "ALTER",
+            Keyword::Entry => "ENTRY",
+            Keyword::Invoke => "INVOKE",
+            Keyword::Allocate => "ALLOCATE",
+            Keyword::Free => "FREE",
+            Keyword::Json => "JSON",
+            Keyword::Xml => "XML",
+            Keyword::Generate => "GENERATE",
+            Keyword::Parse => "PARSE",
+            Keyword::Validate => "VALIDATE",
+            Keyword::Raise => "RAISE",
+            Keyword::Resume => "RESUME",
+            Keyword::Typedef => "TYPEDEF",
+            Keyword::Strong => "STRONG",
         }
     }
 }

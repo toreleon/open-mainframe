@@ -295,6 +295,22 @@ static KEYWORDS: LazyLock<HashMap<&'static str, Keyword>> = LazyLock::new(|| {
     map.insert("CONDITION", Keyword::ConditionName);
     map.insert("RELATIVE", Keyword::Relative);
 
+    // IBM COBOL extensions / missing reserved words
+    map.insert("ALTER", Keyword::Alter);
+    map.insert("ENTRY", Keyword::Entry);
+    map.insert("INVOKE", Keyword::Invoke);
+    map.insert("ALLOCATE", Keyword::Allocate);
+    map.insert("FREE", Keyword::Free);
+    map.insert("JSON", Keyword::Json);
+    map.insert("XML", Keyword::Xml);
+    map.insert("GENERATE", Keyword::Generate);
+    map.insert("PARSE", Keyword::Parse);
+    map.insert("VALIDATE", Keyword::Validate);
+    map.insert("RAISE", Keyword::Raise);
+    map.insert("RESUME", Keyword::Resume);
+    map.insert("TYPEDEF", Keyword::Typedef);
+    map.insert("STRONG", Keyword::Strong);
+
     map
 });
 
