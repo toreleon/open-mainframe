@@ -182,6 +182,166 @@ pub fn numval(s: &str) -> Option<f64> {
     s.parse().ok()
 }
 
+/// FUNCTION NUMVAL-F implementation.
+///
+/// Converts a floating-point formatted string to numeric.
+pub fn numval_f(s: &str) -> Option<f64> {
+    let s = s.trim();
+    // Handle COBOL floating-point notation (e.g., "1.23E+04")
+    s.parse::<f64>().ok()
+}
+
+/// FUNCTION TEST-NUMVAL implementation.
+///
+/// Tests if a string is valid for NUMVAL conversion.
+/// Returns 0 if valid, otherwise position of first invalid character.
+pub fn test_numval(s: &str) -> i32 {
+    let s = s.trim();
+    if s.is_empty() {
+        return 1;
+    }
+    // Try parsing after removing trailing sign
+    let test_str = if s.ends_with('-') || s.ends_with('+') {
+        let sign = if s.ends_with('-') { "-" } else { "" };
+        format!("{}{}", sign, &s[..s.len() - 1])
+    } else {
+        s.to_string()
+    };
+    match test_str.parse::<f64>() {
+        Ok(_) => 0,
+        Err(_) => {
+            // Find first invalid character position (1-based)
+            for (i, c) in s.chars().enumerate() {
+                if !c.is_ascii_digit() && c != '.' && c != '+' && c != '-' && c != ' ' {
+                    return (i + 1) as i32;
+                }
+            }
+            s.len() as i32
+        }
+    }
+}
+
+/// FUNCTION TEST-NUMVAL-C implementation.
+///
+/// Tests if a string is valid for NUMVAL-C conversion.
+/// Returns 0 if valid, otherwise position of first invalid character.
+pub fn test_numval_c(s: &str, currency: Option<&str>) -> i32 {
+    let currency = currency.unwrap_or("$");
+    let cleaned = s.replace(currency, "").replace(',', "");
+    test_numval(&cleaned)
+}
+
+/// FUNCTION TEST-NUMVAL-F implementation.
+///
+/// Tests if a string is valid for NUMVAL-F conversion.
+/// Returns 0 if valid, otherwise position of first invalid character.
+pub fn test_numval_f(s: &str) -> i32 {
+    let s = s.trim();
+    if s.is_empty() {
+        return 1;
+    }
+    match s.parse::<f64>() {
+        Ok(_) => 0,
+        Err(_) => {
+            for (i, c) in s.chars().enumerate() {
+                if !c.is_ascii_digit()
+                    && c != '.'
+                    && c != '+'
+                    && c != '-'
+                    && c != 'E'
+                    && c != 'e'
+                {
+                    return (i + 1) as i32;
+                }
+            }
+            s.len() as i32
+        }
+    }
+}
+
+/// FUNCTION HEX-OF implementation.
+///
+/// Returns the hexadecimal representation of a string's bytes.
+pub fn hex_of(s: &str) -> String {
+    s.bytes().map(|b| format!("{:02X}", b)).collect()
+}
+
+/// FUNCTION HEX-TO-CHAR implementation.
+///
+/// Converts a hexadecimal string to its character representation.
+pub fn hex_to_char(hex: &str) -> Option<String> {
+    let hex = hex.trim();
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let bytes: Result<Vec<u8>, _> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+        .collect();
+    bytes.ok().map(|b| String::from_utf8_lossy(&b).to_string())
+}
+
+/// FUNCTION BIT-OF implementation.
+///
+/// Returns the bit representation of a string's bytes.
+pub fn bit_of(s: &str) -> String {
+    s.bytes().map(|b| format!("{:08b}", b)).collect()
+}
+
+/// FUNCTION BIT-TO-CHAR implementation.
+///
+/// Converts a bit string to its character representation.
+pub fn bit_to_char(bits: &str) -> Option<String> {
+    let bits = bits.trim();
+    if bits.len() % 8 != 0 {
+        return None;
+    }
+    let bytes: Result<Vec<u8>, _> = (0..bits.len())
+        .step_by(8)
+        .map(|i| u8::from_str_radix(&bits[i..i + 8], 2))
+        .collect();
+    bytes.ok().map(|b| String::from_utf8_lossy(&b).to_string())
+}
+
+/// FUNCTION UUID4 implementation.
+///
+/// Generates an RFC 4122 UUID v4 (random).
+pub fn uuid4() -> String {
+    // Use a simple random approach based on system time for uniqueness
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let seed = now.as_nanos();
+
+    // LCG-based pseudo-random bytes
+    let mut state = seed as u64;
+    let mut bytes = [0u8; 16];
+    for byte in &mut bytes {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *byte = (state >> 33) as u8;
+    }
+
+    // Set version (4) and variant (RFC 4122)
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variant 1
+
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5],
+        bytes[6], bytes[7],
+        bytes[8], bytes[9],
+        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    )
+}
+
+/// FUNCTION CONTENT-OF implementation.
+///
+/// Returns the content of an environment variable.
+pub fn content_of(name: &str) -> String {
+    std::env::var(name).unwrap_or_default()
+}
+
 /// FUNCTION NUMVAL-C implementation.
 ///
 /// Converts a currency-formatted string to numeric.
@@ -305,5 +465,79 @@ mod tests {
         // This is a limitation - European format needs different handling
         let result = numval_c("€1.234,56", Some("€"));
         assert!(result.is_some()); // Parses but not to expected value
+    }
+
+    #[test]
+    fn test_numval_f_fn() {
+        assert_eq!(numval_f("1.23E+04"), Some(12300.0));
+        assert_eq!(numval_f("  3.14  "), Some(3.14));
+        assert_eq!(numval_f("invalid"), None);
+    }
+
+    #[test]
+    fn test_validate_numval() {
+        assert_eq!(super::test_numval("123"), 0);
+        assert_eq!(super::test_numval("  123.45  "), 0);
+        assert_eq!(super::test_numval("123-"), 0);
+        assert_ne!(super::test_numval("abc"), 0);
+        assert_ne!(super::test_numval(""), 0);
+    }
+
+    #[test]
+    fn test_validate_numval_c() {
+        assert_eq!(super::test_numval_c("$1,234.56", None), 0);
+        assert_ne!(super::test_numval_c("abc", None), 0);
+    }
+
+    #[test]
+    fn test_validate_numval_f() {
+        assert_eq!(super::test_numval_f("1.23E+04"), 0);
+        assert_eq!(super::test_numval_f("3.14"), 0);
+        assert_ne!(super::test_numval_f("abc"), 0);
+    }
+
+    #[test]
+    fn test_hex_of() {
+        assert_eq!(hex_of("AB"), "4142");
+        assert_eq!(hex_of(""), "");
+    }
+
+    #[test]
+    fn test_hex_to_char() {
+        assert_eq!(hex_to_char("4142"), Some("AB".to_string()));
+        assert_eq!(hex_to_char("414"), None); // Odd length
+    }
+
+    #[test]
+    fn test_bit_of() {
+        assert_eq!(bit_of("A"), "01000001");
+        assert_eq!(bit_of("AB"), "0100000101000010");
+    }
+
+    #[test]
+    fn test_bit_to_char() {
+        assert_eq!(bit_to_char("01000001"), Some("A".to_string()));
+        assert_eq!(bit_to_char("0100000101000010"), Some("AB".to_string()));
+        assert_eq!(bit_to_char("0100"), None); // Not multiple of 8
+    }
+
+    #[test]
+    fn test_uuid4() {
+        let uuid = uuid4();
+        assert_eq!(uuid.len(), 36);
+        assert_eq!(&uuid[8..9], "-");
+        assert_eq!(&uuid[13..14], "-");
+        assert_eq!(&uuid[14..15], "4"); // Version 4
+        assert_eq!(&uuid[18..19], "-");
+        assert_eq!(&uuid[23..24], "-");
+    }
+
+    #[test]
+    fn test_content_of() {
+        // Set a test env var
+        std::env::set_var("COBOL_TEST_VAR", "hello");
+        assert_eq!(content_of("COBOL_TEST_VAR"), "hello");
+        assert_eq!(content_of("NONEXISTENT_VAR_12345"), "");
+        std::env::remove_var("COBOL_TEST_VAR");
     }
 }

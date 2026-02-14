@@ -410,6 +410,8 @@ impl SemanticAnalyzer {
             | Statement::Open(_)
             | Statement::Close(_)
             | Statement::StopRun(_)
+            | Statement::GoBack(_)
+            | Statement::Cancel(_)
             | Statement::Exit(_)
             | Statement::Continue(_)
             | Statement::Inspect(_)

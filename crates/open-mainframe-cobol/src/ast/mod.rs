@@ -482,6 +482,8 @@ pub enum Statement {
     Write(WriteStatement),
     /// STOP RUN statement.
     StopRun(StopRunStatement),
+    /// GOBACK statement.
+    GoBack(GoBackStatement),
     /// EXIT statement.
     Exit(ExitStatement),
     /// GO TO statement.
@@ -498,6 +500,8 @@ pub enum Statement {
     Set(SetStatement),
     /// SEARCH statement.
     Search(SearchStatement),
+    /// CANCEL statement.
+    Cancel(CancelStatement),
     /// CONTINUE statement.
     Continue(ContinueStatement),
     /// EXEC CICS statement.
@@ -527,6 +531,7 @@ impl Statement {
             Statement::Read(s) => s.span,
             Statement::Write(s) => s.span,
             Statement::StopRun(s) => s.span,
+            Statement::GoBack(s) => s.span,
             Statement::Exit(s) => s.span,
             Statement::GoTo(s) => s.span,
             Statement::Initialize(s) => s.span,
@@ -535,6 +540,7 @@ impl Statement {
             Statement::Unstring(s) => s.span,
             Statement::Set(s) => s.span,
             Statement::Search(s) => s.span,
+            Statement::Cancel(s) => s.span,
             Statement::Continue(s) => s.span,
             Statement::ExecCics(s) => s.span,
             Statement::ExecSql(s) => s.span,
@@ -945,6 +951,15 @@ pub struct StopRunStatement {
     pub span: Span,
 }
 
+/// GOBACK statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GoBackStatement {
+    /// Optional RETURNING expression.
+    pub returning: Option<Expression>,
+    /// Source span.
+    pub span: Span,
+}
+
 /// EXIT statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExitStatement {
@@ -1198,6 +1213,15 @@ pub enum SetMode {
         target: QualifiedName,
         source: QualifiedName,
     },
+}
+
+/// CANCEL statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CancelStatement {
+    /// Program names to cancel.
+    pub programs: Vec<Expression>,
+    /// Source span.
+    pub span: Span,
 }
 
 /// SEARCH statement.

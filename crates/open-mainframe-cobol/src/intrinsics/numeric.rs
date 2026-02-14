@@ -293,6 +293,15 @@ pub fn present_value(rate: f64, amounts: &[f64]) -> f64 {
         .sum()
 }
 
+/// FUNCTION MIDRANGE implementation.
+///
+/// Returns the mean of the minimum and maximum values.
+pub fn midrange(values: &[f64]) -> Option<f64> {
+    let min_val = min(values)?;
+    let max_val = max(values)?;
+    Some((min_val + max_val) / 2.0)
+}
+
 /// FUNCTION ANNUITY implementation.
 ///
 /// Returns the ratio of an annuity paid for n periods at interest rate r.
@@ -412,6 +421,13 @@ mod tests {
     #[test]
     fn test_range() {
         assert_eq!(range(&[1.0, 5.0, 3.0]), Some(4.0));
+    }
+
+    #[test]
+    fn test_midrange() {
+        assert_eq!(midrange(&[1.0, 5.0, 3.0]), Some(3.0)); // (1+5)/2
+        assert_eq!(midrange(&[10.0, 20.0]), Some(15.0));
+        assert_eq!(midrange(&[]), None);
     }
 
     #[test]

@@ -978,8 +978,22 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
             Ok(Some(SimpleStatement::StopRun { return_code }))
         }
 
+        Statement::GoBack(g) => {
+            // GOBACK is semantically equivalent to STOP RUN
+            let return_code = g.returning.as_ref().and_then(|e| {
+                if let Expression::Literal(l) = e {
+                    if let LiteralKind::Integer(n) = l.kind {
+                        return Some(n as i32);
+                    }
+                }
+                None
+            });
+            Ok(Some(SimpleStatement::StopRun { return_code }))
+        }
+
         Statement::Continue(_) => Ok(None),
         Statement::Exit(_) => Ok(None),
+        Statement::Cancel(_) => Ok(None), // No-op in interpreter
 
         Statement::ExecCics(e) => {
             let options = e

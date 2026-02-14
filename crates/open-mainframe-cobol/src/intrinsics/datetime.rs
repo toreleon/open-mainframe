@@ -256,6 +256,75 @@ fn days_to_ymd_simple(mut days: i32) -> (i32, i32, i32) {
     (year, month, day)
 }
 
+/// FUNCTION DAY-TO-YYYYDDD implementation.
+///
+/// Converts a 2-digit year Julian date (YYDDD) to 4-digit year (YYYYDDD).
+pub fn day_to_yyyyddd(yyddd: i32, window_start: i32) -> i32 {
+    let yy = yyddd / 1000;
+    let ddd = yyddd % 1000;
+    let yyyy = year_to_yyyy(yy, window_start);
+    yyyy * 1000 + ddd
+}
+
+/// FUNCTION COMBINED-DATETIME implementation.
+///
+/// Combines an integer date and seconds past midnight into a single numeric value.
+pub fn combined_datetime(integer_date: IntegerDate, seconds: f64) -> f64 {
+    integer_date as f64 * 1_000_000.0 + seconds
+}
+
+/// FUNCTION SECONDS-PAST-MIDNIGHT implementation.
+///
+/// Returns the number of seconds past midnight.
+pub fn seconds_past_midnight() -> f64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
+    let time_of_day = secs % 86400;
+    let millis = now.subsec_millis();
+    time_of_day as f64 + millis as f64 / 1000.0
+}
+
+/// FUNCTION TEST-DATE-YYYYMMDD implementation.
+///
+/// Tests if a date in YYYYMMDD format is valid.
+/// Returns 0 if valid, non-zero (position of first invalid component) if not.
+pub fn test_date_yyyymmdd(date: i32) -> i32 {
+    let year = date / 10000;
+    let month = (date % 10000) / 100;
+    let day = date % 100;
+
+    if year < 1601 || year > 9999 {
+        return 1; // Invalid year
+    }
+    if month < 1 || month > 12 {
+        return 5; // Invalid month (position in YYYYMMDD)
+    }
+    if day < 1 || day > days_in_month(year, month) {
+        return 7; // Invalid day
+    }
+    0 // Valid
+}
+
+/// FUNCTION TEST-DAY-YYYYDDD implementation.
+///
+/// Tests if a Julian date in YYYYDDD format is valid.
+/// Returns 0 if valid, non-zero if not.
+pub fn test_day_yyyyddd(day: i32) -> i32 {
+    let year = day / 1000;
+    let day_of_year = day % 1000;
+
+    if year < 1601 || year > 9999 {
+        return 1; // Invalid year
+    }
+    let max_day = if is_leap_year(year) { 366 } else { 365 };
+    if day_of_year < 1 || day_of_year > max_day {
+        return 5; // Invalid day
+    }
+    0 // Valid
+}
+
 /// Validate a date.
 pub fn is_valid_date(year: i32, month: i32, day: i32) -> bool {
     if month < 1 || month > 12 {
@@ -383,5 +452,44 @@ mod tests {
         assert_eq!(age_in_years(19900515, 20260213), 35);
         assert_eq!(age_in_years(19900515, 20260514), 35);
         assert_eq!(age_in_years(19900515, 20260515), 36);
+    }
+
+    #[test]
+    fn test_day_to_yyyyddd() {
+        assert_eq!(day_to_yyyyddd(26001, 1950), 2026001);
+        assert_eq!(day_to_yyyyddd(99365, 1950), 1999365);
+        assert_eq!(day_to_yyyyddd(00001, 1950), 2000001);
+    }
+
+    #[test]
+    fn test_combined_datetime() {
+        let int_date = integer_of_date(20260214);
+        let combined = combined_datetime(int_date, 43200.0); // noon
+        assert!(combined > 0.0);
+    }
+
+    #[test]
+    fn test_seconds_past_midnight() {
+        let secs = seconds_past_midnight();
+        assert!(secs >= 0.0);
+        assert!(secs < 86400.0);
+    }
+
+    #[test]
+    fn test_test_date_yyyymmdd() {
+        assert_eq!(test_date_yyyymmdd(20260214), 0); // Valid
+        assert_eq!(test_date_yyyymmdd(20260229), 7); // 2026 is not leap year
+        assert_eq!(test_date_yyyymmdd(20241301), 5); // Invalid month
+        assert_eq!(test_date_yyyymmdd(10000101), 1); // Invalid year (>9999 is invalid)
+        assert_eq!(test_date_yyyymmdd(20240229), 0); // 2024 is leap year
+    }
+
+    #[test]
+    fn test_test_day_yyyyddd() {
+        assert_eq!(test_day_yyyyddd(2026001), 0); // Valid: Jan 1
+        assert_eq!(test_day_yyyyddd(2026365), 0); // Valid: Dec 31 (non-leap)
+        assert_eq!(test_day_yyyyddd(2026366), 5); // Invalid: 2026 not leap
+        assert_eq!(test_day_yyyyddd(2024366), 0); // Valid: 2024 is leap
+        assert_eq!(test_day_yyyyddd(2026000), 5); // Invalid day 0
     }
 }

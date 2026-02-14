@@ -172,6 +172,7 @@ static KEYWORDS: LazyLock<HashMap<&'static str, Keyword>> = LazyLock::new(|| {
     map.insert("LENGTH", Keyword::Length);
     map.insert("EXCEPTION", Keyword::OnException);
     map.insert("CANCEL", Keyword::Cancel);
+    map.insert("GOBACK", Keyword::GoBack);
 
     // String handling
     map.insert("INITIALIZE", Keyword::Initialize);

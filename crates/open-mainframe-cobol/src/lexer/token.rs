@@ -375,6 +375,7 @@ pub enum Keyword {
     Of,
     Upon,
     NoAdvancing,
+    GoBack,
 
     // Conditions
     And,
@@ -566,6 +567,7 @@ impl Keyword {
             Keyword::EndEvaluate => "END-EVALUATE",
             Keyword::GoTo => "GO",
             Keyword::Go => "GO",
+            Keyword::GoBack => "GOBACK",
             Keyword::Stop => "STOP",
             Keyword::Run => "RUN",
             Keyword::Exit => "EXIT",

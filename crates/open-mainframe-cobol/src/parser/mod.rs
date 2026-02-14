@@ -1038,6 +1038,8 @@ impl Parser {
             self.parse_unstring_statement()
         } else if self.check_keyword(Keyword::Call) {
             self.parse_call_statement()
+        } else if self.check_keyword(Keyword::GoBack) {
+            self.parse_goback_statement()
         } else if self.check_keyword(Keyword::GoTo) || self.check_keyword(Keyword::Go) {
             self.parse_goto_statement()
         } else if self.check_keyword(Keyword::Exit) {
@@ -1070,6 +1072,8 @@ impl Parser {
             self.parse_inspect_statement()
         } else if self.check_keyword(Keyword::Evaluate) {
             self.parse_evaluate_statement()
+        } else if self.check_keyword(Keyword::Cancel) {
+            self.parse_cancel_statement()
         } else {
             // Skip unknown statement - but stop at statement boundaries
             let start = self.current_span();
@@ -1184,6 +1188,28 @@ impl Parser {
 
         Ok(Statement::StopRun(StopRunStatement {
             return_code,
+            span: start.extend(end),
+        }))
+    }
+
+    fn parse_goback_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // GOBACK
+
+        // Optional RETURNING expression
+        let returning = if self.check_keyword(Keyword::Returning) {
+            self.advance();
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        self.skip_if(TokenKind::Period);
+
+        let end = self.previous_span();
+
+        Ok(Statement::GoBack(GoBackStatement {
+            returning,
             span: start.extend(end),
         }))
     }
@@ -3289,6 +3315,10 @@ impl Parser {
         matches!(&self.current().kind, TokenKind::Keyword(k) if *k == kw)
     }
 
+    fn check_identifier_value(&self, name: &str) -> bool {
+        matches!(&self.current().kind, TokenKind::Identifier(s) if s.eq_ignore_ascii_case(name))
+    }
+
     fn peek_keyword(&self, kw: Keyword) -> bool {
         if self.current + 1 < self.tokens.len() {
             matches!(&self.tokens[self.current + 1].kind, TokenKind::Keyword(k) if *k == kw)
@@ -3500,6 +3530,7 @@ impl Parser {
             || self.check_keyword(Keyword::Stop)
             || self.check_keyword(Keyword::Exit)
             || self.check_keyword(Keyword::Go)
+            || self.check_keyword(Keyword::GoBack)
             || self.check_keyword(Keyword::Initialize)
             || self.check_keyword(Keyword::Inspect)
             || self.check_keyword(Keyword::String)
@@ -3602,16 +3633,93 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // SET
 
-        // Skip until we reach a statement boundary
-        while !self.check(TokenKind::Period)
-            && !self.is_at_end()
-            && !self.is_statement_start()
-            && !self.is_scope_terminator()
-        {
-            self.advance();
+        // SET ADDRESS OF target TO source
+        if self.check_keyword(Keyword::Address) {
+            self.advance(); // ADDRESS
+            self.expect_keyword(Keyword::Of)?;
+            let target = self.parse_qualified_name()?;
+            self.expect_keyword(Keyword::To)?;
+            let source = self.parse_qualified_name()?;
+            let end = self.previous_span();
+            return Ok(Statement::Set(SetStatement {
+                mode: SetMode::AddressOf { target, source },
+                span: start.extend(end),
+            }));
         }
 
-        Ok(Statement::Continue(ContinueStatement { span: start }))
+        // Collect target(s)
+        let mut targets = vec![self.parse_qualified_name()?];
+        while !self.check_keyword(Keyword::To)
+            && !self.check_keyword(Keyword::UpBy)
+            && !self.check_keyword(Keyword::DownBy)
+            && !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.is_statement_start()
+        {
+            targets.push(self.parse_qualified_name()?);
+        }
+
+        if self.check_keyword(Keyword::To) {
+            self.advance(); // TO
+            // SET condition-name TO TRUE / FALSE
+            if self.check_keyword(Keyword::True) {
+                self.advance();
+                let end = self.previous_span();
+                let target = targets.into_iter().next().unwrap();
+                return Ok(Statement::Set(SetStatement {
+                    mode: SetMode::ConditionTo {
+                        target,
+                        value: true,
+                    },
+                    span: start.extend(end),
+                }));
+            }
+            if self.check_keyword(Keyword::False) {
+                self.advance();
+                let end = self.previous_span();
+                let target = targets.into_iter().next().unwrap();
+                return Ok(Statement::Set(SetStatement {
+                    mode: SetMode::ConditionTo {
+                        target,
+                        value: false,
+                    },
+                    span: start.extend(end),
+                }));
+            }
+            // SET targets TO value (index assignment)
+            let value = self.parse_expression()?;
+            let end = self.previous_span();
+            return Ok(Statement::Set(SetStatement {
+                mode: SetMode::IndexTo { targets, value },
+                span: start.extend(end),
+            }));
+        }
+
+        // SET targets UP BY / DOWN BY value
+        let up = if self.check_keyword(Keyword::UpBy) {
+            self.advance();
+            true
+        } else if self.check_keyword(Keyword::DownBy) {
+            self.advance();
+            false
+        } else {
+            // Fallback: skip remaining tokens
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.is_statement_start()
+                && !self.is_scope_terminator()
+            {
+                self.advance();
+            }
+            return Ok(Statement::Continue(ContinueStatement { span: start }));
+        };
+
+        let value = self.parse_expression()?;
+        let end = self.previous_span();
+        Ok(Statement::Set(SetStatement {
+            mode: SetMode::IndexUpDown { targets, up, value },
+            span: start.extend(end),
+        }))
     }
 
     /// Parse INITIALIZE statement
@@ -3619,15 +3727,63 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // INITIALIZE
 
-        while !self.check(TokenKind::Period)
+        // Collect target variable(s)
+        let mut variables = vec![self.parse_qualified_name()?];
+        while !self.check_keyword(Keyword::Replacing)
+            && !self.check(TokenKind::Period)
             && !self.is_at_end()
             && !self.is_statement_start()
             && !self.is_scope_terminator()
         {
-            self.advance();
+            variables.push(self.parse_qualified_name()?);
         }
 
-        Ok(Statement::Continue(ContinueStatement { span: start }))
+        // Optional REPLACING clause(s)
+        let mut replacing = Vec::new();
+        if self.check_keyword(Keyword::Replacing) {
+            self.advance(); // REPLACING
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.is_statement_start()
+                && !self.is_scope_terminator()
+            {
+                // Parse category: ALPHABETIC | ALPHANUMERIC | NUMERIC | ALPHANUMERIC-EDITED | NUMERIC-EDITED
+                let category = if self.check_identifier_value("ALPHABETIC") {
+                    self.advance();
+                    InitializeCategory::Alphabetic
+                } else if self.check_identifier_value("ALPHANUMERIC-EDITED") {
+                    self.advance();
+                    InitializeCategory::AlphanumericEdited
+                } else if self.check_identifier_value("ALPHANUMERIC") {
+                    self.advance();
+                    InitializeCategory::Alphanumeric
+                } else if self.check_identifier_value("NUMERIC-EDITED") {
+                    self.advance();
+                    InitializeCategory::NumericEdited
+                } else if self.check_keyword(Keyword::Numeric) {
+                    self.advance();
+                    InitializeCategory::Numeric
+                } else {
+                    break;
+                };
+
+                // Optional DATA keyword
+                if self.check_identifier_value("DATA") {
+                    self.advance();
+                }
+
+                self.expect_keyword(Keyword::By)?;
+                let value = self.parse_expression()?;
+                replacing.push(InitializeReplacing { category, value });
+            }
+        }
+
+        let end = self.previous_span();
+        Ok(Statement::Initialize(InitializeStatement {
+            variables,
+            replacing,
+            span: start.extend(end),
+        }))
     }
 
     /// Parse ACCEPT statement
@@ -3635,15 +3791,76 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // ACCEPT
 
+        let target = self.parse_qualified_name()?;
+
+        // Optional FROM clause
+        let from = if self.check_keyword(Keyword::From) {
+            self.advance(); // FROM
+            if self.check_keyword(Keyword::Date) {
+                self.advance();
+                Some(AcceptFrom::Date)
+            } else if self.check_keyword(Keyword::Day) {
+                self.advance();
+                Some(AcceptFrom::Day)
+            } else if self.check_keyword(Keyword::DayOfWeek) {
+                self.advance();
+                Some(AcceptFrom::DayOfWeek)
+            } else if self.check_keyword(Keyword::Time) {
+                self.advance();
+                Some(AcceptFrom::Time)
+            } else if self.check_identifier_value("CONSOLE") {
+                self.advance();
+                Some(AcceptFrom::Console)
+            } else {
+                // Device name
+                let name = self.expect_identifier()?;
+                Some(AcceptFrom::Device(name))
+            }
+        } else if self.check_keyword(Keyword::Date) {
+            // ACCEPT target DATE (without FROM)
+            self.advance();
+            Some(AcceptFrom::Date)
+        } else if self.check_keyword(Keyword::Day) {
+            self.advance();
+            Some(AcceptFrom::Day)
+        } else if self.check_keyword(Keyword::DayOfWeek) {
+            self.advance();
+            Some(AcceptFrom::DayOfWeek)
+        } else if self.check_keyword(Keyword::Time) {
+            self.advance();
+            Some(AcceptFrom::Time)
+        } else {
+            None // ACCEPT from console (default)
+        };
+
+        let end = self.previous_span();
+        Ok(Statement::Accept(AcceptStatement {
+            target,
+            from,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse CANCEL statement
+    fn parse_cancel_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // CANCEL
+
+        // Collect program names (identifiers or literals)
+        let mut programs = Vec::new();
         while !self.check(TokenKind::Period)
             && !self.is_at_end()
             && !self.is_statement_start()
             && !self.is_scope_terminator()
         {
-            self.advance();
+            programs.push(self.parse_expression()?);
         }
 
-        Ok(Statement::Continue(ContinueStatement { span: start }))
+        let end = self.previous_span();
+        Ok(Statement::Cancel(CancelStatement {
+            programs,
+            span: start.extend(end),
+        }))
     }
 
     /// Parse OPEN statement
