@@ -4043,20 +4043,92 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // SEARCH
 
-        while !self.check(TokenKind::Period)
-            && !self.is_at_end()
-            && !self.is_statement_start()
-            && !self.is_scope_terminator()
-            && !self.check_keyword(Keyword::EndSearch)
-        {
+        // SEARCH ALL (binary search)?
+        let all = if self.check_keyword(Keyword::All) {
             self.advance();
+            true
+        } else {
+            false
+        };
+
+        // Table name
+        let table = self.parse_qualified_name()?;
+
+        // Optional VARYING clause
+        let varying = if self.check_keyword(Keyword::Varying) {
+            self.advance();
+            Some(self.parse_qualified_name()?)
+        } else {
+            None
+        };
+
+        // Optional AT END handler
+        let at_end = if self.check_keyword(Keyword::AtEnd) {
+            self.advance();
+            let mut stmts = Vec::new();
+            while !self.check_keyword(Keyword::When)
+                && !self.check_keyword(Keyword::EndSearch)
+                && !self.check(TokenKind::Period)
+                && !self.is_at_end()
+            {
+                match self.parse_statement() {
+                    Ok(stmt) => stmts.push(stmt),
+                    Err(e) => {
+                        self.errors.push(e);
+                        break;
+                    }
+                }
+            }
+            Some(stmts)
+        } else {
+            None
+        };
+
+        // WHEN clauses
+        let mut when_clauses = Vec::new();
+        while self.check_keyword(Keyword::When) {
+            let when_start = self.current_span();
+            self.advance(); // WHEN
+
+            let condition = self.parse_condition()?;
+
+            // Parse statements until next WHEN, END-SEARCH, or period
+            let mut stmts = Vec::new();
+            while !self.check_keyword(Keyword::When)
+                && !self.check_keyword(Keyword::EndSearch)
+                && !self.check(TokenKind::Period)
+                && !self.is_at_end()
+            {
+                match self.parse_statement() {
+                    Ok(stmt) => stmts.push(stmt),
+                    Err(e) => {
+                        self.errors.push(e);
+                        break;
+                    }
+                }
+            }
+
+            let when_end = self.previous_span();
+            when_clauses.push(SearchWhen {
+                condition,
+                statements: stmts,
+                span: when_start.extend(when_end),
+            });
         }
 
         if self.check_keyword(Keyword::EndSearch) {
             self.advance();
         }
 
-        Ok(Statement::Continue(ContinueStatement { span: start }))
+        let end = self.previous_span();
+        Ok(Statement::Search(SearchStatement {
+            table,
+            varying,
+            all,
+            at_end,
+            when_clauses,
+            span: start.extend(end),
+        }))
     }
 
     /// Parse INSPECT statement
@@ -4064,15 +4136,146 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // INSPECT
 
-        while !self.check(TokenKind::Period)
-            && !self.is_at_end()
-            && !self.is_statement_start()
-            && !self.is_scope_terminator()
-        {
-            self.advance();
+        let target = self.parse_qualified_name()?;
+
+        let mut tallying = None;
+        let mut replacing = None;
+        let mut converting = None;
+
+        // INSPECT target TALLYING ...
+        if self.check_keyword(Keyword::Tallying) {
+            self.advance(); // TALLYING
+            let counter = self.parse_qualified_name()?;
+            self.expect_keyword(Keyword::For)?;
+
+            let mut for_clauses = Vec::new();
+            loop {
+                let mode = self.parse_inspect_mode()?;
+                let pattern = if mode != InspectMode::Characters {
+                    Some(self.parse_expression()?)
+                } else {
+                    None
+                };
+                let delimiters = self.parse_inspect_delimiters()?;
+                for_clauses.push(InspectFor {
+                    mode,
+                    pattern,
+                    delimiters,
+                });
+                // Continue if next token is another mode keyword
+                if !self.is_inspect_mode() && !self.check_keyword(Keyword::For) {
+                    break;
+                }
+                if self.check_keyword(Keyword::For) {
+                    self.advance();
+                }
+            }
+
+            tallying = Some(InspectTallying {
+                counter,
+                for_clauses,
+            });
         }
 
-        Ok(Statement::Continue(ContinueStatement { span: start }))
+        // INSPECT target REPLACING ...
+        if self.check_keyword(Keyword::Replacing) {
+            self.advance(); // REPLACING
+
+            let mut rules = Vec::new();
+            loop {
+                let mode = self.parse_inspect_mode()?;
+                let pattern = if mode != InspectMode::Characters {
+                    Some(self.parse_expression()?)
+                } else {
+                    None
+                };
+                self.expect_keyword(Keyword::By)?;
+                let by = self.parse_expression()?;
+                let delimiters = self.parse_inspect_delimiters()?;
+                rules.push(InspectReplacingRule {
+                    mode,
+                    pattern,
+                    by,
+                    delimiters,
+                });
+                if !self.is_inspect_mode() {
+                    break;
+                }
+            }
+
+            replacing = Some(InspectReplacing { rules });
+        }
+
+        // INSPECT target CONVERTING ...
+        if self.check_keyword(Keyword::Converting) {
+            self.advance(); // CONVERTING
+            let from = self.parse_expression()?;
+            self.expect_keyword(Keyword::To)?;
+            let to = self.parse_expression()?;
+            let delimiters = self.parse_inspect_delimiters()?;
+            converting = Some(InspectConverting {
+                from,
+                to,
+                delimiters,
+            });
+        }
+
+        let end = self.previous_span();
+        Ok(Statement::Inspect(InspectStatement {
+            target,
+            tallying,
+            replacing,
+            converting,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Check if current token is an INSPECT mode keyword.
+    fn is_inspect_mode(&self) -> bool {
+        self.check_keyword(Keyword::Characters)
+            || self.check_keyword(Keyword::All)
+            || self.check_keyword(Keyword::Leading)
+            || self.check_identifier_value("FIRST")
+    }
+
+    /// Parse INSPECT mode: CHARACTERS | ALL | LEADING | FIRST.
+    fn parse_inspect_mode(&mut self) -> Result<InspectMode> {
+        if self.check_keyword(Keyword::Characters) {
+            self.advance();
+            Ok(InspectMode::Characters)
+        } else if self.check_keyword(Keyword::All) {
+            self.advance();
+            Ok(InspectMode::All)
+        } else if self.check_keyword(Keyword::Leading) {
+            self.advance();
+            Ok(InspectMode::Leading)
+        } else if self.check_identifier_value("FIRST") {
+            self.advance();
+            Ok(InspectMode::First)
+        } else {
+            Err(CobolError::ParseError {
+                message: format!("Expected CHARACTERS, ALL, LEADING, or FIRST, found {:?}", self.current().kind),
+            })
+        }
+    }
+
+    /// Parse BEFORE/AFTER INITIAL delimiters for INSPECT.
+    fn parse_inspect_delimiters(&mut self) -> Result<Vec<InspectDelimiter>> {
+        let mut delimiters = Vec::new();
+        while self.check_keyword(Keyword::Before) || self.check_keyword(Keyword::After) {
+            let before = self.check_keyword(Keyword::Before);
+            self.advance(); // BEFORE or AFTER
+            // Optional INITIAL keyword
+            let initial = if self.check_keyword(Keyword::Initial) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            let value = self.parse_expression()?;
+            delimiters.push(InspectDelimiter { before, initial, value });
+        }
+        Ok(delimiters)
     }
 }
 
