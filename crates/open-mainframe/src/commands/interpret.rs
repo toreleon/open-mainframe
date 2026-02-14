@@ -438,11 +438,44 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
     let mut statements = Vec::new();
     let mut paragraphs = HashMap::new();
 
-    // Add initial value assignments at the start
+    // Initialize group variables that have FILLER default values FIRST.
+    // This composes the initial string from FILLER VALUEs and MOVEs it into
+    // the group, which triggers decompose_group to populate child fields
+    // (including OCCURS-indexed fields from REDEFINES overlays).
+    // This must come BEFORE individual VALUE assignments so that explicit
+    // VALUE clauses (like CDEMO-ADMIN-OPT-COUNT VALUE 6) override the
+    // group-composed defaults.
+    for (group_name, fields) in &group_layouts {
+        let has_defaults = fields.iter().any(|f| f.default_value.is_some());
+        if !has_defaults {
+            continue;
+        }
+        let total_size = fields.iter().map(|f| f.offset + f.size).max().unwrap_or(0);
+        if total_size == 0 {
+            continue;
+        }
+        let mut buffer = vec![b' '; total_size];
+        for field in fields {
+            if let Some(ref default) = field.default_value {
+                let bytes = default.as_bytes();
+                for i in 0..field.size.min(total_size - field.offset) {
+                    buffer[field.offset + i] = if i < bytes.len() { bytes[i] } else { b' ' };
+                }
+            }
+        }
+        let init_str = String::from_utf8_lossy(&buffer).to_string();
+        statements.push(SimpleStatement::Move {
+            from: SimpleExpr::String(init_str),
+            to: vec![SimpleExpr::Variable(group_name.clone())],
+        });
+    }
+
+    // Add individual VALUE assignments AFTER group init, so explicit
+    // VALUE clauses override the group-composed defaults.
     for (name, value) in initial_values {
         statements.push(SimpleStatement::Move {
             from: value,
-            to: vec![name],
+            to: vec![SimpleExpr::Variable(name)],
         });
     }
 
@@ -576,14 +609,36 @@ fn collect_data_items(
 }
 
 /// Compute the byte size of a data item (recursive for group items).
+/// Accounts for OCCURS (multiplies by count) and excludes REDEFINES items.
 fn compute_item_size(item: &DataItem) -> usize {
+    let base = if let Some(ref pic) = item.picture {
+        pic.size as usize
+    } else if !item.children.is_empty() {
+        // Group item: sum of children sizes (excluding level-88 and REDEFINES)
+        item.children
+            .iter()
+            .filter(|c| c.level != 88 && c.redefines.is_none())
+            .map(compute_item_size)
+            .sum()
+    } else {
+        0
+    };
+    // Multiply by OCCURS count
+    if let Some(ref occ) = item.occurs {
+        base * occ.times as usize
+    } else {
+        base
+    }
+}
+
+/// Compute the byte size of a single occurrence (ignoring the OCCURS multiplier).
+fn compute_item_size_single(item: &DataItem) -> usize {
     if let Some(ref pic) = item.picture {
         pic.size as usize
     } else if !item.children.is_empty() {
-        // Group item: sum of children sizes (excluding level-88)
         item.children
             .iter()
-            .filter(|c| c.level != 88)
+            .filter(|c| c.level != 88 && c.redefines.is_none())
             .map(compute_item_size)
             .sum()
     } else {
@@ -620,17 +675,53 @@ fn collect_sub_fields(
     base_offset: usize,
     fields: &mut Vec<open_mainframe_runtime::interpreter::GroupField>,
 ) {
+    collect_sub_fields_inner(items, base_offset, None, fields);
+}
+
+/// Inner implementation that optionally appends an OCCURS index suffix to names.
+fn collect_sub_fields_inner(
+    items: &[DataItem],
+    base_offset: usize,
+    index_suffix: Option<usize>,
+    fields: &mut Vec<open_mainframe_runtime::interpreter::GroupField>,
+) {
     let mut offset = base_offset;
+    let mut prev_offset = base_offset;
     for item in items {
         if item.level == 88 {
             continue; // Skip condition names
         }
         // REDEFINES items share the same offset as the item they redefine;
-        // they must NOT advance the offset counter.
+        // process their children at the previous item's offset but don't advance.
         if item.redefines.is_some() {
+            if !item.children.is_empty() {
+                collect_sub_fields_inner(&item.children, prev_offset, index_suffix, fields);
+            }
             continue;
         }
+        prev_offset = offset;
         let size = compute_item_size(item);
+
+        // If this item has OCCURS, expand its children N times with indexed names.
+        if let Some(ref occurs) = item.occurs {
+            let stride = compute_item_size_single(item);
+            for occ_idx in 0..occurs.times as usize {
+                let occ_offset = offset + occ_idx * stride;
+                let idx = occ_idx + 1; // 1-based COBOL indexing
+                collect_sub_fields_inner(&item.children, occ_offset, Some(idx), fields);
+            }
+            offset += size;
+            continue;
+        }
+
+        let suffix_name = |base: &str| -> String {
+            if let Some(idx) = index_suffix {
+                format!("{}({})", base.to_uppercase(), idx)
+            } else {
+                base.to_uppercase()
+            }
+        };
+
         match &item.name {
             DataItemName::Named(name) => {
                 let is_numeric = item
@@ -645,7 +736,7 @@ fn collect_sub_fields(
                     })
                     .unwrap_or(false);
                 fields.push(open_mainframe_runtime::interpreter::GroupField {
-                    name: name.to_uppercase(),
+                    name: suffix_name(name),
                     offset,
                     size,
                     is_numeric,
@@ -675,7 +766,7 @@ fn collect_sub_fields(
         }
         // If this is a sub-group, also collect its children at the same offset
         if !item.children.is_empty() {
-            collect_sub_fields(&item.children, offset, fields);
+            collect_sub_fields_inner(&item.children, offset, index_suffix, fields);
         }
         offset += size;
     }
@@ -744,7 +835,17 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
 
         Statement::Move(m) => {
             let from = convert_expr(&m.from)?;
-            let to = m.to.iter().map(|q| q.name.clone()).collect();
+            let to: Vec<SimpleExpr> = m.to.iter().map(|q| {
+                if !q.subscripts.is_empty() {
+                    let index = convert_expr(&q.subscripts[0]).unwrap_or(SimpleExpr::Integer(1));
+                    SimpleExpr::Subscript {
+                        variable: q.name.clone(),
+                        index: Box::new(index),
+                    }
+                } else {
+                    SimpleExpr::Variable(q.name.clone())
+                }
+            }).collect();
             Ok(Some(SimpleStatement::Move { from, to }))
         }
 
@@ -1065,7 +1166,29 @@ fn convert_expr(expr: &Expression) -> Result<SimpleExpr> {
             match q.name.to_uppercase().as_str() {
                 "TRUE" => Ok(SimpleExpr::Integer(1)),
                 "FALSE" => Ok(SimpleExpr::Integer(0)),
-                _ => Ok(SimpleExpr::Variable(q.name.clone())),
+                _ => {
+                    let base = if !q.subscripts.is_empty() {
+                        let index = convert_expr(&q.subscripts[0])?;
+                        SimpleExpr::Subscript {
+                            variable: q.name.clone(),
+                            index: Box::new(index),
+                        }
+                    } else {
+                        SimpleExpr::Variable(q.name.clone())
+                    };
+                    // Wrap with reference modification if present
+                    if let Some((ref start, ref len)) = q.refmod {
+                        let start_expr = convert_expr(start)?;
+                        let len_expr = len.as_ref().map(|l| convert_expr(l)).transpose()?;
+                        Ok(SimpleExpr::RefMod {
+                            variable: Box::new(base),
+                            start: Box::new(start_expr),
+                            length: len_expr.map(Box::new),
+                        })
+                    } else {
+                        Ok(base)
+                    }
+                }
             }
         }
 

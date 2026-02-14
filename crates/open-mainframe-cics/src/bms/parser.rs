@@ -225,13 +225,13 @@ impl BmsParser {
     fn join_continuation_lines(&self, source: &str) -> Vec<String> {
         let mut result = Vec::new();
         let mut current = String::new();
+        let mut is_accumulating = false;
 
         for line in source.lines() {
             let trimmed_end = line.trim_end();
 
             // BMS continuation: line ends with '-' or 'X'/'x' as the continuation
             // character (typically in column 72 of assembler format).
-            // Also handle cases where the '-' is the last non-space character.
             let is_continuation = trimmed_end.ends_with('-')
                 || trimmed_end.ends_with('X')
                 || trimmed_end.ends_with('x');
@@ -239,12 +239,24 @@ impl BmsParser {
             if is_continuation && !trimmed_end.starts_with('*') {
                 // Remove continuation char and trailing spaces before it
                 let without_cont = &trimmed_end[..trimmed_end.len()-1];
-                current.push_str(without_cont.trim_end());
-                current.push(' ');
-            } else {
-                current.push_str(line);
+                if is_accumulating {
+                    // Subsequent continuation: strip leading whitespace (assembler
+                    // indentation) so quoted strings like 'Main-\nframe' join as
+                    // 'Mainframe' without embedded spaces.
+                    current.push_str(without_cont.trim());
+                } else {
+                    // First continuation line: keep label/opcode indentation.
+                    current.push_str(without_cont.trim_end());
+                }
+                is_accumulating = true;
+            } else if is_accumulating {
+                // Final line of a continuation group: strip leading whitespace.
+                current.push_str(trimmed_end.trim_start());
                 result.push(current);
                 current = String::new();
+                is_accumulating = false;
+            } else {
+                result.push(line.to_string());
             }
         }
 
@@ -782,5 +794,34 @@ ERRMSG  DFHMDF ATTRB=(ASKIP,BRT,FSET),                                 -
         let errmsg = map.get_field("ERRMSG").unwrap();
         assert!(errmsg.attributes.bright);
         assert!(errmsg.attributes.protected);
+    }
+
+    #[test]
+    fn test_initial_value_continuation_joins_without_whitespace() {
+        // INITIAL values split across continuation lines must join without
+        // injecting whitespace from assembler indentation.  e.g. 'Main-\n
+        //                frame' → 'Mainframe', not 'Main                frame'.
+        let source = "\
+TESTMS  DFHMSD TYPE=MAP,LANG=COBOL
+TESTM   DFHMDI SIZE=(24,80)
+        DFHMDF ATTRB=(ASKIP,NORM),                                     -
+               COLOR=NEUTRAL,                                          -
+               LENGTH=66,                                              -
+               POS=(5,6),                                              -
+               INITIAL='This is a Credit Card Demo Application for Main-
+               frame Modernization'
+        DFHMSD TYPE=FINAL
+";
+
+        let mut parser = BmsParser::new();
+        let mapset = parser.parse(source).unwrap();
+        let map = &mapset.maps[0];
+        let field = &map.fields[0];
+
+        assert_eq!(
+            field.initial.as_deref(),
+            Some("This is a Credit Card Demo Application for Mainframe Modernization")
+        );
+        assert_eq!(field.length, 66);
     }
 }

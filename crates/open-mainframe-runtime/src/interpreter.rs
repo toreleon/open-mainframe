@@ -219,8 +219,8 @@ pub enum SimpleStatement {
     },
     /// ACCEPT variable
     Accept { target: String },
-    /// MOVE value TO targets
-    Move { from: SimpleExpr, to: Vec<String> },
+    /// MOVE value TO targets (each target is an expression that resolves to a variable name)
+    Move { from: SimpleExpr, to: Vec<SimpleExpr> },
     /// COMPUTE target = expr
     Compute { target: String, expr: SimpleExpr },
     /// ADD values TO targets
@@ -316,6 +316,11 @@ pub enum SimpleExpr {
     String(String),
     /// Variable reference
     Variable(String),
+    /// Subscripted variable reference: ARRAY(INDEX)
+    Subscript {
+        variable: String,
+        index: Box<SimpleExpr>,
+    },
     /// Binary operation
     Binary {
         left: Box<SimpleExpr>,
@@ -435,7 +440,7 @@ fn decompose_group(group_name: &str, data: &str, program: &SimpleProgram, env: &
 /// (e.g., used as the source of a MOVE), its stored value may be stale if
 /// children were updated independently. This function rebuilds the group
 /// string by slotting each child's current display value into its offset.
-fn compose_group(group_name: &str, program: &SimpleProgram, env: &Environment) -> Option<CobolValue> {
+pub fn compose_group(group_name: &str, program: &SimpleProgram, env: &Environment) -> Option<CobolValue> {
     let fields = program.group_layouts.get(&group_name.to_uppercase())?;
     if fields.is_empty() {
         return None;
@@ -572,15 +577,16 @@ fn execute_statement_impl(
                 }
             }
             let value = eval_expr(from, env)?;
-            for target in to {
-                env.set(target, value.clone())?;
+            for target_expr in to {
+                let target = resolve_target_name(target_expr, env)?;
+                env.set(&target, value.clone())?;
                 // If target is a group item, decompose into sub-fields
                 if program.group_layouts.contains_key(&target.to_uppercase()) {
                     let data = value.to_display_string();
                     if std::env::var("OPEN_MAINFRAME_DEBUG_GROUPS").is_ok() {
                         eprintln!("[MOVE→DECOMPOSE] target={} data_len={} data={:?}", target, data.len(), &data[..data.len().min(40)]);
                     }
-                    decompose_group(target, &data, program, env)?;
+                    decompose_group(&target, &data, program, env)?;
                 }
             }
         }
@@ -907,6 +913,20 @@ fn to_numeric(value: &CobolValue) -> NumericValue {
     }
 }
 
+/// Resolve a target expression to a variable name string.
+fn resolve_target_name(expr: &SimpleExpr, env: &Environment) -> Result<String> {
+    match expr {
+        SimpleExpr::Variable(name) => Ok(name.clone()),
+        SimpleExpr::Subscript { variable, index } => {
+            let idx = to_numeric(&eval_expr(index, env)?).integer_part();
+            Ok(format!("{}({})", variable, idx))
+        }
+        _ => Err(InterpreterError {
+            message: format!("Invalid MOVE target expression: {:?}", expr),
+        }),
+    }
+}
+
 /// Evaluate an expression.
 fn eval_expr(expr: &SimpleExpr, env: &Environment) -> Result<CobolValue> {
     match expr {
@@ -917,6 +937,17 @@ fn eval_expr(expr: &SimpleExpr, env: &Environment) -> Result<CobolValue> {
         SimpleExpr::Variable(name) => env.get(name).cloned().ok_or_else(|| InterpreterError {
             message: format!("Undefined variable: {}", name),
         }),
+
+        SimpleExpr::Subscript { variable, index } => {
+            let idx = to_numeric(&eval_expr(index, env)?).integer_part();
+            let indexed_name = format!("{}({})", variable, idx);
+            env.get(&indexed_name)
+                .cloned()
+                .or_else(|| env.get(variable).cloned())
+                .ok_or_else(|| InterpreterError {
+                    message: format!("Undefined subscripted variable: {}", indexed_name),
+                })
+        }
 
         SimpleExpr::Binary { left, op, right } => {
             let l = to_numeric(&eval_expr(left, env)?);
@@ -1164,7 +1195,7 @@ mod tests {
             statements: vec![
                 SimpleStatement::Move {
                     from: SimpleExpr::Integer(10),
-                    to: vec!["X".to_string()],
+                    to: vec![SimpleExpr::Variable("X".to_string())],
                 },
                 SimpleStatement::Compute {
                     target: "Y".to_string(),
@@ -1223,11 +1254,11 @@ mod tests {
                 },
                 then_branch: vec![SimpleStatement::Move {
                     from: SimpleExpr::String("BIG".to_string()),
-                    to: vec!["RESULT".to_string()],
+                    to: vec![SimpleExpr::Variable("RESULT".to_string())],
                 }],
                 else_branch: Some(vec![SimpleStatement::Move {
                     from: SimpleExpr::String("SMALL".to_string()),
-                    to: vec!["RESULT".to_string()],
+                    to: vec![SimpleExpr::Variable("RESULT".to_string())],
                 }]),
             }],
             paragraphs: HashMap::new(),
@@ -1289,7 +1320,7 @@ mod tests {
                 // This should not execute
                 SimpleStatement::Move {
                     from: SimpleExpr::Integer(999),
-                    to: vec!["SHOULD_NOT_EXIST".to_string()],
+                    to: vec![SimpleExpr::Variable("SHOULD_NOT_EXIST".to_string())],
                 },
             ],
             paragraphs: HashMap::new(),
@@ -1298,5 +1329,140 @@ mod tests {
         let rc = execute(&program, &mut env).unwrap();
         assert_eq!(rc, 4);
         assert!(env.is_stopped());
+    }
+
+    #[test]
+    fn test_occurs_redefines_filler_initialization() {
+        // Simulates the COADM02Y.cpy pattern:
+        //   01 MENU-OPTIONS.
+        //     05 OPT-COUNT  PIC 9(02) VALUE 6.
+        //     05 OPTIONS-DATA.
+        //       10 FILLER PIC 9(02) VALUE 1.
+        //       10 FILLER PIC X(05) VALUE 'Alpha'.
+        //       10 FILLER PIC 9(02) VALUE 2.
+        //       10 FILLER PIC X(05) VALUE 'Beta '.
+        //     05 OPTIONS-ARRAY REDEFINES OPTIONS-DATA.
+        //       10 OPT-ENTRY OCCURS 2 TIMES.
+        //         15 OPT-NUM  PIC 9(02).
+        //         15 OPT-NAME PIC X(05).
+        //
+        // Group layout for MENU-OPTIONS should have:
+        //   OPT-COUNT at offset 0, size 2
+        //   FILLER defaults at offsets 2,4,9,11
+        //   OPT-NUM(1) at offset 2, OPT-NAME(1) at offset 4
+        //   OPT-NUM(2) at offset 9, OPT-NAME(2) at offset 11
+
+        let mut env = create_test_env();
+
+        // Define data items
+        env.define("OPT-COUNT", DataItemMeta {
+            size: 2, decimals: 0, is_numeric: true,
+            picture: Some("9(02)".to_string()),
+        });
+
+        // Build group layout for MENU-OPTIONS
+        let group_fields = vec![
+            // Named field: OPT-COUNT
+            GroupField { name: "OPT-COUNT".to_string(), offset: 0, size: 2,
+                         is_numeric: true, default_value: None },
+            // FILLER: VALUE 1 (from OPTIONS-DATA)
+            GroupField { name: String::new(), offset: 2, size: 2,
+                         is_numeric: false, default_value: Some("1".to_string()) },
+            // FILLER: VALUE 'Alpha' (from OPTIONS-DATA)
+            GroupField { name: String::new(), offset: 4, size: 5,
+                         is_numeric: false, default_value: Some("Alpha".to_string()) },
+            // FILLER: VALUE 2 (from OPTIONS-DATA)
+            GroupField { name: String::new(), offset: 9, size: 2,
+                         is_numeric: false, default_value: Some("2".to_string()) },
+            // FILLER: VALUE 'Beta ' (from OPTIONS-DATA)
+            GroupField { name: String::new(), offset: 11, size: 5,
+                         is_numeric: false, default_value: Some("Beta ".to_string()) },
+            // REDEFINES overlay: OPT-NUM(1)
+            GroupField { name: "OPT-NUM(1)".to_string(), offset: 2, size: 2,
+                         is_numeric: true, default_value: None },
+            // REDEFINES overlay: OPT-NAME(1)
+            GroupField { name: "OPT-NAME(1)".to_string(), offset: 4, size: 5,
+                         is_numeric: false, default_value: None },
+            // REDEFINES overlay: OPT-NUM(2)
+            GroupField { name: "OPT-NUM(2)".to_string(), offset: 9, size: 2,
+                         is_numeric: true, default_value: None },
+            // REDEFINES overlay: OPT-NAME(2)
+            GroupField { name: "OPT-NAME(2)".to_string(), offset: 11, size: 5,
+                         is_numeric: false, default_value: None },
+        ];
+
+        let mut group_layouts = HashMap::new();
+        group_layouts.insert("MENU-OPTIONS".to_string(), group_fields);
+
+        // Build the initial composed string from FILLER defaults (what load_program does)
+        let fields = group_layouts.get("MENU-OPTIONS").unwrap();
+        let total_size = fields.iter().map(|f| f.offset + f.size).max().unwrap_or(0);
+        let mut buffer = vec![b' '; total_size];
+        for field in fields {
+            if let Some(ref default) = field.default_value {
+                let bytes = default.as_bytes();
+                for i in 0..field.size.min(total_size - field.offset) {
+                    buffer[field.offset + i] = if i < bytes.len() { bytes[i] } else { b' ' };
+                }
+            }
+        }
+        let init_str = String::from_utf8_lossy(&buffer).to_string();
+
+        // Statements: 1) FILLER group init, 2) VALUE init for OPT-COUNT
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![],
+            condition_names: HashMap::new(),
+            group_layouts,
+            statements: vec![
+                // Step 1: Initialize group from FILLER defaults
+                SimpleStatement::Move {
+                    from: SimpleExpr::String(init_str.clone()),
+                    to: vec![SimpleExpr::Variable("MENU-OPTIONS".to_string())],
+                },
+                // Step 2: Initialize named field VALUE
+                SimpleStatement::Move {
+                    from: SimpleExpr::Integer(6),
+                    to: vec![SimpleExpr::Variable("OPT-COUNT".to_string())],
+                },
+            ],
+            paragraphs: HashMap::new(),
+        };
+
+        execute(&program, &mut env).unwrap();
+
+        // Verify: OPT-COUNT should be 6 (from VALUE clause, applied after group init)
+        let count = env.get("OPT-COUNT").expect("OPT-COUNT missing");
+        assert_eq!(to_numeric(count).integer_part(), 6,
+            "OPT-COUNT should be 6, got {:?}", count);
+
+        // Verify: OPT-NUM(1) should be 1 (from FILLER VALUE 1, through REDEFINES)
+        let num1 = env.get("OPT-NUM(1)").expect("OPT-NUM(1) missing");
+        assert_eq!(to_numeric(num1).integer_part(), 1,
+            "OPT-NUM(1) should be 1, got {:?}", num1);
+
+        // Verify: OPT-NAME(1) should be "Alpha"
+        let name1 = env.get("OPT-NAME(1)").expect("OPT-NAME(1) missing");
+        assert_eq!(name1.to_display_string(), "Alpha",
+            "OPT-NAME(1) should be 'Alpha', got {:?}", name1);
+
+        // Verify: OPT-NUM(2) should be 2
+        let num2 = env.get("OPT-NUM(2)").expect("OPT-NUM(2) missing");
+        assert_eq!(to_numeric(num2).integer_part(), 2,
+            "OPT-NUM(2) should be 2, got {:?}", num2);
+
+        // Verify: OPT-NAME(2) should be "Beta "
+        let name2 = env.get("OPT-NAME(2)").expect("OPT-NAME(2) missing");
+        assert_eq!(name2.to_display_string(), "Beta ",
+            "OPT-NAME(2) should be 'Beta ', got {:?}", name2);
+
+        // Verify: subscript evaluation works
+        let subscript_expr = SimpleExpr::Subscript {
+            variable: "OPT-NUM".to_string(),
+            index: Box::new(SimpleExpr::Integer(2)),
+        };
+        let val = eval_expr(&subscript_expr, &env).unwrap();
+        assert_eq!(to_numeric(&val).integer_part(), 2,
+            "OPT-NUM(2) via subscript should be 2, got {:?}", val);
     }
 }

@@ -407,20 +407,26 @@ impl CicsBridge {
 
         if let Some(ref tid) = transid {
             if let Some(ref ca) = commarea {
-                env.display(
-                    &format!("[CICS] RETURN TRANSID({}) COMMAREA({})", tid, ca),
-                    false,
-                )?;
+                if self.terminal_callback.is_none() {
+                    env.display(
+                        &format!("[CICS] RETURN TRANSID({}) COMMAREA({})", tid, ca),
+                        false,
+                    )?;
+                }
                 self.commarea_var = Some(ca.clone());
             } else {
-                env.display(
-                    &format!("[CICS] RETURN TRANSID({})", tid),
-                    false,
-                )?;
+                if self.terminal_callback.is_none() {
+                    env.display(
+                        &format!("[CICS] RETURN TRANSID({})", tid),
+                        false,
+                    )?;
+                }
             }
             self.return_transid = Some(tid.clone());
         } else {
-            env.display("[CICS] RETURN", false)?;
+            if self.terminal_callback.is_none() {
+                env.display("[CICS] RETURN", false)?;
+            }
         }
 
         self.returned = true;
@@ -443,16 +449,20 @@ impl CicsBridge {
         let commarea = Self::get_option_str(options, "COMMAREA");
 
         if let Some(ref ca) = commarea {
-            env.display(
-                &format!("[CICS] LINK PROGRAM({}) COMMAREA({})", program, ca),
-                false,
-            )?;
+            if self.terminal_callback.is_none() {
+                env.display(
+                    &format!("[CICS] LINK PROGRAM({}) COMMAREA({})", program, ca),
+                    false,
+                )?;
+            }
             self.commarea_var = Some(ca.clone());
         } else {
-            env.display(
-                &format!("[CICS] LINK PROGRAM({})", program),
-                false,
-            )?;
+            if self.terminal_callback.is_none() {
+                env.display(
+                    &format!("[CICS] LINK PROGRAM({})", program),
+                    false,
+                )?;
+            }
         }
 
         self.link_program = Some(program);
@@ -471,16 +481,20 @@ impl CicsBridge {
         let commarea = Self::get_option_str(options, "COMMAREA");
 
         if let Some(ref ca) = commarea {
-            env.display(
-                &format!("[CICS] XCTL PROGRAM({}) COMMAREA({})", program, ca),
-                false,
-            )?;
+            if self.terminal_callback.is_none() {
+                env.display(
+                    &format!("[CICS] XCTL PROGRAM({}) COMMAREA({})", program, ca),
+                    false,
+                )?;
+            }
             self.commarea_var = Some(ca.clone());
         } else {
-            env.display(
-                &format!("[CICS] XCTL PROGRAM({})", program),
-                false,
-            )?;
+            if self.terminal_callback.is_none() {
+                env.display(
+                    &format!("[CICS] XCTL PROGRAM({})", program),
+                    false,
+                )?;
+            }
         }
 
         self.xctl_program = Some(program);
@@ -799,7 +813,9 @@ impl CicsBridge {
             self.abend_label = Some(handler.clone());
             env.stop();
         } else {
-            env.display(&format!("[CICS] ABEND({})", abcode), false)?;
+            if self.terminal_callback.is_none() {
+                env.display(&format!("[CICS] ABEND({})", abcode), false)?;
+            }
             env.stop();
         }
         Ok(())
@@ -874,10 +890,12 @@ impl CicsBridge {
 
         if let Some(ref from) = from_var {
             if let Some(val) = env.get(from) {
-                env.display(
-                    &format!("[CICS] WRITEQ TD QUEUE({}) FROM: {}", queue, val.to_display_string().trim()),
-                    false,
-                )?;
+                if self.terminal_callback.is_none() {
+                    env.display(
+                        &format!("[CICS] WRITEQ TD QUEUE({}) FROM: {}", queue, val.to_display_string().trim()),
+                        false,
+                    )?;
+                }
             }
         }
 
@@ -1016,10 +1034,12 @@ impl CicsCommandHandler for CicsBridge {
             }
             _ => {
                 // Unknown command - log and continue
-                env.display(
-                    &format!("[CICS] Unhandled command: {} (skipped)", cmd),
-                    false,
-                )?;
+                if self.terminal_callback.is_none() {
+                    env.display(
+                        &format!("[CICS] Unhandled command: {} (skipped)", cmd),
+                        false,
+                    )?;
+                }
                 self.runtime.eib.set_response(CicsResponse::Normal);
                 Ok(())
             }

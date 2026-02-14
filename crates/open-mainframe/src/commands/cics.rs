@@ -524,6 +524,16 @@ fn run_session_loop(
         session.set_program(ctx.current_program);
 
         // Execute the program
+        tracing::debug!(
+            ">>> Executing program {} | EIBCALEN={} | DFHCOMMAREA present={}",
+            ctx.current_program,
+            env.get("EIBCALEN").map(|v| v.to_display_string()).unwrap_or_default(),
+            env.get("DFHCOMMAREA").is_some(),
+        );
+        if let Some(dfh) = env.get("DFHCOMMAREA") {
+            let s = dfh.to_display_string();
+            tracing::debug!("  DFHCOMMAREA[0..{}] = {:?}", s.len(), &s[..s.len().min(80)]);
+        }
         env.resume();
         let program = ctx.program_cache.get(ctx.current_program.as_str()).unwrap();
 
@@ -537,6 +547,12 @@ fn run_session_loop(
         // Handle execution errors gracefully.  If a HANDLE ABEND label was
         // registered, transfer control to that paragraph instead of showing
         // the error screen and blocking.
+        tracing::debug!(
+            "<<< Program {} finished: {}",
+            ctx.current_program,
+            if exec_result.is_ok() { "OK" } else { "ERROR" },
+        );
+
         if let Err(e) = exec_result {
             let abend_label = env.cics_handler.as_mut().and_then(|h| {
                 h.as_any_mut()
@@ -614,11 +630,23 @@ fn run_session_loop(
                 .and_then(|a| a.downcast_mut::<CicsBridge>());
 
             if let Some(bridge) = bridge {
+                tracing::debug!(
+                    "Bridge state: returned={} return_transid={:?} xctl={:?} link={:?} commarea_var={:?}",
+                    bridge.returned,
+                    bridge.return_transid,
+                    bridge.xctl_program,
+                    bridge.link_program,
+                    bridge.commarea_var,
+                );
                 // Handle LINK: execute the linked program, then re-run the
                 // original.  LINK is "call and return" — after the sub-program
                 // finishes, the calling program is re-executed.
                 if let Some(ref link_target) = bridge.link_program.clone() {
                     let commarea_data = bridge.commarea_var.as_ref().and_then(|ca| {
+                        let program = ctx.program_cache.get(ctx.current_program.as_str()).unwrap();
+                        if let Some(composed) = open_mainframe_runtime::interpreter::compose_group(ca, program, env) {
+                            env.set(ca, composed).ok();
+                        }
                         env.get(ca).map(|v| v.to_display_string())
                     });
 
@@ -657,7 +685,15 @@ fn run_session_loop(
 
                 // Handle XCTL
                 if let Some(ref xctl_target) = bridge.xctl_program.clone() {
+                    tracing::debug!(
+                        "XCTL from {} to {} commarea_var={:?}",
+                        ctx.current_program, xctl_target, bridge.commarea_var,
+                    );
                     let commarea_data = bridge.commarea_var.as_ref().and_then(|ca| {
+                        let program = ctx.program_cache.get(ctx.current_program.as_str()).unwrap();
+                        if let Some(composed) = open_mainframe_runtime::interpreter::compose_group(ca, program, env) {
+                            env.set(ca, composed).ok();
+                        }
                         env.get(ca).map(|v| v.to_display_string())
                     });
 
@@ -665,10 +701,16 @@ fn run_session_loop(
                     bridge.reset_for_xctl();
                     env.cics_handler = Some(handler);
 
-                    if let Some(data) = commarea_data {
+                    if let Some(ref data) = commarea_data {
                         let len = data.len();
-                        env.set("DFHCOMMAREA", CobolValue::Alphanumeric(data)).ok();
+                        tracing::debug!(
+                            "XCTL COMMAREA len={} data[0..80]={:?}",
+                            len, &data[..data.len().min(80)],
+                        );
+                        env.set("DFHCOMMAREA", CobolValue::Alphanumeric(data.clone())).ok();
                         env.set("EIBCALEN", CobolValue::from_i64(len as i64)).ok();
+                    } else {
+                        tracing::debug!("XCTL without COMMAREA");
                     }
                     continue;
                 }
@@ -676,8 +718,20 @@ fn run_session_loop(
                 // Handle RETURN TRANSID (pseudo-conversational)
                 if bridge.returned {
                     if let Some(ref transid) = bridge.return_transid.clone() {
+                        tracing::debug!(
+                            "RETURN TRANSID({}) — commarea_var={:?}, waiting for input…",
+                            transid,
+                            bridge.commarea_var,
+                        );
                         // Show the screen and wait for user input
                         let (aid, fields) = session.wait_for_input(terminal)?;
+
+                        tracing::debug!(
+                            "Input received: AID=0x{:02X} ({}) fields={:?}",
+                            aid,
+                            String::from(aid as char),
+                            fields.iter().map(|(n, d)| (n.clone(), String::from_utf8_lossy(d).to_string())).collect::<Vec<_>>(),
+                        );
 
                         // Set EIBAID for the next program iteration
                         env.set("EIBAID", CobolValue::alphanumeric(String::from(aid as char))).ok();
@@ -710,16 +764,41 @@ fn run_session_loop(
                         bridge.xctl_program = None;
                         bridge.runtime.eib.reset_for_command();
 
-                        // Pass COMMAREA
+                        // Pass COMMAREA — recompose the group variable first so
+                        // that any child-field updates (e.g. SET CDEMO-PGM-REENTER
+                        // TO TRUE) are reflected in the serialised COMMAREA string.
                         if let Some(ref ca_var) = bridge.commarea_var.clone() {
+                            let program = ctx.program_cache.get(ctx.current_program.as_str()).unwrap();
+                            let had_layout = program.group_layouts.contains_key(&ca_var.to_uppercase());
+                            let composed = open_mainframe_runtime::interpreter::compose_group(ca_var, program, env);
+                            tracing::debug!(
+                                "COMMAREA recompose: var={} has_layout={} composed={}",
+                                ca_var, had_layout, composed.is_some(),
+                            );
+                            if let Some(composed) = composed {
+                                env.set(ca_var, composed).ok();
+                            }
                             if let Some(val) = env.get(ca_var) {
                                 let data = val.to_display_string();
                                 let len = data.len();
+                                tracing::debug!(
+                                    "Setting DFHCOMMAREA len={} data[0..80]={:?}",
+                                    len,
+                                    &data[..data.len().min(80)],
+                                );
                                 env.set("DFHCOMMAREA", CobolValue::Alphanumeric(data)).ok();
                                 env.set("EIBCALEN", CobolValue::from_i64(len as i64)).ok();
+                            } else {
+                                tracing::warn!("COMMAREA variable {} not found in env!", ca_var);
                             }
+                        } else {
+                            tracing::debug!("No COMMAREA variable set for RETURN TRANSID");
                         }
 
+                        tracing::debug!(
+                            "Continuing session loop: next_program={} transid={}",
+                            ctx.current_program, transid,
+                        );
                         env.cics_handler = Some(handler);
                         session.set_transid(transid);
                         continue;

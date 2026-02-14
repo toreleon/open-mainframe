@@ -233,14 +233,32 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize tracing
+    // Initialize tracing — for CICS TUI mode, redirect logs to a file so they
+    // don't corrupt the terminal display.
     let filter = if cli.verbose { "debug" } else { "info" };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(filter)),
-        )
-        .init();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(filter));
+
+    let is_tui = matches!(cli.command, Commands::Cics { .. });
+    if is_tui {
+        let log_path = std::env::temp_dir().join("open-mainframe-cics.log");
+        if let Ok(log_file) = std::fs::File::create(&log_path) {
+            tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .with_writer(std::sync::Mutex::new(log_file))
+                .with_ansi(false)
+                .init();
+        } else {
+            // Fall back to stderr if we can't create the log file
+            tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .init();
+        }
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .init();
+    }
 
     match cli.command {
         Commands::Compile {
