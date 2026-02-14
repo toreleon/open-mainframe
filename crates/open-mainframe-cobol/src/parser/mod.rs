@@ -3868,15 +3868,48 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // OPEN
 
+        let mut files = Vec::new();
         while !self.check(TokenKind::Period)
             && !self.is_at_end()
             && !self.is_statement_start()
             && !self.is_scope_terminator()
         {
-            self.advance();
+            let mode = if self.check_keyword(Keyword::Input) {
+                self.advance();
+                OpenMode::Input
+            } else if self.check_keyword(Keyword::Output) {
+                self.advance();
+                OpenMode::Output
+            } else if self.check_keyword(Keyword::Io) {
+                self.advance();
+                OpenMode::InputOutput
+            } else if self.check_keyword(Keyword::Extend) {
+                self.advance();
+                OpenMode::Extend
+            } else {
+                break;
+            };
+
+            // One or more file names after the mode
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.check_keyword(Keyword::Input)
+                && !self.check_keyword(Keyword::Output)
+                && !self.check_keyword(Keyword::Io)
+                && !self.check_keyword(Keyword::Extend)
+                && !self.is_statement_start()
+                && !self.is_scope_terminator()
+            {
+                let name = self.expect_identifier()?;
+                files.push(OpenFile { name, mode });
+            }
         }
 
-        Ok(Statement::Continue(ContinueStatement { span: start }))
+        let end = self.previous_span();
+        Ok(Statement::Open(OpenStatement {
+            files,
+            span: start.extend(end),
+        }))
     }
 
     /// Parse CLOSE statement
@@ -3884,62 +3917,88 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // CLOSE
 
+        let mut files = Vec::new();
         while !self.check(TokenKind::Period)
             && !self.is_at_end()
             && !self.is_statement_start()
             && !self.is_scope_terminator()
         {
-            self.advance();
+            let name = self.expect_identifier()?;
+            files.push(name);
         }
 
-        Ok(Statement::Continue(ContinueStatement { span: start }))
+        let end = self.previous_span();
+        Ok(Statement::Close(CloseStatement {
+            files,
+            span: start.extend(end),
+        }))
     }
 
-    /// Parse READ statement - skip-based stub that handles INVALID KEY / NOT INVALID KEY / END-READ
+    /// Parse READ statement
     fn parse_read_statement(&mut self) -> Result<Statement> {
         let start = self.current_span();
         self.advance(); // READ
 
-        // Skip until INVALID KEY, NOT INVALID KEY, END-READ, or period
-        while !self.check(TokenKind::Period)
-            && !self.is_at_end()
-            && !self.check_keyword(Keyword::InvalidKey)
-            && !self.check_keyword(Keyword::EndRead)
-            && !(self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
-        {
+        let file = self.expect_identifier()?;
+
+        // Optional NEXT RECORD
+        let next = if self.check_keyword(Keyword::Next) {
             self.advance();
+            if self.check_keyword(Keyword::Record) {
+                self.advance();
+            }
+            true
+        } else {
+            if self.check_keyword(Keyword::Record) {
+                self.advance();
+            }
+            false
+        };
+
+        // Optional INTO target
+        let into = if self.check_keyword(Keyword::Into) {
+            self.advance();
+            Some(self.parse_qualified_name()?)
+        } else {
+            None
+        };
+
+        // Optional KEY IS clause (skip)
+        if self.check_keyword(Keyword::Key) {
+            self.advance();
+            if self.check_keyword(Keyword::Is) {
+                self.advance();
+            }
+            let _key = self.parse_qualified_name()?;
         }
 
-        // Handle INVALID KEY / NOT INVALID KEY clauses
+        // AT END / NOT AT END / INVALID KEY / NOT INVALID KEY handlers
+        let mut at_end = None;
+        let mut not_at_end = None;
+        let mut invalid_key = None;
+        let mut not_invalid_key = None;
+
         loop {
-            if self.check_keyword(Keyword::InvalidKey)
-                || (self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
-            {
-                // Skip NOT if present
-                if self.check_keyword(Keyword::Not) {
-                    self.advance();
-                }
+            if self.check_keyword(Keyword::AtEnd) {
+                self.advance();
+                at_end = Some(self.parse_io_handler_statements(Keyword::EndRead)?);
+            } else if self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::AtEnd) {
+                self.advance(); // NOT
+                self.advance(); // AT END
+                not_at_end = Some(self.parse_io_handler_statements(Keyword::EndRead)?);
+            } else if self.check_keyword(Keyword::InvalidKey) {
                 self.advance(); // INVALID
-                // Skip KEY if present
                 if self.check_keyword(Keyword::Key) {
                     self.advance();
                 }
-                // Parse statements in this clause
-                while !self.check(TokenKind::Period)
-                    && !self.is_at_end()
-                    && !self.check_keyword(Keyword::InvalidKey)
-                    && !self.check_keyword(Keyword::EndRead)
-                    && !(self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
-                {
-                    match self.parse_statement() {
-                        Ok(_stmt) => {}
-                        Err(e) => {
-                            self.errors.push(e);
-                            self.advance_to_next_sentence();
-                            break;
-                        }
-                    }
+                invalid_key = Some(self.parse_io_handler_statements(Keyword::EndRead)?);
+            } else if self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey) {
+                self.advance(); // NOT
+                self.advance(); // INVALID
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
                 }
+                not_invalid_key = Some(self.parse_io_handler_statements(Keyword::EndRead)?);
             } else {
                 break;
             }
@@ -3949,93 +4008,304 @@ impl Parser {
             self.advance();
         }
 
-        Ok(Statement::Continue(ContinueStatement { span: start }))
+        let end = self.previous_span();
+        Ok(Statement::Read(ReadStatement {
+            file,
+            into,
+            next,
+            at_end,
+            not_at_end,
+            invalid_key,
+            not_invalid_key,
+            span: start.extend(end),
+        }))
     }
 
-    /// Parse WRITE statement - stub with INVALID KEY handling
+    /// Parse WRITE statement
     fn parse_write_statement(&mut self) -> Result<Statement> {
         let start = self.current_span();
         self.advance(); // WRITE
-        self.parse_io_statement_body(Keyword::EndWrite)?;
-        Ok(Statement::Continue(ContinueStatement { span: start }))
-    }
 
-    /// Parse REWRITE statement - stub with INVALID KEY handling
-    fn parse_rewrite_statement(&mut self) -> Result<Statement> {
-        let start = self.current_span();
-        self.advance(); // REWRITE
-        self.parse_io_statement_body(Keyword::EndRewrite)?;
-        Ok(Statement::Continue(ContinueStatement { span: start }))
-    }
+        let record = self.parse_qualified_name()?;
 
-    /// Parse DELETE statement - stub with INVALID KEY handling
-    fn parse_delete_statement(&mut self) -> Result<Statement> {
-        let start = self.current_span();
-        self.advance(); // DELETE
-        self.parse_io_statement_body(Keyword::EndDelete)?;
-        Ok(Statement::Continue(ContinueStatement { span: start }))
-    }
-
-    /// Parse START statement - stub with INVALID KEY handling
-    fn parse_start_statement(&mut self) -> Result<Statement> {
-        let start = self.current_span();
-        self.advance(); // START
-        self.parse_io_statement_body(Keyword::EndStart)?;
-        Ok(Statement::Continue(ContinueStatement { span: start }))
-    }
-
-    /// Shared IO statement body parser: skip tokens, handle INVALID KEY clauses, END-xxx
-    fn parse_io_statement_body(&mut self, end_keyword: Keyword) -> Result<()> {
-        // Skip tokens until INVALID KEY, NOT INVALID KEY, end scope, or period
-        while !self.check(TokenKind::Period)
-            && !self.is_at_end()
-            && !self.check_keyword(Keyword::InvalidKey)
-            && !self.check_keyword(end_keyword)
-            && !(self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
-            && !self.is_statement_start()
-            && !self.is_scope_terminator()
-        {
+        // Optional FROM clause
+        let from = if self.check_keyword(Keyword::From) {
             self.advance();
-        }
+            Some(self.parse_qualified_name()?)
+        } else {
+            None
+        };
 
-        // Handle INVALID KEY / NOT INVALID KEY clauses
-        loop {
-            if self.check_keyword(Keyword::InvalidKey)
-                || (self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
-            {
-                if self.check_keyword(Keyword::Not) {
+        // Optional ADVANCING clause
+        let advancing = if self.check_keyword(Keyword::Before) || self.check_keyword(Keyword::After) {
+            let before = self.check_keyword(Keyword::Before);
+            self.advance(); // BEFORE or AFTER
+            if self.check_keyword(Keyword::Advancing) {
+                self.advance();
+            }
+            if self.check_identifier_value("PAGE") {
+                self.advance();
+                Some(WriteAdvancing::Page { before })
+            } else {
+                let count = self.parse_expression()?;
+                // Optional LINES/LINE keyword
+                if self.check_identifier_value("LINE") || self.check_identifier_value("LINES") {
                     self.advance();
                 }
+                Some(WriteAdvancing::Lines { count, before })
+            }
+        } else if self.check_keyword(Keyword::Advancing) {
+            self.advance();
+            if self.check_identifier_value("PAGE") {
+                self.advance();
+                Some(WriteAdvancing::Page { before: false })
+            } else {
+                let count = self.parse_expression()?;
+                if self.check_identifier_value("LINE") || self.check_identifier_value("LINES") {
+                    self.advance();
+                }
+                Some(WriteAdvancing::Lines { count, before: false })
+            }
+        } else {
+            None
+        };
+
+        // INVALID KEY / NOT INVALID KEY / AT EOP / NOT AT EOP handlers
+        let mut invalid_key = None;
+        let mut not_invalid_key = None;
+        let at_eop = None;
+        let not_at_eop = None;
+
+        loop {
+            if self.check_keyword(Keyword::InvalidKey) {
+                self.advance();
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
+                }
+                invalid_key = Some(self.parse_io_handler_statements(Keyword::EndWrite)?);
+            } else if self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey) {
+                self.advance(); // NOT
                 self.advance(); // INVALID
                 if self.check_keyword(Keyword::Key) {
                     self.advance();
                 }
-                // Parse statements in this clause
-                while !self.check(TokenKind::Period)
-                    && !self.is_at_end()
-                    && !self.check_keyword(Keyword::InvalidKey)
-                    && !self.check_keyword(end_keyword)
-                    && !(self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
-                {
-                    match self.parse_statement() {
-                        Ok(_stmt) => {}
-                        Err(e) => {
-                            self.errors.push(e);
-                            self.advance_to_next_sentence();
-                            break;
-                        }
-                    }
-                }
+                not_invalid_key = Some(self.parse_io_handler_statements(Keyword::EndWrite)?);
             } else {
                 break;
             }
         }
 
-        if self.check_keyword(end_keyword) {
+        if self.check_keyword(Keyword::EndWrite) {
             self.advance();
         }
 
-        Ok(())
+        let end = self.previous_span();
+        Ok(Statement::Write(WriteStatement {
+            record,
+            from,
+            advancing,
+            invalid_key,
+            not_invalid_key,
+            at_eop,
+            not_at_eop,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse REWRITE statement
+    fn parse_rewrite_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // REWRITE
+
+        let record = self.parse_qualified_name()?;
+
+        let from = if self.check_keyword(Keyword::From) {
+            self.advance();
+            Some(self.parse_qualified_name()?)
+        } else {
+            None
+        };
+
+        let mut invalid_key = None;
+        let mut not_invalid_key = None;
+
+        loop {
+            if self.check_keyword(Keyword::InvalidKey) {
+                self.advance();
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
+                }
+                invalid_key = Some(self.parse_io_handler_statements(Keyword::EndRewrite)?);
+            } else if self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey) {
+                self.advance();
+                self.advance();
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
+                }
+                not_invalid_key = Some(self.parse_io_handler_statements(Keyword::EndRewrite)?);
+            } else {
+                break;
+            }
+        }
+
+        if self.check_keyword(Keyword::EndRewrite) {
+            self.advance();
+        }
+
+        let end = self.previous_span();
+        // Reuse WriteStatement for REWRITE (same structure)
+        Ok(Statement::Write(WriteStatement {
+            record,
+            from,
+            advancing: None,
+            invalid_key,
+            not_invalid_key,
+            at_eop: None,
+            not_at_eop: None,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse DELETE statement
+    fn parse_delete_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // DELETE
+
+        let file = self.expect_identifier()?;
+
+        // Optional RECORD
+        if self.check_keyword(Keyword::Record) {
+            self.advance();
+        }
+
+        let mut invalid_key = None;
+        let mut not_invalid_key = None;
+
+        loop {
+            if self.check_keyword(Keyword::InvalidKey) {
+                self.advance();
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
+                }
+                invalid_key = Some(self.parse_io_handler_statements(Keyword::EndDelete)?);
+            } else if self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey) {
+                self.advance();
+                self.advance();
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
+                }
+                not_invalid_key = Some(self.parse_io_handler_statements(Keyword::EndDelete)?);
+            } else {
+                break;
+            }
+        }
+
+        if self.check_keyword(Keyword::EndDelete) {
+            self.advance();
+        }
+
+        let end = self.previous_span();
+        // Reuse Read structure for DELETE (file + invalid key handlers)
+        Ok(Statement::Read(ReadStatement {
+            file,
+            into: None,
+            next: false,
+            at_end: None,
+            not_at_end: None,
+            invalid_key,
+            not_invalid_key,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse START statement
+    fn parse_start_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // START
+
+        let file = self.expect_identifier()?;
+
+        // Optional KEY IS/= clause (skip details)
+        if self.check_keyword(Keyword::Key) {
+            self.advance();
+            if self.check_keyword(Keyword::Is) {
+                self.advance();
+            }
+            // Skip comparison operator and key name
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.check_keyword(Keyword::InvalidKey)
+                && !self.check_keyword(Keyword::EndStart)
+                && !(self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey))
+                && !self.is_statement_start()
+                && !self.is_scope_terminator()
+            {
+                self.advance();
+            }
+        }
+
+        let mut invalid_key = None;
+        let mut not_invalid_key = None;
+
+        loop {
+            if self.check_keyword(Keyword::InvalidKey) {
+                self.advance();
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
+                }
+                invalid_key = Some(self.parse_io_handler_statements(Keyword::EndStart)?);
+            } else if self.check_keyword(Keyword::Not) && self.peek_keyword(Keyword::InvalidKey) {
+                self.advance();
+                self.advance();
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
+                }
+                not_invalid_key = Some(self.parse_io_handler_statements(Keyword::EndStart)?);
+            } else {
+                break;
+            }
+        }
+
+        if self.check_keyword(Keyword::EndStart) {
+            self.advance();
+        }
+
+        let end = self.previous_span();
+        Ok(Statement::Read(ReadStatement {
+            file,
+            into: None,
+            next: false,
+            at_end: None,
+            not_at_end: None,
+            invalid_key,
+            not_invalid_key,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse statements within an I/O handler clause (AT END, INVALID KEY, etc.)
+    fn parse_io_handler_statements(&mut self, end_keyword: Keyword) -> Result<Vec<Statement>> {
+        let mut stmts = Vec::new();
+        while !self.check(TokenKind::Period)
+            && !self.is_at_end()
+            && !self.check_keyword(Keyword::InvalidKey)
+            && !self.check_keyword(Keyword::NotInvalidKey)
+            && !self.check_keyword(Keyword::AtEnd)
+            && !self.check_keyword(Keyword::NotAtEnd)
+            && !self.check_keyword(end_keyword)
+            && !(self.check_keyword(Keyword::Not)
+                && (self.peek_keyword(Keyword::InvalidKey) || self.peek_keyword(Keyword::AtEnd)))
+        {
+            match self.parse_statement() {
+                Ok(stmt) => stmts.push(stmt),
+                Err(e) => {
+                    self.errors.push(e);
+                    self.advance_to_next_sentence();
+                    break;
+                }
+            }
+        }
+        Ok(stmts)
     }
 
     /// Parse SEARCH statement
