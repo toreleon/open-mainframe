@@ -23,6 +23,7 @@
 pub mod copybook;
 pub mod keywords;
 pub mod preprocessor;
+pub mod replace;
 pub mod scanner;
 pub mod source;
 pub mod span;
@@ -33,6 +34,7 @@ pub use copybook::{
     apply_replacements, parse_replacing_clause, CopybookConfig, CopybookResolver, Replacement,
 };
 pub use preprocessor::Preprocessor;
+pub use replace::ReplaceProcessor;
 pub use keywords::{is_keyword, lookup_keyword};
 pub use scanner::scan;
 pub use source::{Indicator, SourceFile, SourceFormat, SourceLine, SourceManager};
