@@ -20,6 +20,7 @@
 //! assert!(errors.is_empty());
 //! ```
 
+pub mod conditional;
 pub mod copybook;
 pub mod keywords;
 pub mod preprocessor;
@@ -30,6 +31,7 @@ pub mod span;
 pub mod token;
 
 // Re-exports
+pub use conditional::{ConditionalProcessor, SourceFormatChange, SourceFormatKind};
 pub use copybook::{
     apply_replacements, parse_replacing_clause, CopybookConfig, CopybookResolver, Replacement,
 };

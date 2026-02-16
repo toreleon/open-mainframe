@@ -33,9 +33,10 @@ pub mod xml_json;
 pub use ast::*;
 pub use error::CobolError;
 pub use lexer::{
-    apply_replacements, parse_replacing_clause, scan, CopybookConfig, CopybookResolver, FileId,
-    Indicator, Keyword, Location, Preprocessor, ReplaceProcessor, Replacement, SourceFile,
-    SourceFormat, SourceLine, SourceManager, Span, Token, TokenKind,
+    apply_replacements, parse_replacing_clause, scan, ConditionalProcessor, CopybookConfig,
+    CopybookResolver, FileId, Indicator, Keyword, Location, Preprocessor, ReplaceProcessor,
+    Replacement, SourceFile, SourceFormat, SourceFormatChange, SourceFormatKind, SourceLine,
+    SourceManager, Span, Token, TokenKind,
 };
 pub use parser::Parser;
 pub use semantic::{
