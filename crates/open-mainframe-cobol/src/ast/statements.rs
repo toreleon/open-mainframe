@@ -422,6 +422,8 @@ pub enum WriteAdvancing {
 pub struct StopRunStatement {
     /// Optional return code.
     pub return_code: Option<Expression>,
+    /// If true, this is `STOP literal` (display and pause), not `STOP RUN`.
+    pub is_literal: bool,
     /// Source span.
     pub span: Span,
 }
@@ -991,4 +993,76 @@ pub struct XmlNamespace {
     pub uri: Expression,
     /// Optional namespace prefix.
     pub prefix: Option<Expression>,
+}
+
+/// ALLOCATE statement.
+///
+/// `ALLOCATE data-name [CHARACTERS count] [RETURNING pointer]`
+/// or `ALLOCATE data-name [INITIALIZED]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct AllocateStatement {
+    /// Data item name to allocate.
+    pub data_name: QualifiedName,
+    /// Optional CHARACTERS count expression.
+    pub characters: Option<Expression>,
+    /// Optional RETURNING pointer.
+    pub returning: Option<QualifiedName>,
+    /// Whether INITIALIZED was specified.
+    pub initialized: bool,
+    /// Source span.
+    pub span: Span,
+}
+
+/// FREE statement.
+///
+/// `FREE pointer-name ...`
+#[derive(Debug, Clone, PartialEq)]
+pub struct FreeStatement {
+    /// Pointer data item names to free.
+    pub pointers: Vec<QualifiedName>,
+    /// Source span.
+    pub span: Span,
+}
+
+/// ENTRY statement.
+///
+/// `ENTRY 'literal' [USING parameter ...]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryStatement {
+    /// The entry point literal name.
+    pub literal: String,
+    /// USING parameters.
+    pub using: Vec<QualifiedName>,
+    /// Source span.
+    pub span: Span,
+}
+
+/// ALTER statement.
+///
+/// `ALTER paragraph-1 TO [PROCEED TO] paragraph-2`
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlterStatement {
+    /// Source paragraph (containing the GO TO to modify).
+    pub source: String,
+    /// Target paragraph (new GO TO destination).
+    pub target: String,
+    /// Source span.
+    pub span: Span,
+}
+
+/// INVOKE statement.
+///
+/// `INVOKE object 'method' [USING args ...] [RETURNING result]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvokeStatement {
+    /// Object identifier.
+    pub object: QualifiedName,
+    /// Method name (string literal or identifier).
+    pub method: String,
+    /// USING arguments.
+    pub using: Vec<Expression>,
+    /// RETURNING result.
+    pub returning: Option<QualifiedName>,
+    /// Source span.
+    pub span: Span,
 }

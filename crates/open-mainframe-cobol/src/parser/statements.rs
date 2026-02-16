@@ -299,22 +299,32 @@ impl super::Parser {
         let start = self.current_span();
         self.advance(); // STOP
 
-        self.expect_keyword(Keyword::Run)?;
-
-        let return_code = if !self.check(TokenKind::Period) && !self.is_statement_start() {
-            Some(self.parse_expression()?)
+        // STOP RUN [return-code] or STOP literal
+        if self.check_keyword(Keyword::Run) {
+            self.advance(); // RUN
+            let return_code = if !self.check(TokenKind::Period) && !self.is_statement_start() {
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+            self.skip_if(TokenKind::Period);
+            let end = self.previous_span();
+            Ok(Statement::StopRun(StopRunStatement {
+                return_code,
+                is_literal: false,
+                span: start.extend(end),
+            }))
         } else {
-            None
-        };
-
-        self.skip_if(TokenKind::Period);
-
-        let end = self.previous_span();
-
-        Ok(Statement::StopRun(StopRunStatement {
-            return_code,
-            span: start.extend(end),
-        }))
+            // STOP literal — display literal and pause
+            let literal = self.parse_expression()?;
+            self.skip_if(TokenKind::Period);
+            let end = self.previous_span();
+            Ok(Statement::StopRun(StopRunStatement {
+                return_code: Some(literal),
+                is_literal: true,
+                span: start.extend(end),
+            }))
+        }
     }
 
     pub(super) fn parse_goback_statement(&mut self) -> Result<Statement> {
@@ -3415,5 +3425,214 @@ impl super::Parser {
         }
 
         Ok((on_exception, not_on_exception))
+    }
+
+    // ========================================================================
+    // ALLOCATE / FREE
+    // ========================================================================
+
+    /// Parse `ALLOCATE data-name [CHARACTERS count] [RETURNING pointer] [INITIALIZED]`
+    pub(super) fn parse_allocate_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // ALLOCATE
+
+        let data_name = self.parse_qualified_name()?;
+
+        // Optional CHARACTERS count
+        let characters = if self.check_keyword(Keyword::Characters) {
+            self.advance(); // CHARACTERS
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        // Optional RETURNING
+        let returning = if self.check_keyword(Keyword::Returning) {
+            self.advance(); // RETURNING
+            Some(self.parse_qualified_name()?)
+        } else {
+            None
+        };
+
+        // Optional INITIALIZED
+        let initialized = if self.check_keyword(Keyword::Initialized) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        self.skip_if(TokenKind::Period);
+        let end = self.previous_span();
+
+        Ok(Statement::Allocate(AllocateStatement {
+            data_name,
+            characters,
+            returning,
+            initialized,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse `FREE pointer-name ...`
+    pub(super) fn parse_free_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // FREE
+
+        let mut pointers = Vec::new();
+        while !self.check(TokenKind::Period) && !self.is_at_end() && !self.is_statement_start() {
+            pointers.push(self.parse_qualified_name()?);
+        }
+
+        self.skip_if(TokenKind::Period);
+        let end = self.previous_span();
+
+        Ok(Statement::Free(FreeStatement {
+            pointers,
+            span: start.extend(end),
+        }))
+    }
+
+    // ========================================================================
+    // ENTRY / ALTER / INVOKE
+    // ========================================================================
+
+    /// Parse `ENTRY 'literal' [USING parameters ...]`
+    pub(super) fn parse_entry_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // ENTRY
+
+        // Expect a string literal for the entry point name
+        let literal = match &self.current().kind {
+            TokenKind::StringLiteral(s) => {
+                let name = s.clone();
+                self.advance();
+                name
+            }
+            _ => {
+                return Err(CobolError::ParseError {
+                    message: format!(
+                        "Expected string literal after ENTRY, found {:?}",
+                        self.current().kind
+                    ),
+                });
+            }
+        };
+
+        // Optional USING parameters
+        let mut using = Vec::new();
+        if self.check_keyword(Keyword::Using) {
+            self.advance(); // USING
+            while !self.check(TokenKind::Period) && !self.is_at_end() && !self.is_statement_start() {
+                // Skip BY REFERENCE/CONTENT/VALUE
+                if self.check_keyword(Keyword::Reference) || self.check_keyword(Keyword::Content) {
+                    self.advance();
+                    continue;
+                }
+                if self.check_keyword(Keyword::By) {
+                    self.advance();
+                    continue;
+                }
+                using.push(self.parse_qualified_name()?);
+            }
+        }
+
+        self.skip_if(TokenKind::Period);
+        let end = self.previous_span();
+
+        Ok(Statement::Entry(EntryStatement {
+            literal,
+            using,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse `ALTER paragraph-1 TO [PROCEED TO] paragraph-2`
+    pub(super) fn parse_alter_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // ALTER
+
+        let source = self.expect_identifier()?;
+
+        self.expect_keyword(Keyword::To)?;
+
+        // Optional PROCEED TO
+        if self.check_keyword(Keyword::Proceed) {
+            self.advance(); // PROCEED
+            self.expect_keyword(Keyword::To)?;
+        }
+
+        let target = self.expect_identifier()?;
+
+        self.skip_if(TokenKind::Period);
+        let end = self.previous_span();
+
+        Ok(Statement::Alter(AlterStatement {
+            source,
+            target,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse `INVOKE object method [USING args ...] [RETURNING result]`
+    pub(super) fn parse_invoke_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // INVOKE
+
+        let object = self.parse_qualified_name()?;
+
+        // Method name — string literal or identifier
+        let method = match &self.current().kind {
+            TokenKind::StringLiteral(s) => {
+                let m = s.clone();
+                self.advance();
+                m
+            }
+            TokenKind::Identifier(s) => {
+                let m = s.clone();
+                self.advance();
+                m
+            }
+            _ => {
+                return Err(CobolError::ParseError {
+                    message: format!(
+                        "Expected method name after INVOKE object, found {:?}",
+                        self.current().kind
+                    ),
+                });
+            }
+        };
+
+        // Optional USING
+        let mut using = Vec::new();
+        if self.check_keyword(Keyword::Using) {
+            self.advance(); // USING
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.is_statement_start()
+                && !self.check_keyword(Keyword::Returning)
+            {
+                using.push(self.parse_expression()?);
+            }
+        }
+
+        // Optional RETURNING
+        let returning = if self.check_keyword(Keyword::Returning) {
+            self.advance(); // RETURNING
+            Some(self.parse_qualified_name()?)
+        } else {
+            None
+        };
+
+        self.skip_if(TokenKind::Period);
+        let end = self.previous_span();
+
+        Ok(Statement::Invoke(InvokeStatement {
+            object,
+            method,
+            using,
+            returning,
+            span: start.extend(end),
+        }))
     }
 }

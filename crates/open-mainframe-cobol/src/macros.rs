@@ -347,6 +347,8 @@ macro_rules! for_all_keywords {
                 Suppress        => "SUPPRESS",
                 Detail          => "DETAIL",
                 Encoding        => "ENCODING",
+                Initialized     => "INITIALIZED",
+                Proceed         => "PROCEED",
                 Namespace       => "NAMESPACE",
                 Processing      => "PROCESSING",
                 Validating      => "VALIDATING",
@@ -425,6 +427,11 @@ macro_rules! for_all_statement_variants {
             JsonParse(JsonParseStatement),
             XmlGenerate(XmlGenerateStatement),
             XmlParse(XmlParseStatement),
+            Allocate(AllocateStatement),
+            Free(FreeStatement),
+            Entry(EntryStatement),
+            Alter(AlterStatement),
+            Invoke(InvokeStatement),
         }
     };
 }
@@ -484,6 +491,11 @@ macro_rules! for_parse_dispatch {
             Return      => parse_return_statement,
             Json        => parse_json_statement,
             Xml         => parse_xml_statement,
+            Allocate    => parse_allocate_statement,
+            Free        => parse_free_statement,
+            Entry       => parse_entry_statement,
+            Alter       => parse_alter_statement,
+            Invoke      => parse_invoke_statement,
         }
     };
 }

@@ -425,6 +425,32 @@ pub enum SimpleStatement {
         /// Processing procedure paragraph name.
         processing_procedure: String,
     },
+    /// ALLOCATE: obtain dynamic storage.
+    Allocate {
+        /// Data item to allocate.
+        data_name: String,
+        /// Number of characters to allocate (if specified).
+        characters: Option<i64>,
+        /// Pointer to receive the address.
+        returning: Option<String>,
+    },
+    /// FREE: release dynamic storage.
+    Free {
+        /// Pointer data item names to free.
+        pointers: Vec<String>,
+    },
+    /// ENTRY: register alternate entry point (no-op at runtime dispatch level).
+    Entry {
+        /// Entry point literal name.
+        literal: String,
+    },
+    /// ALTER: change GO TO target at runtime.
+    Alter {
+        /// Source paragraph.
+        source: String,
+        /// New target paragraph.
+        target: String,
+    },
 }
 
 /// INSPECT FOR clause (tallying).
@@ -1678,6 +1704,45 @@ fn execute_statement_impl(
             if let Some(para) = program.paragraphs.get(&proc_upper) {
                 execute_statements(&para.clone(), program, env)?;
             }
+        }
+
+        SimpleStatement::Allocate { data_name, characters, returning } => {
+            let size = characters.unwrap_or(256) as usize;
+            let buffer = " ".repeat(size);
+            let data_upper = data_name.to_uppercase();
+            env.set(&data_upper, CobolValue::Alphanumeric(buffer))?;
+
+            if let Some(ref ptr_name) = returning {
+                // Set the pointer to the data name (symbolic reference)
+                env.set(ptr_name, CobolValue::Alphanumeric(data_upper))?;
+            }
+        }
+
+        SimpleStatement::Free { pointers } => {
+            for ptr in pointers {
+                let ptr_upper = ptr.to_uppercase();
+                // Get the target name if it's a pointer
+                let target = env.get_string(&ptr_upper);
+                if !target.is_empty() {
+                    // Clear the allocated storage
+                    env.set(&target, CobolValue::Alphanumeric(String::new()))?;
+                }
+                // Set pointer to NULL (empty)
+                env.set(&ptr_upper, CobolValue::Alphanumeric(String::new()))?;
+            }
+        }
+
+        SimpleStatement::Entry { literal: _ } => {
+            // ENTRY registers an alternate entry point — this is handled at
+            // the program/call dispatch level, not during statement execution.
+            // At runtime, encountering ENTRY inline is a no-op (fall-through).
+        }
+
+        SimpleStatement::Alter { source, target } => {
+            // ALTER modifies the GO TO target of a paragraph at runtime.
+            // Store the altered target in a special runtime variable.
+            let alter_key = format!("__ALTER__{}", source.to_uppercase());
+            env.set(&alter_key, CobolValue::Alphanumeric(target.to_uppercase()))?;
         }
     }
 

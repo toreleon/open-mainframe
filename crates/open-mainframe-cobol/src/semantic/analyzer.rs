@@ -371,7 +371,21 @@ impl SemanticAnalyzer {
             | Statement::JsonGenerate(_)
             | Statement::JsonParse(_)
             | Statement::XmlGenerate(_)
-            | Statement::XmlParse(_) => {}
+            | Statement::XmlParse(_)
+            | Statement::Allocate(_)
+            | Statement::Free(_)
+            | Statement::Entry(_)
+            | Statement::Invoke(_) => {}
+            Statement::Alter(s) => {
+                // Emit obsolete feature warning
+                self.diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    code: "W-OBSOLETE".to_string(),
+                    message: "ALTER is an obsolete feature; consider restructuring control flow".to_string(),
+                    span: s.span,
+                    suggestion: Some("Replace ALTER/GO TO with structured PERFORM or IF/EVALUATE".to_string()),
+                });
+            }
         }
     }
 
