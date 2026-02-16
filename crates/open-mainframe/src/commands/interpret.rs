@@ -10,12 +10,13 @@ use std::sync::{Arc, Mutex};
 use miette::{IntoDiagnostic, Result, WrapErr};
 
 use open_mainframe_cobol::ast::{
-    DataItem, DataItemName, Expression, LiteralKind, ProcedureBody, Program, Statement,
+    DataItem, DataItemName, Expression, LiteralKind, ParameterMode, ProcedureBody, Program,
+    Statement,
 };
 use open_mainframe_cobol::{scan, FileId, SourceFile, SourceFormat, CopybookConfig, Preprocessor};
 use open_mainframe_runtime::interpreter::{
-    DataItemMeta, Environment, SimpleBinaryOp, SimpleCompareOp, SimpleCondition, SimpleExpr,
-    SimpleProgram, SimpleStatement,
+    CallParam, DataItemMeta, Environment, SimpleBinaryOp, SimpleCompareOp, SimpleCondition,
+    SimpleExpr, SimpleProgram, SimpleStatement,
 };
 
 use crate::output::{InterpretOutput, DiagnosticEntry, DiagnosticSeverity, OutputFormat, print_json};
@@ -1146,7 +1147,8 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
         }
 
         Statement::GoBack(g) => {
-            // GOBACK is semantically equivalent to STOP RUN
+            // GOBACK returns control to the calling program.
+            // If RETURNING is specified, set RETURN-CODE before returning.
             let return_code = g.returning.as_ref().and_then(|e| {
                 if let Expression::Literal(l) = e {
                     if let LiteralKind::Integer(n) = l.kind {
@@ -1155,12 +1157,20 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
                 }
                 None
             });
-            Ok(Some(SimpleStatement::StopRun { return_code }))
+            Ok(Some(SimpleStatement::GoBack { return_code }))
         }
 
         Statement::Continue(_) => Ok(None),
         Statement::Exit(_) => Ok(None),
-        Statement::Cancel(_) => Ok(None), // No-op in interpreter
+        Statement::Cancel(c) => {
+            // CANCEL removes programs from the registry
+            if let Some(first_prog) = c.programs.first() {
+                let program = convert_expr(first_prog)?;
+                Ok(Some(SimpleStatement::Cancel { program }))
+            } else {
+                Ok(None)
+            }
+        }
 
         Statement::ExecCics(e) => {
             let options = e
@@ -1289,7 +1299,12 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
             let program = convert_expr(&c.program)?;
             let using = c.using.iter().filter_map(|a| {
                 if let Expression::Variable(q) = &a.value {
-                    Some(q.name.clone())
+                    let name = q.name.clone();
+                    Some(match a.mode {
+                        ParameterMode::Reference => CallParam::ByReference(name),
+                        ParameterMode::Content => CallParam::ByContent(name),
+                        ParameterMode::Value => CallParam::ByValue(name),
+                    })
                 } else {
                     None
                 }
