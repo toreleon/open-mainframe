@@ -24,9 +24,11 @@ use miette::Result;
 mod commands;
 pub mod config;
 mod error;
+pub mod output;
 
 pub use config::Config;
 pub use error::CliError;
+use output::OutputFormat;
 
 #[derive(Parser, Debug)]
 #[command(name = "open-mainframe")]
@@ -35,6 +37,10 @@ struct Cli {
     /// Enable verbose output
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// Output format (text or json)
+    #[arg(long, global = true, default_value = "text")]
+    format: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -233,6 +239,8 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    let fmt = OutputFormat::from_str(&cli.format);
+
     // Initialize tracing — for CICS TUI mode, redirect logs to a file so they
     // don't corrupt the terminal display.
     let filter = if cli.verbose { "debug" } else { "info" };
@@ -240,6 +248,7 @@ fn main() -> Result<()> {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(filter));
 
     let is_tui = matches!(cli.command, Commands::Cics { .. });
+    let is_json = fmt.is_json();
     if is_tui {
         let log_path = std::env::temp_dir().join("open-mainframe-cics.log");
         if let Ok(log_file) = std::fs::File::create(&log_path) {
@@ -254,6 +263,12 @@ fn main() -> Result<()> {
                 .with_env_filter(env_filter)
                 .init();
         }
+    } else if is_json {
+        // When JSON output is requested, send tracing to stderr to keep stdout clean
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(std::io::stderr)
+            .init();
     } else {
         tracing_subscriber::fmt()
             .with_env_filter(env_filter)
@@ -268,21 +283,21 @@ fn main() -> Result<()> {
             emit_asm,
             emit_llvm,
             include_paths,
-        } => commands::compile::run(input, output, optimize, emit_asm, emit_llvm, include_paths),
+        } => commands::compile::run(input, output, optimize, emit_asm, emit_llvm, include_paths, fmt),
         Commands::Run {
             input,
             program_dir,
             dataset_dir,
             work_dir,
-        } => commands::run::run(input, program_dir, dataset_dir, work_dir),
+        } => commands::run::run(input, program_dir, dataset_dir, work_dir, fmt),
         Commands::Check {
             input,
             include_paths,
-        } => commands::check::run(input, include_paths),
-        Commands::ParseJcl { input } => commands::parse_jcl::run(input),
+        } => commands::check::run(input, include_paths, fmt),
+        Commands::ParseJcl { input } => commands::parse_jcl::run(input, fmt),
         Commands::Lex { input, format } => commands::lex::run(input, format),
         Commands::Interpret { input, include_paths, data_files, eibcalen, eibaid, set_vars } => {
-            commands::interpret::interpret(input, include_paths, data_files, eibcalen, eibaid, set_vars)
+            commands::interpret::interpret(input, include_paths, data_files, eibcalen, eibaid, set_vars, fmt)
         }
         Commands::Cics { input, include_paths, data_files, bms_dir, theme, transid_map } => {
             commands::cics::run_session(input, include_paths, data_files, bms_dir, theme, transid_map)

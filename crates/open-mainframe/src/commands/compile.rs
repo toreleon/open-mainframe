@@ -4,6 +4,10 @@ use std::path::PathBuf;
 
 use miette::{IntoDiagnostic, Result, WrapErr};
 
+use crate::output::{
+    CompileOutput, DiagnosticEntry, DiagnosticSeverity, DiagnosticSummary, OutputFormat, print_json,
+};
+
 /// Run the compile command.
 pub fn run(
     input: PathBuf,
@@ -12,6 +16,7 @@ pub fn run(
     emit_asm: bool,
     emit_llvm: bool,
     _include_paths: Vec<PathBuf>,
+    format: OutputFormat,
 ) -> Result<()> {
     // Read source file
     let source = std::fs::read_to_string(&input)
@@ -44,6 +49,34 @@ pub fn run(
     let (tokens, lex_errors) = open_mainframe_cobol::scan(&source_file);
 
     if !lex_errors.is_empty() {
+        if format.is_json() {
+            let diagnostics: Vec<DiagnosticEntry> = lex_errors
+                .iter()
+                .map(|err| DiagnosticEntry {
+                    severity: DiagnosticSeverity::Error,
+                    message: err.to_string(),
+                    file: Some(input.display().to_string()),
+                    line: None,
+                    col: None,
+                })
+                .collect();
+            let output = CompileOutput {
+                status: "error".to_string(),
+                program_id: None,
+                diagnostics,
+                summary: DiagnosticSummary {
+                    errors: lex_errors.len(),
+                    warnings: 0,
+                    infos: 0,
+                },
+                symbols: None,
+            };
+            print_json(&output);
+            return Err(miette::miette!(
+                "Lexical analysis failed with {} error(s)",
+                lex_errors.len()
+            ));
+        }
         for err in &lex_errors {
             tracing::error!("Lexer error: {}", err);
         }
@@ -60,6 +93,34 @@ pub fn run(
     let (program_opt, parse_errors) = parser.parse_program();
 
     if !parse_errors.is_empty() {
+        if format.is_json() {
+            let diagnostics: Vec<DiagnosticEntry> = parse_errors
+                .iter()
+                .map(|err| DiagnosticEntry {
+                    severity: DiagnosticSeverity::Error,
+                    message: err.to_string(),
+                    file: Some(input.display().to_string()),
+                    line: None,
+                    col: None,
+                })
+                .collect();
+            let output = CompileOutput {
+                status: "error".to_string(),
+                program_id: None,
+                diagnostics,
+                summary: DiagnosticSummary {
+                    errors: parse_errors.len(),
+                    warnings: 0,
+                    infos: 0,
+                },
+                symbols: None,
+            };
+            print_json(&output);
+            return Err(miette::miette!(
+                "Parse failed with {} error(s)",
+                parse_errors.len()
+            ));
+        }
         for err in &parse_errors {
             tracing::error!("Parse error: {}", err);
         }
@@ -75,6 +136,65 @@ pub fn run(
 
     // Semantic analysis
     let semantic_result = open_mainframe_cobol::analyze(&program);
+
+    if format.is_json() {
+        let diagnostics: Vec<DiagnosticEntry> = semantic_result
+            .diagnostics
+            .iter()
+            .map(|diag| {
+                let severity = match diag.severity {
+                    open_mainframe_cobol::Severity::Error => DiagnosticSeverity::Error,
+                    open_mainframe_cobol::Severity::Warning => DiagnosticSeverity::Warning,
+                    open_mainframe_cobol::Severity::Info => DiagnosticSeverity::Info,
+                };
+                DiagnosticEntry {
+                    severity,
+                    message: diag.message.clone(),
+                    file: Some(input.display().to_string()),
+                    line: None,
+                    col: None,
+                }
+            })
+            .collect();
+
+        let errors = diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, DiagnosticSeverity::Error))
+            .count();
+        let warnings = diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, DiagnosticSeverity::Warning))
+            .count();
+        let infos = diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, DiagnosticSeverity::Info))
+            .count();
+
+        let output = CompileOutput {
+            status: if semantic_result.has_errors {
+                "error".to_string()
+            } else {
+                "success".to_string()
+            },
+            program_id: Some(program.identification.program_id.name.clone()),
+            diagnostics,
+            summary: DiagnosticSummary {
+                errors,
+                warnings,
+                infos,
+            },
+            symbols: Some(semantic_result.symbol_table.len()),
+        };
+        print_json(&output);
+
+        if semantic_result.has_errors {
+            return Err(miette::miette!("Semantic analysis failed with errors"));
+        }
+
+        return Ok(());
+    }
+
+    // Text output (original behavior)
     if !semantic_result.diagnostics.is_empty() {
         for diag in &semantic_result.diagnostics {
             match diag.severity {

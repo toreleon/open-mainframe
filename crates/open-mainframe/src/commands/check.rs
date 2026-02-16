@@ -4,8 +4,12 @@ use std::path::PathBuf;
 
 use miette::{IntoDiagnostic, Result, WrapErr};
 
+use crate::output::{
+    CompileOutput, DiagnosticEntry, DiagnosticSeverity, DiagnosticSummary, OutputFormat, print_json,
+};
+
 /// Run the syntax check command.
-pub fn run(input: PathBuf, include_paths: Vec<PathBuf>) -> Result<()> {
+pub fn run(input: PathBuf, include_paths: Vec<PathBuf>, format: OutputFormat) -> Result<()> {
     // Read source file
     let source = std::fs::read_to_string(&input)
         .into_diagnostic()
@@ -34,7 +38,9 @@ pub fn run(input: PathBuf, include_paths: Vec<PathBuf>) -> Result<()> {
         miette::miette!("Preprocessing failed: {}", e)
     })?;
 
-    println!("✓ Preprocessor: copybooks expanded");
+    if !format.is_json() {
+        println!("✓ Preprocessor: copybooks expanded");
+    }
 
     // Create source file from preprocessed source
     let source_file = open_mainframe_cobol::SourceFile::from_text(
@@ -47,6 +53,34 @@ pub fn run(input: PathBuf, include_paths: Vec<PathBuf>) -> Result<()> {
     let (tokens, lex_errors) = open_mainframe_cobol::scan(&source_file);
 
     if !lex_errors.is_empty() {
+        if format.is_json() {
+            let diagnostics: Vec<DiagnosticEntry> = lex_errors
+                .iter()
+                .map(|err| DiagnosticEntry {
+                    severity: DiagnosticSeverity::Error,
+                    message: err.to_string(),
+                    file: Some(input.display().to_string()),
+                    line: None,
+                    col: None,
+                })
+                .collect();
+            let output = CompileOutput {
+                status: "error".to_string(),
+                program_id: None,
+                diagnostics,
+                summary: DiagnosticSummary {
+                    errors: lex_errors.len(),
+                    warnings: 0,
+                    infos: 0,
+                },
+                symbols: None,
+            };
+            print_json(&output);
+            return Err(miette::miette!(
+                "Lexical analysis failed with {} error(s)",
+                lex_errors.len()
+            ));
+        }
         for err in &lex_errors {
             println!("Lexer error: {}", err);
         }
@@ -56,13 +90,43 @@ pub fn run(input: PathBuf, include_paths: Vec<PathBuf>) -> Result<()> {
         ));
     }
 
-    println!("✓ Lexical analysis: {} tokens", tokens.len());
+    if !format.is_json() {
+        println!("✓ Lexical analysis: {} tokens", tokens.len());
+    }
 
     // Parse the source
     let parser = open_mainframe_cobol::Parser::new(tokens);
     let (program_opt, parse_errors) = parser.parse_program();
 
     if !parse_errors.is_empty() {
+        if format.is_json() {
+            let diagnostics: Vec<DiagnosticEntry> = parse_errors
+                .iter()
+                .map(|err| DiagnosticEntry {
+                    severity: DiagnosticSeverity::Error,
+                    message: err.to_string(),
+                    file: Some(input.display().to_string()),
+                    line: None,
+                    col: None,
+                })
+                .collect();
+            let output = CompileOutput {
+                status: "error".to_string(),
+                program_id: None,
+                diagnostics,
+                summary: DiagnosticSummary {
+                    errors: parse_errors.len(),
+                    warnings: 0,
+                    infos: 0,
+                },
+                symbols: None,
+            };
+            print_json(&output);
+            return Err(miette::miette!(
+                "Parse failed with {} error(s)",
+                parse_errors.len()
+            ));
+        }
         for err in &parse_errors {
             println!("Parse error: {}", err);
         }
@@ -74,8 +138,10 @@ pub fn run(input: PathBuf, include_paths: Vec<PathBuf>) -> Result<()> {
 
     let program = program_opt.ok_or_else(|| miette::miette!("Failed to parse program"))?;
 
-    println!("✓ Syntax analysis: parsed successfully");
-    println!("  Program ID: {:?}", program.identification.program_id);
+    if !format.is_json() {
+        println!("✓ Syntax analysis: parsed successfully");
+        println!("  Program ID: {:?}", program.identification.program_id);
+    }
 
     // Semantic analysis
     let semantic_result = open_mainframe_cobol::analyze(&program);
@@ -96,6 +162,54 @@ pub fn run(input: PathBuf, include_paths: Vec<PathBuf>) -> Result<()> {
         .filter(|d| matches!(d.severity, open_mainframe_cobol::Severity::Info))
         .collect();
 
+    if format.is_json() {
+        let diagnostics: Vec<DiagnosticEntry> = semantic_result
+            .diagnostics
+            .iter()
+            .map(|diag| {
+                let severity = match diag.severity {
+                    open_mainframe_cobol::Severity::Error => DiagnosticSeverity::Error,
+                    open_mainframe_cobol::Severity::Warning => DiagnosticSeverity::Warning,
+                    open_mainframe_cobol::Severity::Info => DiagnosticSeverity::Info,
+                };
+                DiagnosticEntry {
+                    severity,
+                    message: diag.message.clone(),
+                    file: Some(input.display().to_string()),
+                    line: None,
+                    col: None,
+                }
+            })
+            .collect();
+
+        let output = CompileOutput {
+            status: if semantic_result.has_errors {
+                "error".to_string()
+            } else {
+                "success".to_string()
+            },
+            program_id: Some(program.identification.program_id.name.clone()),
+            diagnostics,
+            summary: DiagnosticSummary {
+                errors: errors.len(),
+                warnings: warnings.len(),
+                infos: infos.len(),
+            },
+            symbols: Some(semantic_result.symbol_table.len()),
+        };
+        print_json(&output);
+
+        return if semantic_result.has_errors {
+            Err(miette::miette!(
+                "Check failed with {} error(s)",
+                errors.len()
+            ))
+        } else {
+            Ok(())
+        };
+    }
+
+    // Text output (original behavior)
     if semantic_result.has_errors {
         println!("✗ Semantic analysis failed:");
     } else {

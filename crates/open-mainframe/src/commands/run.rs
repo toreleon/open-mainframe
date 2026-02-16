@@ -4,12 +4,15 @@ use std::path::PathBuf;
 
 use miette::{IntoDiagnostic, Result, WrapErr};
 
+use crate::output::{JclStepOutput, OutputFormat, RunOutput, print_json};
+
 /// Run the JCL job execution command.
 pub fn run(
     input: PathBuf,
     program_dir: Option<PathBuf>,
     dataset_dir: Option<PathBuf>,
     work_dir: Option<PathBuf>,
+    format: OutputFormat,
 ) -> Result<()> {
     // Read JCL file
     let source = std::fs::read_to_string(&input)
@@ -41,7 +44,55 @@ pub fn run(
     let result = open_mainframe_jcl::run_with_config(&source, config)
         .map_err(|e| miette::miette!("Job execution error: {}", e))?;
 
-    // Print results
+    if format.is_json() {
+        let steps: Vec<JclStepOutput> = result
+            .steps
+            .iter()
+            .map(|step| {
+                let stdout_lines: Vec<String> = if step.stdout.is_empty() {
+                    vec![]
+                } else {
+                    step.stdout.lines().map(String::from).collect()
+                };
+                let stderr_lines: Vec<String> = if step.stderr.is_empty() {
+                    vec![]
+                } else {
+                    step.stderr.lines().map(String::from).collect()
+                };
+                JclStepOutput {
+                    name: step.name.clone().unwrap_or_else(|| "UNNAMED".to_string()),
+                    return_code: step.return_code,
+                    success: step.success,
+                    stdout: stdout_lines,
+                    stderr: stderr_lines,
+                }
+            })
+            .collect();
+
+        let output = RunOutput {
+            status: if result.success {
+                "success".to_string()
+            } else {
+                "error".to_string()
+            },
+            job_name: result.name.clone(),
+            return_code: result.return_code,
+            steps,
+        };
+        print_json(&output);
+
+        return if result.success {
+            Ok(())
+        } else {
+            Err(miette::miette!(
+                "Job {} failed with RC={}",
+                result.name,
+                result.return_code
+            ))
+        };
+    }
+
+    // Text output (original behavior)
     println!();
     println!("═══════════════════════════════════════════════════════════════");
     println!(

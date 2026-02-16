@@ -364,3 +364,99 @@ fn test_completions() {
     assert!(success);
     assert!(stdout.contains("open-mainframe"));
 }
+
+// ─── JSON Output Tests (E-AV-002) ───────────────────────────────────────
+
+#[test]
+fn test_check_json_output() {
+    let (stdout, _, success) = run_cli(&[
+        "--format", "json",
+        "check",
+        fixture("hello.cbl").to_str().unwrap(),
+    ]);
+    assert!(success, "Check --format json failed");
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .expect(&format!("Invalid JSON output: {}", stdout));
+    assert_eq!(json["status"], "success");
+    assert!(json["program_id"].is_string());
+    assert!(json["summary"]["errors"].is_number());
+    assert_eq!(json["summary"]["errors"], 0);
+}
+
+#[test]
+fn test_compile_json_output() {
+    let (stdout, _, success) = run_cli(&[
+        "--format", "json",
+        "compile",
+        fixture("hello.cbl").to_str().unwrap(),
+    ]);
+    assert!(success, "Compile --format json failed");
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .expect(&format!("Invalid JSON output: {}", stdout));
+    assert_eq!(json["status"], "success");
+    assert!(json["program_id"].is_string());
+    assert!(json["diagnostics"].is_array());
+    assert!(json["summary"].is_object());
+}
+
+#[test]
+fn test_interpret_json_output() {
+    let (stdout, _, success) = run_cli(&[
+        "--format", "json",
+        "interpret",
+        fixture("hello.cbl").to_str().unwrap(),
+    ]);
+    assert!(success, "Interpret --format json failed");
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .expect(&format!("Invalid JSON output: {}", stdout));
+    assert_eq!(json["status"], "success");
+    assert!(json["output"].is_array());
+    let output_lines = json["output"].as_array().unwrap();
+    let has_hello = output_lines.iter().any(|l| l.as_str().unwrap_or("").contains("Hello, World!"));
+    assert!(has_hello, "Expected 'Hello, World!' in output: {:?}", output_lines);
+    assert_eq!(json["return_code"], 0);
+}
+
+#[test]
+fn test_interpret_json_compute() {
+    let (stdout, _, success) = run_cli(&[
+        "--format", "json",
+        "interpret",
+        fixture("compute.cbl").to_str().unwrap(),
+    ]);
+    assert!(success, "Interpret --format json failed for compute");
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .expect(&format!("Invalid JSON output: {}", stdout));
+    assert_eq!(json["status"], "success");
+    let output_lines = json["output"].as_array().unwrap();
+    let has_sum = output_lines.iter().any(|l| l.as_str().unwrap_or("").contains("SUM:"));
+    assert!(has_sum, "Expected 'SUM:' in output: {:?}", output_lines);
+}
+
+#[test]
+fn test_text_format_unchanged() {
+    // Verify that --format text produces output containing the same COBOL output
+    // (timestamps from tracing will differ between runs, so compare content not exact strings)
+    let (stdout_default, _, success1) = run_cli(&[
+        "interpret",
+        fixture("hello.cbl").to_str().unwrap(),
+    ]);
+    let (stdout_text, _, success2) = run_cli(&[
+        "--format", "text",
+        "interpret",
+        fixture("hello.cbl").to_str().unwrap(),
+    ]);
+    assert!(success1);
+    assert!(success2);
+    assert!(stdout_default.contains("Hello, World!"), "Default output should contain program output");
+    assert!(stdout_text.contains("Hello, World!"), "Text format should contain program output");
+    // JSON format should NOT appear in text mode
+    assert!(!stdout_text.contains(r#""status""#), "Text format should not contain JSON");
+}
+
+#[test]
+fn test_help_shows_format_flag() {
+    let (stdout, _, success) = run_cli(&["--help"]);
+    assert!(success);
+    assert!(stdout.contains("--format"), "Help should show --format flag");
+}

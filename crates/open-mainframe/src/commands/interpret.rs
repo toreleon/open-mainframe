@@ -3,7 +3,9 @@
 //! Runs COBOL programs directly using the tree-walking interpreter.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use miette::{IntoDiagnostic, Result, WrapErr};
 
@@ -15,6 +17,8 @@ use open_mainframe_runtime::interpreter::{
     DataItemMeta, Environment, SimpleBinaryOp, SimpleCompareOp, SimpleCondition, SimpleExpr,
     SimpleProgram, SimpleStatement,
 };
+
+use crate::output::{InterpretOutput, DiagnosticEntry, DiagnosticSeverity, OutputFormat, print_json};
 
 use super::cics_bridge::CicsBridge;
 
@@ -144,6 +148,7 @@ pub fn interpret(
     eibcalen: Option<i64>,
     eibaid: Option<String>,
     set_vars: Vec<String>,
+    format: OutputFormat,
 ) -> Result<()> {
     tracing::info!("Interpreting: {}", input.display());
 
@@ -156,6 +161,53 @@ pub fn interpret(
 
     if !uses_cics {
         // Simple non-CICS program - execute directly
+        if format.is_json() {
+            let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
+            let writer = SharedWriter(buffer.clone());
+            let mut env = Environment::with_io(
+                Box::new(writer),
+                Box::new(std::io::BufReader::new(std::io::empty())),
+            );
+
+            let result = open_mainframe_runtime::interpreter::execute(&simple, &mut env);
+            let output_bytes = buffer.lock().unwrap().clone();
+            let output_str = String::from_utf8_lossy(&output_bytes);
+            let lines: Vec<String> = if output_str.is_empty() {
+                vec![]
+            } else {
+                output_str.lines().map(String::from).collect()
+            };
+
+            match result {
+                Ok(rc) => {
+                    let output = InterpretOutput {
+                        status: if rc == 0 { "success".to_string() } else { "error".to_string() },
+                        output: lines,
+                        return_code: rc,
+                        diagnostics: vec![],
+                    };
+                    print_json(&output);
+                }
+                Err(e) => {
+                    let output = InterpretOutput {
+                        status: "error".to_string(),
+                        output: lines,
+                        return_code: -1,
+                        diagnostics: vec![DiagnosticEntry {
+                            severity: DiagnosticSeverity::Error,
+                            message: e.to_string(),
+                            file: Some(input.display().to_string()),
+                            line: None,
+                            col: None,
+                        }],
+                    };
+                    print_json(&output);
+                    return Err(miette::miette!("Runtime error: {}", e));
+                }
+            }
+            return Ok(());
+        }
+
         let mut env = Environment::new();
         let rc = open_mainframe_runtime::interpreter::execute(&simple, &mut env)
             .map_err(|e| miette::miette!("Runtime error: {}", e))?;
@@ -1651,5 +1703,18 @@ fn convert_condition(cond: &open_mainframe_cobol::ast::Condition) -> Result<Simp
         open_mainframe_cobol::ast::Condition::ConditionName(q) => {
             Ok(SimpleCondition::ConditionName(q.name.clone()))
         }
+    }
+}
+
+/// Thread-safe writer that captures output to a shared buffer.
+struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
