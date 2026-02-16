@@ -99,6 +99,8 @@ pub struct ConfigurationSection {
     pub object_computer: Option<String>,
     /// SPECIAL-NAMES paragraph entries.
     pub special_names: Vec<SpecialName>,
+    /// REPOSITORY paragraph.
+    pub repository: Option<RepositoryParagraph>,
     /// Source span.
     pub span: Span,
 }
@@ -114,11 +116,35 @@ pub struct SpecialName {
     pub span: Span,
 }
 
+/// REPOSITORY paragraph.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepositoryParagraph {
+    /// FUNCTION ALL INTRINSIC is active.
+    pub function_all_intrinsic: bool,
+    /// Individual function names available without FUNCTION keyword.
+    pub functions: Vec<String>,
+    /// Source span.
+    pub span: Span,
+}
+
 /// The INPUT-OUTPUT SECTION.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputOutputSection {
     /// FILE-CONTROL entries.
     pub file_control: Vec<FileControlEntry>,
+    /// I-O-CONTROL paragraph.
+    pub io_control: Option<IoControlParagraph>,
+    /// Source span.
+    pub span: Span,
+}
+
+/// I-O-CONTROL paragraph.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IoControlParagraph {
+    /// SAME RECORD AREA clauses: groups of files sharing a record area.
+    pub same_record_areas: Vec<Vec<String>>,
+    /// APPLY WRITE-ONLY file names.
+    pub apply_write_only: Vec<String>,
     /// Source span.
     pub span: Span,
 }
@@ -136,10 +162,29 @@ pub struct FileControlEntry {
     pub access_mode: AccessMode,
     /// Record key (for indexed files).
     pub record_key: Option<QualifiedName>,
+    /// Alternate record keys.
+    pub alternate_keys: Vec<QualifiedName>,
     /// File status variable.
     pub file_status: Option<QualifiedName>,
+    /// LOCK MODE clause.
+    pub lock_mode: Option<LockMode>,
+    /// RESERVE clause (number of areas).
+    pub reserve: Option<u32>,
+    /// PADDING CHARACTER.
+    pub padding_character: Option<String>,
     /// Source span.
     pub span: Span,
+}
+
+/// LOCK MODE clause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockMode {
+    /// LOCK MODE IS MANUAL.
+    Manual,
+    /// LOCK MODE IS AUTOMATIC.
+    Automatic,
+    /// LOCK MODE IS EXCLUSIVE.
+    Exclusive,
 }
 
 /// File organization type.

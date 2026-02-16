@@ -149,6 +149,7 @@ impl super::Parser {
         let mut source_computer = None;
         let mut object_computer = None;
         let special_names = Vec::new();
+        let mut repository = None;
 
         while !self.is_at_section_start() && !self.is_at_division_start() && !self.is_at_end() {
             if self.check_keyword(Keyword::SourceComputer) {
@@ -164,6 +165,8 @@ impl super::Parser {
                 self.skip_if(TokenKind::Period);
                 // TODO: Parse special-names entries
                 self.advance_to_next_sentence();
+            } else if self.check_keyword(Keyword::Repository) {
+                repository = Some(self.parse_repository_paragraph()?);
             } else {
                 self.advance_to_next_sentence();
             }
@@ -175,6 +178,61 @@ impl super::Parser {
             source_computer,
             object_computer,
             special_names,
+            repository,
+            span: start.extend(end),
+        })
+    }
+
+    fn parse_repository_paragraph(&mut self) -> Result<RepositoryParagraph> {
+        let start = self.current_span();
+
+        // REPOSITORY.
+        self.expect_keyword(Keyword::Repository)?;
+        self.expect(TokenKind::Period)?;
+
+        let mut function_all_intrinsic = false;
+        let mut functions = Vec::new();
+
+        // Parse repository entries until next paragraph/section/division
+        while !self.check(TokenKind::Period)
+            && !self.is_at_section_start()
+            && !self.is_at_division_start()
+            && !self.is_at_end()
+        {
+            if self.check_keyword(Keyword::Function) {
+                self.advance();
+                if self.check_keyword(Keyword::All) {
+                    self.advance();
+                    if self.check_keyword(Keyword::Intrinsic) {
+                        self.advance();
+                    }
+                    function_all_intrinsic = true;
+                } else {
+                    // Individual function name
+                    if self.check_identifier() {
+                        functions.push(self.expect_identifier()?);
+                    } else {
+                        self.advance();
+                    }
+                    // Skip optional INTRINSIC keyword after function name
+                    if self.check_keyword(Keyword::Intrinsic) {
+                        self.advance();
+                    }
+                }
+            } else {
+                self.advance();
+            }
+        }
+
+        if self.check(TokenKind::Period) {
+            self.advance();
+        }
+
+        let end = self.previous_span();
+
+        Ok(RepositoryParagraph {
+            function_all_intrinsic,
+            functions,
             span: start.extend(end),
         })
     }
@@ -188,6 +246,7 @@ impl super::Parser {
         self.expect(TokenKind::Period)?;
 
         let mut file_control = Vec::new();
+        let mut io_control = None;
 
         // FILE-CONTROL.
         if self.check_keyword(Keyword::FileControl) {
@@ -200,10 +259,89 @@ impl super::Parser {
             }
         }
 
+        // I-O-CONTROL.
+        if self.check_keyword(Keyword::IoControl) {
+            io_control = Some(self.parse_io_control_paragraph()?);
+        }
+
         let end = self.previous_span();
 
         Ok(InputOutputSection {
             file_control,
+            io_control,
+            span: start.extend(end),
+        })
+    }
+
+    fn parse_io_control_paragraph(&mut self) -> Result<IoControlParagraph> {
+        let start = self.current_span();
+
+        // I-O-CONTROL.
+        self.expect_keyword(Keyword::IoControl)?;
+        self.expect(TokenKind::Period)?;
+
+        let mut same_record_areas: Vec<Vec<String>> = Vec::new();
+        let mut apply_write_only: Vec<String> = Vec::new();
+
+        // Parse I-O-CONTROL entries until next section/division
+        while !self.is_at_section_start() && !self.is_at_division_start() && !self.is_at_end() {
+            if self.check_keyword(Keyword::Same) {
+                self.advance(); // SAME
+                // Optional RECORD keyword
+                if self.check_keyword(Keyword::Record) {
+                    self.advance();
+                }
+                // Optional AREA keyword
+                if self.check_keyword(Keyword::Area) {
+                    self.advance();
+                }
+                // Optional FOR keyword
+                if self.check_keyword(Keyword::For) {
+                    self.advance();
+                }
+                // Collect file names until period
+                let mut files = Vec::new();
+                while !self.check(TokenKind::Period) && !self.is_at_end() {
+                    if self.check_identifier() {
+                        files.push(self.expect_identifier()?);
+                    } else {
+                        self.advance();
+                    }
+                }
+                if self.check(TokenKind::Period) {
+                    self.advance();
+                }
+                same_record_areas.push(files);
+            } else if self.check_keyword(Keyword::Apply) {
+                self.advance(); // APPLY
+                if self.check_keyword(Keyword::WriteOnly) {
+                    self.advance(); // WRITE-ONLY
+                }
+                // Optional ON keyword
+                if self.check_keyword(Keyword::On) {
+                    self.advance();
+                }
+                // Collect file names until period
+                while !self.check(TokenKind::Period) && !self.is_at_end() {
+                    if self.check_identifier() {
+                        apply_write_only.push(self.expect_identifier()?);
+                    } else {
+                        self.advance();
+                    }
+                }
+                if self.check(TokenKind::Period) {
+                    self.advance();
+                }
+            } else {
+                self.advance_to_next_sentence();
+            }
+        }
+
+        let end = self.previous_span();
+
+        Ok(IoControlParagraph {
+            same_record_areas,
+            apply_write_only,
             span: start.extend(end),
         })
     }
@@ -225,7 +363,11 @@ impl super::Parser {
         let mut organization = FileOrganization::Sequential;
         let mut access_mode = AccessMode::Sequential;
         let mut record_key = None;
+        let mut alternate_keys = Vec::new();
         let mut file_status = None;
+        let mut lock_mode = None;
+        let mut reserve = None;
+        let mut padding_character = None;
 
         // Parse optional clauses until period
         while !self.check(TokenKind::Period) && !self.is_at_end() {
@@ -236,26 +378,80 @@ impl super::Parser {
                 }
                 organization = self.parse_file_organization()?;
             } else if self.check_keyword(Keyword::AccessMode) {
-                self.advance();
+                self.advance(); // ACCESS
+                if self.check_keyword(Keyword::Mode) {
+                    self.advance(); // MODE
+                }
                 if self.check_keyword(Keyword::Is) {
                     self.advance();
                 }
                 access_mode = self.parse_access_mode()?;
-            } else if self.check_keyword(Keyword::RecordKey) {
-                self.advance();
+            } else if self.check_keyword(Keyword::Record) && self.peek_keyword(Keyword::Key) {
+                // RECORD KEY IS data-name
+                self.advance(); // RECORD
+                self.advance(); // KEY
                 if self.check_keyword(Keyword::Is) {
                     self.advance();
                 }
                 record_key = Some(self.parse_qualified_name()?);
-            } else if self.check_keyword(Keyword::FileStatus) || self.check_keyword(Keyword::File) {
-                if self.check_keyword(Keyword::File) {
-                    self.advance(); // FILE
-                    self.expect_keyword(Keyword::Status)?; // "FILE STATUS"
+            } else if self.check_keyword(Keyword::AlternateRecordKey) {
+                // ALTERNATE RECORD KEY IS data-name
+                self.advance(); // ALTERNATE
+                if self.check_keyword(Keyword::Record) {
+                    self.advance();
+                }
+                if self.check_keyword(Keyword::Key) {
+                    self.advance();
                 }
                 if self.check_keyword(Keyword::Is) {
                     self.advance();
                 }
+                alternate_keys.push(self.parse_qualified_name()?);
+            } else if self.check_keyword(Keyword::File) && self.peek_keyword(Keyword::Status) {
+                // FILE STATUS IS data-name
+                self.advance(); // FILE
+                self.advance(); // STATUS
+                if self.check_keyword(Keyword::Is) {
+                    self.advance();
+                }
                 file_status = Some(self.parse_qualified_name()?);
+            } else if self.check_keyword(Keyword::Lock) {
+                // LOCK MODE IS {MANUAL | AUTOMATIC | EXCLUSIVE}
+                self.advance(); // LOCK
+                if self.check_keyword(Keyword::Mode) {
+                    self.advance();
+                }
+                if self.check_keyword(Keyword::Is) {
+                    self.advance();
+                }
+                if self.check_keyword(Keyword::Manual) {
+                    self.advance();
+                    lock_mode = Some(LockMode::Manual);
+                } else if self.check_keyword(Keyword::Automatic) {
+                    self.advance();
+                    lock_mode = Some(LockMode::Automatic);
+                } else if self.check_keyword(Keyword::Exclusive) {
+                    self.advance();
+                    lock_mode = Some(LockMode::Exclusive);
+                }
+            } else if self.check_keyword(Keyword::Reserve) {
+                // RESERVE integer AREA(S)
+                self.advance(); // RESERVE
+                reserve = Some(self.expect_integer()? as u32);
+                // Optional AREA or AREAS
+                if self.check_keyword(Keyword::Area) {
+                    self.advance();
+                }
+            } else if self.check_keyword(Keyword::Padding) {
+                // PADDING CHARACTER IS data-name-or-literal
+                self.advance(); // PADDING
+                if self.check_keyword(Keyword::Character) {
+                    self.advance();
+                }
+                if self.check_keyword(Keyword::Is) {
+                    self.advance();
+                }
+                padding_character = Some(self.expect_identifier_or_string()?);
             } else {
                 // Skip unknown clause
                 self.advance();
@@ -272,7 +468,11 @@ impl super::Parser {
             organization,
             access_mode,
             record_key,
+            alternate_keys,
             file_status,
+            lock_mode,
+            reserve,
+            padding_character,
             span: start.extend(end),
         })
     }

@@ -597,6 +597,89 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_repository_paragraph() {
+        let text = r#"
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. REPO-TEST.
+            ENVIRONMENT DIVISION.
+            CONFIGURATION SECTION.
+            REPOSITORY.
+                FUNCTION ALL INTRINSIC.
+            PROCEDURE DIVISION.
+                STOP RUN.
+        "#;
+
+        let (program, errors) = parse_text(text);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let program = program.unwrap();
+        let env = program.environment.unwrap();
+        let config = env.configuration.unwrap();
+        let repo = config.repository.unwrap();
+        assert!(repo.function_all_intrinsic);
+    }
+
+    #[test]
+    fn test_parse_io_control_paragraph() {
+        let text = r#"
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. IO-TEST.
+            ENVIRONMENT DIVISION.
+            INPUT-OUTPUT SECTION.
+            FILE-CONTROL.
+                SELECT MY-FILE ASSIGN TO "MYFILE".
+            I-O-CONTROL.
+                SAME RECORD AREA FOR MY-FILE.
+            PROCEDURE DIVISION.
+                STOP RUN.
+        "#;
+
+        let (program, errors) = parse_text(text);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let program = program.unwrap();
+        let env = program.environment.unwrap();
+        let ios = env.input_output.unwrap();
+        assert_eq!(ios.file_control.len(), 1);
+        let ioc = ios.io_control.unwrap();
+        assert_eq!(ioc.same_record_areas.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_file_control_extended() {
+        let text = r#"
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. FC-TEST.
+            ENVIRONMENT DIVISION.
+            INPUT-OUTPUT SECTION.
+            FILE-CONTROL.
+                SELECT MY-FILE ASSIGN TO "MYFILE"
+                    ORGANIZATION IS INDEXED
+                    ACCESS MODE IS DYNAMIC
+                    RECORD KEY IS MY-KEY
+                    ALTERNATE RECORD KEY IS MY-ALT-KEY
+                    LOCK MODE IS AUTOMATIC
+                    RESERVE 3 AREA
+                    FILE STATUS IS WS-STATUS.
+            PROCEDURE DIVISION.
+                STOP RUN.
+        "#;
+
+        let (program, errors) = parse_text(text);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let program = program.unwrap();
+        let env = program.environment.unwrap();
+        let ios = env.input_output.unwrap();
+        assert_eq!(ios.file_control.len(), 1);
+        let fc = &ios.file_control[0];
+        assert_eq!(fc.organization, FileOrganization::Indexed);
+        assert_eq!(fc.access_mode, AccessMode::Dynamic);
+        assert!(fc.record_key.is_some());
+        assert_eq!(fc.alternate_keys.len(), 1);
+        assert_eq!(fc.lock_mode, Some(LockMode::Automatic));
+        assert_eq!(fc.reserve, Some(3));
+        assert!(fc.file_status.is_some());
+    }
+
+    #[test]
     fn test_analyze_picture() {
         let (cat, size, dec) = data::analyze_picture("X(10)");
         assert_eq!(cat, PictureCategory::Alphanumeric);
