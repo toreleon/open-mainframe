@@ -27,6 +27,8 @@ pub struct Program {
     pub data: Option<DataDivision>,
     /// The PROCEDURE DIVISION (optional for copybooks).
     pub procedure: Option<ProcedureDivision>,
+    /// Contained (nested) programs.
+    pub contained_programs: Vec<Program>,
     /// Source span for the entire program.
     pub span: Span,
 }

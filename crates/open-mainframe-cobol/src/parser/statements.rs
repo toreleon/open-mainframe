@@ -112,7 +112,10 @@ impl super::Parser {
         let mut paragraphs = Vec::new();
         let mut statements = Vec::new();
 
-        while !self.is_at_end() && !self.check_keyword(Keyword::EndProgram) {
+        while !self.is_at_end()
+            && !self.is_at_end_program()
+            && !self.check_keyword(Keyword::Identification)
+        {
             // Check for section header
             if self.check_identifier() && self.peek_keyword(Keyword::Section) {
                 let section = self.parse_section()?;
@@ -155,7 +158,8 @@ impl super::Parser {
         let mut paragraphs = Vec::new();
 
         while !(self.is_at_end()
-            || self.check_keyword(Keyword::EndProgram)
+            || self.is_at_end_program()
+            || self.check_keyword(Keyword::Identification)
             || (self.check_identifier() && self.peek_keyword(Keyword::Section)))
         {
             if self.check_identifier() && self.peek(TokenKind::Period) {
@@ -185,7 +189,8 @@ impl super::Parser {
         let mut statements = Vec::new();
 
         while !(self.is_at_end()
-            || self.check_keyword(Keyword::EndProgram)
+            || self.is_at_end_program()
+            || self.check_keyword(Keyword::Identification)
             || (self.check_identifier() && self.peek_keyword(Keyword::Section))
             || (self.check_identifier() && self.peek(TokenKind::Period)))
         {

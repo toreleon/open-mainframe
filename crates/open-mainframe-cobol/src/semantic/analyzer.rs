@@ -66,6 +66,9 @@ impl SemanticAnalyzer {
             self.validate_procedure(program.procedure.as_ref().unwrap());
         }
 
+        // Phase 3: Analyze contained (nested) programs
+        self.analyze_contained_programs(program);
+
         let has_errors = self.diagnostics.iter().any(|d| {
             d.severity == Severity::Error || (self.strict_mode && d.severity == Severity::Warning)
         });
@@ -386,6 +389,77 @@ impl SemanticAnalyzer {
                     suggestion: Some("Replace ALTER/GO TO with structured PERFORM or IF/EVALUATE".to_string()),
                 });
             }
+        }
+    }
+
+    // ========================================================================
+    // Phase 3: Nested / Contained Programs
+    // ========================================================================
+
+    fn analyze_contained_programs(&mut self, program: &Program) {
+        if program.contained_programs.is_empty() {
+            return;
+        }
+
+        // Collect COMMON program names for sibling-call validation
+        let common_names: Vec<String> = program
+            .contained_programs
+            .iter()
+            .filter(|p| p.identification.program_id.is_common)
+            .map(|p| p.identification.program_id.name.clone())
+            .collect();
+
+        for contained in &program.contained_programs {
+            // Validate that contained programs have an END PROGRAM
+            // (relaxed: just warn, since the parser already handles it)
+
+            // Register the contained program name as a callable target
+            self.symbol_table.add_paragraph(
+                contained.identification.program_id.name.clone(),
+                None,
+                contained.identification.program_id.span,
+            );
+
+            // Recursively analyze the contained program
+            // (creates a fresh sub-analyzer so scopes don't leak)
+            let mut sub = SemanticAnalyzer::new();
+            if self.strict_mode {
+                sub.strict_mode = true;
+            }
+
+            // Propagate GLOBAL data items from the outer program to the sub-analyzer
+            if let Some(ref data) = program.data {
+                for item in &data.working_storage {
+                    if item.global {
+                        sub.current_scope = Scope::WorkingStorage;
+                        sub.process_data_item(item, None);
+                    }
+                }
+            }
+
+            sub.build_symbols(contained);
+
+            // Register COMMON sibling programs as callable targets in the sub-analyzer
+            for name in &common_names {
+                // Don't register a program as callable to itself
+                if *name != contained.identification.program_id.name {
+                    sub.symbol_table.add_paragraph(
+                        name.clone(),
+                        None,
+                        contained.identification.program_id.span,
+                    );
+                }
+            }
+
+            if contained.procedure.is_some() {
+                sub.validate_procedure(contained.procedure.as_ref().unwrap());
+            }
+
+            // Recursively handle deeply-nested programs
+            sub.analyze_contained_programs(contained);
+
+            // Merge diagnostics from the sub-analyzer
+            self.diagnostics.extend(sub.diagnostics);
         }
     }
 

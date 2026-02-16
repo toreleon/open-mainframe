@@ -29,20 +29,23 @@ impl super::Parser {
         let mut is_common = false;
         let mut is_initial = false;
 
-        // Check for IS COMMON/INITIAL
+        // Check for [IS] COMMON/INITIAL [PROGRAM]
+        // IBM allows: PROGRAM-ID. name [IS] [COMMON] [INITIAL] [PROGRAM].
         if self.check_keyword(Keyword::Is) {
             self.advance();
+        }
+        // COMMON and INITIAL can appear in any order
+        for _ in 0..2 {
             if self.check_keyword(Keyword::Common) {
                 self.advance();
                 is_common = true;
-            }
-            if self.check_keyword(Keyword::Initial) {
+            } else if self.check_keyword(Keyword::Initial) {
                 self.advance();
                 is_initial = true;
             }
-            if self.check_keyword(Keyword::Program) {
-                self.advance();
-            }
+        }
+        if self.check_keyword(Keyword::Program) {
+            self.advance();
         }
 
         self.expect(TokenKind::Period)?;

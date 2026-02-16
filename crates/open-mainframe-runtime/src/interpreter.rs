@@ -616,6 +616,12 @@ pub struct SimpleProgram {
     pub condition_names: HashMap<String, (String, String)>,
     /// Group item layouts: group_name -> list of sub-fields with offsets.
     pub group_layouts: HashMap<String, Vec<GroupField>>,
+    /// Contained (nested) programs.
+    pub contained_programs: Vec<SimpleProgram>,
+    /// Whether this program has the INITIAL attribute (re-init on each CALL).
+    pub is_initial: bool,
+    /// Whether this program has the COMMON attribute (callable by siblings).
+    pub is_common: bool,
 }
 
 /// A sub-field within a group item, with its offset and size.
@@ -1058,13 +1064,42 @@ fn execute_statement_impl(
             // SET condition TO FALSE not supported in standard COBOL
         }
 
-        SimpleStatement::Call { program, using: _ } => {
-            let prog_name = eval_expr(program, env)?;
-            // CALLed programs are not yet supported - log and continue
-            env.display(
-                &format!("[CALL] {} - not yet supported", prog_name.to_display_string().trim()),
-                false,
-            )?;
+        SimpleStatement::Call { program: call_target, using: _ } => {
+            let prog_name = eval_expr(call_target, env)?;
+            let target_name = prog_name.to_display_string().trim().to_uppercase();
+
+            // Try to resolve the CALL to a contained program
+            let found = program.contained_programs.iter().find(|p| {
+                p.name.eq_ignore_ascii_case(&target_name)
+            });
+
+            if let Some(contained) = found {
+                // Execute the contained program with its own environment
+                let mut sub_env = Environment::new();
+                // Initialize data items for the contained program
+                for (name, meta) in &contained.data_items {
+                    let val = if meta.is_numeric {
+                        CobolValue::from_i64(0)
+                    } else {
+                        CobolValue::Alphanumeric(" ".repeat(meta.size))
+                    };
+                    sub_env.set(name, val).ok();
+                }
+                // Copy GLOBAL data from outer env to sub-env
+                for (name, _meta) in &program.data_items {
+                    if let Some(val) = env.get(name) {
+                        sub_env.set(name, val.clone()).ok();
+                    }
+                }
+                // Execute the contained program's initialization + main statements
+                execute_statements(&contained.statements, contained, &mut sub_env)?;
+            } else {
+                // CALLed programs not resolved - log and continue
+                env.display(
+                    &format!("[CALL] {} - external program not resolved", target_name),
+                    false,
+                )?;
+            }
         }
 
         SimpleStatement::PerformInline { until, statements: stmts, varying } => {
@@ -2089,6 +2124,9 @@ mod tests {
             data_items: vec![],
             condition_names: HashMap::new(),
             group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
             statements: vec![
                 SimpleStatement::Move {
                     from: SimpleExpr::Integer(10),
@@ -2143,6 +2181,9 @@ mod tests {
             data_items: vec![],
             condition_names: HashMap::new(),
             group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
             statements: vec![SimpleStatement::If {
                 condition: SimpleCondition::Compare {
                     left: SimpleExpr::Variable("X".to_string()),
@@ -2188,6 +2229,9 @@ mod tests {
             data_items: vec![],
             condition_names: HashMap::new(),
             group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
             statements: vec![SimpleStatement::Add {
                 values: vec![SimpleExpr::Integer(5), SimpleExpr::Integer(3)],
                 to: vec!["X".to_string()],
@@ -2210,6 +2254,9 @@ mod tests {
             data_items: vec![],
             condition_names: HashMap::new(),
             group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
             statements: vec![
                 SimpleStatement::StopRun {
                     return_code: Some(4),
@@ -2311,6 +2358,9 @@ mod tests {
             data_items: vec![],
             condition_names: HashMap::new(),
             group_layouts,
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
             statements: vec![
                 // Step 1: Initialize group from FILLER defaults
                 SimpleStatement::Move {

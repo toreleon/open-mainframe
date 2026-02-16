@@ -75,15 +75,25 @@ impl Parser {
             None
         };
 
-        // Check for END PROGRAM
-        if self.check_keyword(Keyword::EndProgram) {
-            self.advance(); // END
-            self.expect_keyword(Keyword::Program)?;
-            // Optional program name
-            if self.check_identifier() {
-                self.advance();
+        // Parse contained (nested) programs
+        let mut contained_programs = Vec::new();
+        while self.check_keyword(Keyword::Identification) && !self.is_at_end() {
+            contained_programs.push(self.parse_program_inner()?);
+        }
+
+        // Check for END PROGRAM (either END-PROGRAM or END PROGRAM)
+        if self.is_at_end_program() {
+            if self.check_keyword(Keyword::EndProgram) {
+                self.advance(); // END-PROGRAM (single token)
+            } else {
+                self.advance(); // END
+                self.advance(); // PROGRAM
             }
-            self.expect(TokenKind::Period)?;
+            // Optional program name after END PROGRAM
+            if !self.check(TokenKind::Period) && !self.is_at_end() {
+                self.advance(); // program name
+            }
+            self.skip_if(TokenKind::Period);
         }
 
         let end = self.previous_span();
@@ -93,6 +103,7 @@ impl Parser {
             environment,
             data,
             procedure,
+            contained_programs,
             span: start.extend(end),
         })
     }
@@ -356,6 +367,12 @@ impl Parser {
             || self.check_keyword(Keyword::Procedure)
     }
 
+    /// Check if we're at an END PROGRAM boundary (either END-PROGRAM or END PROGRAM).
+    fn is_at_end_program(&self) -> bool {
+        self.check_keyword(Keyword::EndProgram)
+            || (self.check_keyword(Keyword::End) && self.peek_keyword(Keyword::Program))
+    }
+
     fn is_at_section_start(&self) -> bool {
         (self.check_keyword(Keyword::Configuration)
             || self.check_keyword(Keyword::InputOutput)
@@ -515,6 +532,68 @@ mod tests {
         assert!(program.data.is_some());
         let data = program.data.as_ref().unwrap();
         assert_eq!(data.working_storage.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_nested_programs() {
+        let text = r#"
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. OUTER.
+            DATA DIVISION.
+            WORKING-STORAGE SECTION.
+            01 WS-SHARED PIC X(10) GLOBAL.
+            PROCEDURE DIVISION.
+                DISPLAY "OUTER".
+                CALL "INNER".
+                STOP RUN.
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. INNER COMMON INITIAL.
+            PROCEDURE DIVISION.
+                DISPLAY "INNER".
+                GOBACK.
+            END PROGRAM INNER.
+            END PROGRAM OUTER.
+        "#;
+
+        let (program, errors) = parse_text(text);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let program = program.unwrap();
+        assert_eq!(program.identification.program_id.name, "OUTER");
+        assert_eq!(program.contained_programs.len(), 1);
+
+        let inner = &program.contained_programs[0];
+        assert_eq!(inner.identification.program_id.name, "INNER");
+        assert!(inner.identification.program_id.is_common);
+        assert!(inner.identification.program_id.is_initial);
+    }
+
+    #[test]
+    fn test_parse_multiple_nested_programs() {
+        let text = r#"
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. OUTER.
+            PROCEDURE DIVISION.
+                STOP RUN.
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. INNER-A.
+            PROCEDURE DIVISION.
+                GOBACK.
+            END PROGRAM INNER-A.
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. INNER-B IS COMMON.
+            PROCEDURE DIVISION.
+                GOBACK.
+            END PROGRAM INNER-B.
+            END PROGRAM OUTER.
+        "#;
+
+        let (program, errors) = parse_text(text);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let program = program.unwrap();
+        assert_eq!(program.contained_programs.len(), 2);
+        assert_eq!(program.contained_programs[0].identification.program_id.name, "INNER-A");
+        assert_eq!(program.contained_programs[1].identification.program_id.name, "INNER-B");
+        assert!(program.contained_programs[1].identification.program_id.is_common);
     }
 
     #[test]

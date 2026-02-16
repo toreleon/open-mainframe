@@ -534,6 +534,12 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
         eprintln!("[GROUP_LAYOUTS] {:?}", group_layouts.keys().collect::<Vec<_>>());
     }
 
+    // Convert contained (nested) programs
+    let mut contained_programs = Vec::new();
+    for contained in &program.contained_programs {
+        contained_programs.push(convert_program(contained)?);
+    }
+
     Ok(SimpleProgram {
         name,
         data_items,
@@ -541,6 +547,9 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
         paragraphs,
         condition_names,
         group_layouts,
+        contained_programs,
+        is_initial: program.identification.program_id.is_initial,
+        is_common: program.identification.program_id.is_common,
     })
 }
 
