@@ -71,6 +71,8 @@ impl From<PictureCategory> for TypeCategory {
             PictureCategory::AlphanumericEdited => TypeCategory::AlphanumericEdited,
             PictureCategory::Numeric => TypeCategory::Numeric,
             PictureCategory::NumericEdited => TypeCategory::NumericEdited,
+            PictureCategory::Utf8 => TypeCategory::Alphanumeric,
+            PictureCategory::National => TypeCategory::Alphanumeric,
         }
     }
 }
@@ -217,6 +219,8 @@ impl CobolType {
             Usage::Pointer | Usage::FunctionPointer | Usage::ProcedurePointer => 8, // 64-bit pointer
             Usage::Index => 4,   // Index size
             Usage::National => pic_size * 2, // National uses UTF-16 (2 bytes per char)
+            Usage::Utf8 => pic_size * 4,     // UTF-8 worst-case: 4 bytes per character
+            Usage::Display1 => pic_size * 2, // DBCS: 2 bytes per character
         }
     }
 }

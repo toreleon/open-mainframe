@@ -113,6 +113,8 @@ impl super::Parser {
             records,
             record_contains,
             block_contains,
+            code_set: None,
+            linage: None,
             span: start.extend(end),
         })
     }
@@ -292,6 +294,8 @@ impl super::Parser {
             global,
             synchronized,
             renames,
+            dynamic_length: false,
+            group_usage: None,
             children,
             condition_values,
             span: start.extend(end),

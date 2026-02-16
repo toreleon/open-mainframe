@@ -35,8 +35,25 @@ pub struct FileDescription {
     pub record_contains: Option<RecordContains>,
     /// Block contains clause.
     pub block_contains: Option<BlockContains>,
+    /// CODE-SET clause.
+    pub code_set: Option<String>,
+    /// LINAGE clause.
+    pub linage: Option<LinageClause>,
     /// Source span.
     pub span: Span,
+}
+
+/// LINAGE clause for logical page control.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinageClause {
+    /// Number of lines in the page body.
+    pub lines: Expression,
+    /// FOOTING AT line number.
+    pub footing: Option<Expression>,
+    /// LINES AT TOP.
+    pub top: Option<Expression>,
+    /// LINES AT BOTTOM.
+    pub bottom: Option<Expression>,
 }
 
 /// RECORD CONTAINS clause.
@@ -92,12 +109,25 @@ pub struct DataItem {
     pub synchronized: Option<SyncDirection>,
     /// RENAMES clause (level 66): from_name THRU to_name.
     pub renames: Option<(QualifiedName, Option<QualifiedName>)>,
+    /// DYNAMIC LENGTH clause (IBM COBOL v6.2+).
+    pub dynamic_length: bool,
+    /// GROUP-USAGE clause (NATIONAL).
+    pub group_usage: Option<GroupUsage>,
     /// Subordinate items (for group items).
     pub children: Vec<DataItem>,
     /// Condition names (level 88 items).
     pub condition_values: Vec<ConditionValue>,
     /// Source span.
     pub span: Span,
+}
+
+/// GROUP-USAGE clause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupUsage {
+    /// GROUP-USAGE NATIONAL.
+    National,
+    /// GROUP-USAGE UTF-8.
+    Utf8,
 }
 
 /// Data item name.
@@ -147,6 +177,10 @@ pub enum PictureCategory {
     Numeric,
     /// Numeric edited.
     NumericEdited,
+    /// UTF-8 (U) — IBM COBOL v6.2+.
+    Utf8,
+    /// National (N) — UTF-16 / DBCS.
+    National,
 }
 
 /// USAGE clause.
@@ -174,6 +208,10 @@ pub enum Usage {
     ProcedurePointer,
     /// NATIONAL.
     National,
+    /// UTF-8 — IBM COBOL v6.2+ for PIC U items.
+    Utf8,
+    /// DISPLAY-1 — DBCS (Double-Byte Character Set).
+    Display1,
 }
 
 /// SYNCHRONIZED direction.
