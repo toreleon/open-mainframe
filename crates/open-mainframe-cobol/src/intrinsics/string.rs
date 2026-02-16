@@ -351,6 +351,113 @@ pub fn numval_c(s: &str, currency: Option<&str>) -> Option<f64> {
     numval(&s)
 }
 
+// ============================================================================
+// UTF-8 Intrinsic Functions (Epic 75)
+// ============================================================================
+
+/// FUNCTION ULENGTH implementation.
+///
+/// Returns the number of Unicode characters (code points) in a UTF-8 string.
+pub fn ulength(s: &str) -> i32 {
+    s.chars().count() as i32
+}
+
+/// FUNCTION UPOS implementation.
+///
+/// Returns the byte offset (1-based) of the nth Unicode character in a UTF-8 string.
+/// Returns 0 if the position is out of range.
+pub fn upos(s: &str, char_pos: i32) -> i32 {
+    if char_pos < 1 {
+        return 0;
+    }
+    let idx = (char_pos - 1) as usize;
+    s.char_indices()
+        .nth(idx)
+        .map(|(byte_pos, _)| byte_pos as i32 + 1)
+        .unwrap_or(0)
+}
+
+/// FUNCTION USUBSTR implementation.
+///
+/// Returns a substring starting at the given character position (1-based) for
+/// the given length in characters.
+pub fn usubstr(s: &str, start: i32, length: i32) -> String {
+    if start < 1 || length < 0 {
+        return String::new();
+    }
+    let start_idx = (start - 1) as usize;
+    s.chars()
+        .skip(start_idx)
+        .take(length as usize)
+        .collect()
+}
+
+/// FUNCTION UVALID implementation.
+///
+/// Validates a byte slice as UTF-8. Returns 0 if valid, or the 1-based
+/// position of the first invalid byte if not.
+pub fn uvalid(bytes: &[u8]) -> i32 {
+    match std::str::from_utf8(bytes) {
+        Ok(_) => 0,
+        Err(e) => e.valid_up_to() as i32 + 1,
+    }
+}
+
+/// FUNCTION UWIDTH implementation.
+///
+/// Returns the display width of the Unicode character at position char_pos (1-based).
+/// CJK characters and certain other characters are double-width (2).
+/// Most other characters are single-width (1).
+/// Returns 0 if out of range.
+pub fn uwidth(s: &str, char_pos: i32) -> i32 {
+    if char_pos < 1 {
+        return 0;
+    }
+    let idx = (char_pos - 1) as usize;
+    s.chars().nth(idx).map(|c| char_display_width(c)).unwrap_or(0)
+}
+
+/// FUNCTION USUPPLEMENTARY implementation.
+///
+/// Returns 1 if the character at position char_pos (1-based) is a supplementary
+/// plane character (U+10000 and above, requiring 4 bytes in UTF-8), 0 otherwise.
+/// Returns 0 if out of range.
+pub fn usupplementary(s: &str, char_pos: i32) -> i32 {
+    if char_pos < 1 {
+        return 0;
+    }
+    let idx = (char_pos - 1) as usize;
+    s.chars()
+        .nth(idx)
+        .map(|c| if c as u32 >= 0x10000 { 1 } else { 0 })
+        .unwrap_or(0)
+}
+
+/// Determine the display width of a Unicode character.
+/// CJK Unified Ideographs, CJK Compatibility, Hangul, and fullwidth forms
+/// are double-width. Most others are single-width.
+fn char_display_width(c: char) -> i32 {
+    let cp = c as u32;
+    // CJK Unified Ideographs
+    if (0x4E00..=0x9FFF).contains(&cp)
+        // CJK Unified Ideographs Extension A
+        || (0x3400..=0x4DBF).contains(&cp)
+        // CJK Compatibility Ideographs
+        || (0xF900..=0xFAFF).contains(&cp)
+        // Hangul Syllables
+        || (0xAC00..=0xD7AF).contains(&cp)
+        // Fullwidth Forms
+        || (0xFF01..=0xFF60).contains(&cp)
+        || (0xFFE0..=0xFFE6).contains(&cp)
+        // CJK Unified Ideographs Extension B-F (supplementary)
+        || (0x20000..=0x2FA1F).contains(&cp)
+    {
+        2
+    } else {
+        1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,5 +646,62 @@ mod tests {
         assert_eq!(content_of("COBOL_TEST_VAR"), "hello");
         assert_eq!(content_of("NONEXISTENT_VAR_12345"), "");
         std::env::remove_var("COBOL_TEST_VAR");
+    }
+
+    // ── UTF-8 function tests ─────────────────────────────────────
+
+    #[test]
+    fn test_ulength() {
+        assert_eq!(ulength("Hello"), 5);
+        assert_eq!(ulength("H\u{00e9}llo"), 5); // "Héllo" - é is 2 bytes but 1 char
+        assert_eq!(ulength(""), 0);
+        assert_eq!(ulength("日本語"), 3); // 3 CJK chars, 9 bytes
+    }
+
+    #[test]
+    fn test_upos() {
+        assert_eq!(upos("Hello", 1), 1);
+        assert_eq!(upos("Hello", 3), 3);
+        // "Héllo": H=1 byte, é=2 bytes, l=1 byte...
+        assert_eq!(upos("H\u{00e9}llo", 1), 1); // H at byte 1
+        assert_eq!(upos("H\u{00e9}llo", 2), 2); // é at byte 2
+        assert_eq!(upos("H\u{00e9}llo", 3), 4); // l at byte 4 (after 2-byte é)
+        assert_eq!(upos("Hello", 0), 0);  // Out of range
+        assert_eq!(upos("Hello", 10), 0); // Out of range
+    }
+
+    #[test]
+    fn test_usubstr() {
+        assert_eq!(usubstr("Hello", 2, 3), "ell");
+        assert_eq!(usubstr("H\u{00e9}llo", 2, 3), "\u{00e9}ll");
+        assert_eq!(usubstr("Hello", 1, 0), "");
+        assert_eq!(usubstr("Hello", 0, 3), ""); // Invalid start
+    }
+
+    #[test]
+    fn test_uvalid() {
+        assert_eq!(uvalid(b"Hello"), 0); // Valid ASCII
+        assert_eq!(uvalid("Héllo".as_bytes()), 0); // Valid UTF-8
+        assert_eq!(uvalid(&[0x48, 0xFF, 0x6C]), 2); // Invalid byte at position 2
+        assert_eq!(uvalid(&[0xC0, 0x80]), 1); // Overlong encoding, invalid at pos 1
+    }
+
+    #[test]
+    fn test_uwidth() {
+        assert_eq!(uwidth("Hello", 1), 1); // ASCII = width 1
+        assert_eq!(uwidth("日本語", 1), 2); // CJK = width 2
+        assert_eq!(uwidth("日本語", 2), 2);
+        assert_eq!(uwidth("Hello", 0), 0); // Out of range
+    }
+
+    #[test]
+    fn test_usupplementary() {
+        // ASCII is not supplementary
+        assert_eq!(usupplementary("Hello", 1), 0);
+        // Emoji (supplementary plane): 🎉 is U+1F389
+        assert_eq!(usupplementary("A\u{1F389}B", 2), 1);
+        assert_eq!(usupplementary("A\u{1F389}B", 1), 0); // A is BMP
+        assert_eq!(usupplementary("A\u{1F389}B", 3), 0); // B is BMP
+        assert_eq!(usupplementary("Hello", 0), 0); // Out of range
     }
 }

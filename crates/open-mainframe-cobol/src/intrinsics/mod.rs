@@ -687,6 +687,55 @@ pub static INTRINSIC_FUNCTIONS: &[IntrinsicFunction] = &[
         max_args: Some(2),
         description: "Test if ISO 8601 datetime string is valid (0=valid)",
     },
+    // UTF-8 intrinsic functions (Epic 75)
+    IntrinsicFunction {
+        name: "ULENGTH",
+        category: FunctionCategory::String,
+        result_type: FunctionResultType::Integer,
+        min_args: 1,
+        max_args: Some(1),
+        description: "Number of Unicode characters in a UTF-8 string",
+    },
+    IntrinsicFunction {
+        name: "UPOS",
+        category: FunctionCategory::String,
+        result_type: FunctionResultType::Integer,
+        min_args: 2,
+        max_args: Some(2),
+        description: "Byte offset of the nth Unicode character",
+    },
+    IntrinsicFunction {
+        name: "USUBSTR",
+        category: FunctionCategory::String,
+        result_type: FunctionResultType::Alphanumeric,
+        min_args: 3,
+        max_args: Some(3),
+        description: "Unicode character-level substring",
+    },
+    IntrinsicFunction {
+        name: "UVALID",
+        category: FunctionCategory::String,
+        result_type: FunctionResultType::Integer,
+        min_args: 1,
+        max_args: Some(1),
+        description: "Validate UTF-8 encoding (0=valid, else position of error)",
+    },
+    IntrinsicFunction {
+        name: "UWIDTH",
+        category: FunctionCategory::String,
+        result_type: FunctionResultType::Integer,
+        min_args: 2,
+        max_args: Some(2),
+        description: "Display width of a Unicode character (1 or 2)",
+    },
+    IntrinsicFunction {
+        name: "USUPPLEMENTARY",
+        category: FunctionCategory::String,
+        result_type: FunctionResultType::Integer,
+        min_args: 2,
+        max_args: Some(2),
+        description: "Test if character is supplementary plane (1=yes, 0=no)",
+    },
 ];
 
 /// Look up an intrinsic function by name.
@@ -819,11 +868,25 @@ mod tests {
     }
 
     #[test]
+    fn test_utf8_intrinsic_functions() {
+        assert!(lookup_function("ULENGTH").is_some());
+        assert!(lookup_function("UPOS").is_some());
+        assert!(lookup_function("USUBSTR").is_some());
+        assert!(lookup_function("UVALID").is_some());
+        assert!(lookup_function("UWIDTH").is_some());
+        assert!(lookup_function("USUPPLEMENTARY").is_some());
+
+        let ul = lookup_function("ULENGTH").unwrap();
+        assert_eq!(ul.min_args, 1);
+        assert_eq!(ul.category, FunctionCategory::String);
+    }
+
+    #[test]
     fn test_total_function_count() {
-        // We should have 71+ functions registered now (64 + 7 ISO 8601)
+        // We should have 77+ functions registered now (64 + 7 ISO 8601 + 6 UTF-8)
         assert!(
-            INTRINSIC_FUNCTIONS.len() >= 71,
-            "Expected at least 71 registered functions, got {}",
+            INTRINSIC_FUNCTIONS.len() >= 77,
+            "Expected at least 77 registered functions, got {}",
             INTRINSIC_FUNCTIONS.len()
         );
     }
