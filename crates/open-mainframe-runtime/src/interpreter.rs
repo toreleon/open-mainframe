@@ -409,6 +409,22 @@ pub enum SimpleStatement {
         /// Target data item name (COBOL group to populate).
         target: String,
     },
+    /// XML GENERATE: convert COBOL group item to XML text.
+    XmlGenerate {
+        /// Receiver data item name (stores XML text).
+        receiver: String,
+        /// Source data item name (COBOL group to convert).
+        source: String,
+        /// Optional COUNT IN data item.
+        count_in: Option<String>,
+    },
+    /// XML PARSE: invoke processing procedure for XML events.
+    XmlParse {
+        /// Source data item name (contains XML text).
+        source: String,
+        /// Processing procedure paragraph name.
+        processing_procedure: String,
+    },
 }
 
 /// INSPECT FOR clause (tallying).
@@ -1542,6 +1558,125 @@ fn execute_statement_impl(
             } else {
                 // Invalid JSON
                 env.set("JSON-CODE", CobolValue::from_i64(1))?;
+            }
+        }
+
+        SimpleStatement::XmlGenerate { receiver, source, count_in } => {
+            let source_upper = source.to_uppercase();
+            let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+            xml.push('<');
+            xml.push_str(&source_upper);
+            xml.push('>');
+
+            let fields = env.get_group_fields(&source_upper);
+            for (field_name, field_value) in &fields {
+                let short_name = field_name
+                    .strip_prefix(&format!("{}-", source_upper))
+                    .or_else(|| field_name.strip_prefix(&format!("{}.", source_upper)))
+                    .unwrap_or(field_name);
+                xml.push('<');
+                xml.push_str(short_name);
+                xml.push('>');
+                match field_value {
+                    CobolValue::Numeric(n) => xml.push_str(&n.to_string()),
+                    CobolValue::Alphanumeric(s) => {
+                        for ch in s.trim_end().chars() {
+                            match ch {
+                                '<' => xml.push_str("&lt;"),
+                                '>' => xml.push_str("&gt;"),
+                                '&' => xml.push_str("&amp;"),
+                                '"' => xml.push_str("&quot;"),
+                                '\'' => xml.push_str("&apos;"),
+                                c => xml.push(c),
+                            }
+                        }
+                    }
+                    CobolValue::Group(_) => {}
+                }
+                xml.push_str("</");
+                xml.push_str(short_name);
+                xml.push('>');
+            }
+
+            xml.push_str("</");
+            xml.push_str(&source_upper);
+            xml.push('>');
+
+            let xml_len = xml.len() as i64;
+            env.set(receiver, CobolValue::Alphanumeric(xml))?;
+            if let Some(ref count_var) = count_in {
+                env.set(count_var, CobolValue::from_i64(xml_len))?;
+            }
+            env.set("XML-CODE", CobolValue::from_i64(0))?;
+        }
+
+        SimpleStatement::XmlParse { source, processing_procedure } => {
+            let xml_text = env.get_string(source);
+            let xml_text = xml_text.trim();
+            let proc_upper = processing_procedure.to_uppercase();
+
+            env.set("XML-EVENT", CobolValue::Alphanumeric("START-OF-DOCUMENT".to_string()))?;
+            env.set("XML-TEXT", CobolValue::Alphanumeric(String::new()))?;
+            env.set("XML-CODE", CobolValue::from_i64(0))?;
+            if let Some(para) = program.paragraphs.get(&proc_upper) {
+                execute_statements(&para.clone(), program, env)?;
+            }
+
+            let mut pos = 0;
+            let bytes = xml_text.as_bytes();
+            if xml_text.starts_with("<?") {
+                if let Some(end) = xml_text.find("?>") {
+                    pos = end + 2;
+                }
+            }
+
+            while pos < bytes.len() && !env.is_stopped() {
+                if let Some(CobolValue::Numeric(n)) = env.get("XML-CODE") {
+                    if !n.is_zero() { break; }
+                }
+                if bytes[pos] == b'<' {
+                    if pos + 1 < bytes.len() && bytes[pos + 1] == b'/' {
+                        let tag_start = pos + 2;
+                        if let Some(end) = xml_text[tag_start..].find('>') {
+                            let tag_name = &xml_text[tag_start..tag_start + end];
+                            env.set("XML-EVENT", CobolValue::Alphanumeric("END-OF-ELEMENT".to_string()))?;
+                            env.set("XML-TEXT", CobolValue::Alphanumeric(tag_name.to_string()))?;
+                            if let Some(para) = program.paragraphs.get(&proc_upper) {
+                                execute_statements(&para.clone(), program, env)?;
+                            }
+                            pos = tag_start + end + 1;
+                        } else { break; }
+                    } else {
+                        let tag_start = pos + 1;
+                        if let Some(end) = xml_text[tag_start..].find('>') {
+                            let tag_name = &xml_text[tag_start..tag_start + end];
+                            let elem_name = tag_name.split_whitespace().next().unwrap_or(tag_name);
+                            env.set("XML-EVENT", CobolValue::Alphanumeric("START-OF-ELEMENT".to_string()))?;
+                            env.set("XML-TEXT", CobolValue::Alphanumeric(elem_name.to_string()))?;
+                            if let Some(para) = program.paragraphs.get(&proc_upper) {
+                                execute_statements(&para.clone(), program, env)?;
+                            }
+                            pos = tag_start + end + 1;
+                        } else { break; }
+                    }
+                } else {
+                    let text_start = pos;
+                    while pos < bytes.len() && bytes[pos] != b'<' { pos += 1; }
+                    let text = xml_text[text_start..pos].trim();
+                    if !text.is_empty() {
+                        env.set("XML-EVENT", CobolValue::Alphanumeric("CONTENT-CHARACTERS".to_string()))?;
+                        env.set("XML-TEXT", CobolValue::Alphanumeric(text.to_string()))?;
+                        if let Some(para) = program.paragraphs.get(&proc_upper) {
+                            execute_statements(&para.clone(), program, env)?;
+                        }
+                    }
+                }
+            }
+
+            env.set("XML-EVENT", CobolValue::Alphanumeric("END-OF-DOCUMENT".to_string()))?;
+            env.set("XML-TEXT", CobolValue::Alphanumeric(String::new()))?;
+            if let Some(para) = program.paragraphs.get(&proc_upper) {
+                execute_statements(&para.clone(), program, env)?;
             }
         }
     }

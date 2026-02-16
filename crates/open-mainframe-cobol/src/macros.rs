@@ -342,9 +342,16 @@ macro_rules! for_all_keywords {
                 Typedef         => "TYPEDEF",
                 Strong          => "STRONG",
                 EndJson         => "END-JSON",
+                EndXml          => "END-XML",
                 Name            => "NAME",
                 Suppress        => "SUPPRESS",
                 Detail          => "DETAIL",
+                Encoding        => "ENCODING",
+                Namespace       => "NAMESPACE",
+                Processing      => "PROCESSING",
+                Validating      => "VALIDATING",
+                Attribute       => "ATTRIBUTE",
+                Type            => "TYPE",
             }
             @alias {
                 // Contextual variants constructed by the parser, NOT in the
@@ -416,6 +423,8 @@ macro_rules! for_all_statement_variants {
             ExecSql(ExecSqlStatement),
             JsonGenerate(JsonGenerateStatement),
             JsonParse(JsonParseStatement),
+            XmlGenerate(XmlGenerateStatement),
+            XmlParse(XmlParseStatement),
         }
     };
 }
@@ -474,6 +483,7 @@ macro_rules! for_parse_dispatch {
             Release     => parse_release_statement,
             Return      => parse_return_statement,
             Json        => parse_json_statement,
+            Xml         => parse_xml_statement,
         }
     };
 }

@@ -3159,4 +3159,261 @@ impl super::Parser {
 
         Ok((on_exception, not_on_exception))
     }
+
+    // ========================================================================
+    // XML GENERATE / XML PARSE
+    // ========================================================================
+
+    /// Parse an XML GENERATE or XML PARSE statement.
+    pub(super) fn parse_xml_statement(&mut self) -> Result<Statement> {
+        let start = self.current_span();
+        self.advance(); // XML
+
+        if self.check_keyword(Keyword::Generate) {
+            self.parse_xml_generate_statement(start)
+        } else if self.check_keyword(Keyword::Parse) {
+            self.parse_xml_parse_statement(start)
+        } else {
+            Err(CobolError::ParseError {
+                message: format!(
+                    "Expected GENERATE or PARSE after XML, found {:?}",
+                    self.current().kind
+                ),
+            })
+        }
+    }
+
+    /// Parse `XML GENERATE receiver FROM source [COUNT IN count]
+    ///  [NAME ...] [TYPE ...] [NAMESPACE ...] [ENCODING ...] [ON EXCEPTION ...] [END-XML]`
+    fn parse_xml_generate_statement(&mut self, start: Span) -> Result<Statement> {
+        self.advance(); // GENERATE
+
+        let receiver = self.parse_qualified_name()?;
+
+        self.expect_keyword(Keyword::From)?;
+        let source = self.parse_qualified_name()?;
+
+        // Optional COUNT IN
+        let count_in = if self.check_keyword(Keyword::Count) {
+            self.advance(); // COUNT
+            if self.check_keyword(Keyword::Into) || self.check_identifier_value("IN") {
+                self.advance(); // IN
+            }
+            Some(self.parse_qualified_name()?)
+        } else {
+            None
+        };
+
+        // Optional NAME phrases
+        let name_phrases = self.parse_xml_name_phrases()?;
+
+        // Optional TYPE phrases
+        let type_phrases = self.parse_xml_type_phrases()?;
+
+        // Optional NAMESPACE
+        let namespace = if self.check_keyword(Keyword::Namespace) {
+            self.advance(); // NAMESPACE
+            let uri = self.parse_expression()?;
+            let prefix = if self.check_identifier_value("PREFIX") {
+                self.advance(); // PREFIX
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+            Some(XmlNamespace { uri, prefix })
+        } else {
+            None
+        };
+
+        // Optional ENCODING
+        let encoding = if self.check_keyword(Keyword::Encoding) {
+            self.advance(); // ENCODING
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        // ON EXCEPTION / NOT ON EXCEPTION
+        let (on_exception, not_on_exception) = self.parse_xml_exception_handlers()?;
+
+        // Optional END-XML
+        let end_xml = if self.check_keyword(Keyword::EndXml) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        self.skip_if(TokenKind::Period);
+        let end = self.previous_span();
+
+        Ok(Statement::XmlGenerate(XmlGenerateStatement {
+            receiver,
+            source,
+            count_in,
+            name_phrases,
+            type_phrases,
+            namespace,
+            encoding,
+            on_exception,
+            not_on_exception,
+            end_xml,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse `XML PARSE source PROCESSING PROCEDURE procedure
+    ///  [ENCODING ...] [VALIDATING ...] [ON EXCEPTION ...] [END-XML]`
+    fn parse_xml_parse_statement(&mut self, start: Span) -> Result<Statement> {
+        self.advance(); // PARSE
+
+        let source = self.parse_qualified_name()?;
+
+        self.expect_keyword(Keyword::Processing)?;
+        if self.check_identifier_value("PROCEDURE") {
+            self.advance(); // PROCEDURE
+        }
+        let processing_procedure = self.expect_identifier()?;
+
+        // Optional ENCODING
+        let encoding = if self.check_keyword(Keyword::Encoding) {
+            self.advance(); // ENCODING
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        // Optional VALIDATING
+        let validating = if self.check_keyword(Keyword::Validating) {
+            self.advance(); // VALIDATING
+            Some(self.parse_qualified_name()?)
+        } else {
+            None
+        };
+
+        // ON EXCEPTION / NOT ON EXCEPTION
+        let (on_exception, not_on_exception) = self.parse_xml_exception_handlers()?;
+
+        // Optional END-XML
+        let end_xml = if self.check_keyword(Keyword::EndXml) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        self.skip_if(TokenKind::Period);
+        let end = self.previous_span();
+
+        Ok(Statement::XmlParse(XmlParseStatement {
+            source,
+            processing_procedure,
+            encoding,
+            validating,
+            on_exception,
+            not_on_exception,
+            end_xml,
+            span: start.extend(end),
+        }))
+    }
+
+    /// Parse NAME phrases for XML GENERATE: `NAME [OF] data-name IS 'literal' ...`
+    fn parse_xml_name_phrases(&mut self) -> Result<Vec<XmlNamePhrase>> {
+        let mut phrases = Vec::new();
+        while self.check_keyword(Keyword::Name) {
+            self.advance(); // NAME
+            if self.check_keyword(Keyword::Of) {
+                self.advance();
+            }
+            let data_name = self.parse_qualified_name()?;
+            self.expect_keyword(Keyword::Is)?;
+            let xml_name = match &self.current().kind {
+                TokenKind::StringLiteral(s) => {
+                    let name = s.clone();
+                    self.advance();
+                    name
+                }
+                _ => {
+                    return Err(CobolError::ParseError {
+                        message: format!(
+                            "Expected string literal after IS in NAME phrase, found {:?}",
+                            self.current().kind
+                        ),
+                    });
+                }
+            };
+            phrases.push(XmlNamePhrase { data_name, xml_name });
+        }
+        Ok(phrases)
+    }
+
+    /// Parse TYPE phrases for XML GENERATE: `TYPE [OF] data-name IS ATTRIBUTE|ELEMENT|CONTENT`
+    fn parse_xml_type_phrases(&mut self) -> Result<Vec<XmlTypePhrase>> {
+        let mut phrases = Vec::new();
+        while self.check_keyword(Keyword::Type) {
+            self.advance(); // TYPE
+            if self.check_keyword(Keyword::Of) {
+                self.advance();
+            }
+            let data_name = self.parse_qualified_name()?;
+            self.expect_keyword(Keyword::Is)?;
+            let xml_type = if self.check_keyword(Keyword::Attribute) {
+                self.advance();
+                XmlTypeKind::Attribute
+            } else if self.check_identifier_value("ELEMENT") {
+                self.advance();
+                XmlTypeKind::Element
+            } else if self.check_identifier_value("CONTENT") {
+                self.advance();
+                XmlTypeKind::Content
+            } else {
+                return Err(CobolError::ParseError {
+                    message: format!(
+                        "Expected ATTRIBUTE, ELEMENT, or CONTENT in TYPE phrase, found {:?}",
+                        self.current().kind
+                    ),
+                });
+            };
+            phrases.push(XmlTypePhrase { data_name, xml_type });
+        }
+        Ok(phrases)
+    }
+
+    /// Parse ON EXCEPTION / NOT ON EXCEPTION handlers for XML statements.
+    fn parse_xml_exception_handlers(
+        &mut self,
+    ) -> Result<(Option<Vec<Statement>>, Option<Vec<Statement>>)> {
+        let mut on_exception = None;
+        let mut not_on_exception = None;
+
+        if self.check_keyword(Keyword::OnException) {
+            self.advance(); // EXCEPTION
+            let mut stmts = Vec::new();
+            while !self.check(TokenKind::Period)
+                && !self.is_at_end()
+                && !self.check_keyword(Keyword::Not)
+                && !self.check_keyword(Keyword::EndXml)
+            {
+                stmts.push(self.parse_statement()?);
+            }
+            on_exception = Some(stmts);
+        }
+
+        if self.check_keyword(Keyword::Not) {
+            self.advance(); // NOT
+            if self.check_keyword(Keyword::OnException) {
+                self.advance(); // EXCEPTION
+                let mut stmts = Vec::new();
+                while !self.check(TokenKind::Period)
+                    && !self.is_at_end()
+                    && !self.check_keyword(Keyword::EndXml)
+                {
+                    stmts.push(self.parse_statement()?);
+                }
+                not_on_exception = Some(stmts);
+            }
+        }
+
+        Ok((on_exception, not_on_exception))
+    }
 }

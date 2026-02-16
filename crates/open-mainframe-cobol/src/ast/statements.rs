@@ -900,3 +900,95 @@ pub struct JsonNamePhrase {
     /// The JSON key name to use instead.
     pub json_name: String,
 }
+
+/// XML GENERATE statement.
+///
+/// `XML GENERATE receiver FROM source [COUNT IN count]
+///  [NAME ...] [TYPE ...] [NAMESPACE ...] [ENCODING ...] [ON EXCEPTION ...] [END-XML]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct XmlGenerateStatement {
+    /// Receiver data item (where XML text is stored).
+    pub receiver: QualifiedName,
+    /// Source data item (the COBOL group to convert).
+    pub source: QualifiedName,
+    /// Optional COUNT IN data item.
+    pub count_in: Option<QualifiedName>,
+    /// NAME phrases: rename elements in the XML output.
+    pub name_phrases: Vec<XmlNamePhrase>,
+    /// TYPE phrases: override type generation.
+    pub type_phrases: Vec<XmlTypePhrase>,
+    /// Optional NAMESPACE prefix and uri.
+    pub namespace: Option<XmlNamespace>,
+    /// Optional ENCODING code page.
+    pub encoding: Option<Expression>,
+    /// ON EXCEPTION handler.
+    pub on_exception: Option<Vec<Statement>>,
+    /// NOT ON EXCEPTION handler.
+    pub not_on_exception: Option<Vec<Statement>>,
+    /// Whether END-XML was present.
+    pub end_xml: bool,
+    /// Source span.
+    pub span: Span,
+}
+
+/// XML PARSE statement.
+///
+/// `XML PARSE source PROCESSING PROCEDURE procedure-name
+///  [ENCODING ...] [VALIDATING ...] [ON EXCEPTION ...] [END-XML]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct XmlParseStatement {
+    /// Source data item containing XML text.
+    pub source: QualifiedName,
+    /// Processing procedure paragraph/section name.
+    pub processing_procedure: String,
+    /// Optional ENCODING code page.
+    pub encoding: Option<Expression>,
+    /// Optional VALIDATING schema.
+    pub validating: Option<QualifiedName>,
+    /// ON EXCEPTION handler.
+    pub on_exception: Option<Vec<Statement>>,
+    /// NOT ON EXCEPTION handler.
+    pub not_on_exception: Option<Vec<Statement>>,
+    /// Whether END-XML was present.
+    pub end_xml: bool,
+    /// Source span.
+    pub span: Span,
+}
+
+/// NAME phrase for XML GENERATE.
+#[derive(Debug, Clone, PartialEq)]
+pub struct XmlNamePhrase {
+    /// The COBOL data name.
+    pub data_name: QualifiedName,
+    /// The XML element name to use instead.
+    pub xml_name: String,
+}
+
+/// TYPE phrase for XML GENERATE.
+#[derive(Debug, Clone, PartialEq)]
+pub struct XmlTypePhrase {
+    /// The COBOL data name.
+    pub data_name: QualifiedName,
+    /// The XML type: ATTRIBUTE or ELEMENT or CONTENT.
+    pub xml_type: XmlTypeKind,
+}
+
+/// XML TYPE kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XmlTypeKind {
+    /// Generate as XML attribute.
+    Attribute,
+    /// Generate as XML element (default).
+    Element,
+    /// Generate as content (text only, no element wrapper).
+    Content,
+}
+
+/// NAMESPACE clause for XML GENERATE.
+#[derive(Debug, Clone, PartialEq)]
+pub struct XmlNamespace {
+    /// The namespace URI.
+    pub uri: Expression,
+    /// Optional namespace prefix.
+    pub prefix: Option<Expression>,
+}
