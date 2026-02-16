@@ -363,6 +363,7 @@ macro_rules! for_all_keywords {
                 Validating      => "VALIDATING",
                 Attribute       => "ATTRIBUTE",
                 Type            => "TYPE",
+                In              => "IN",
                 Declaratives    => "DECLARATIVES",
                 EndDeclaratives => "END-DECLARATIVES",
                 Use             => "USE",

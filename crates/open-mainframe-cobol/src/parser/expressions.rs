@@ -394,15 +394,10 @@ impl super::Parser {
         let mut subscripts = Vec::new();
         let mut refmod = None;
 
-        // Parse OF/IN qualifications
-        while self.check_keyword(Keyword::Of) || self.check_keyword(Keyword::Input) {
-            // Note: IN might be confused with INPUT
-            if self.check_keyword(Keyword::Of) {
-                self.advance();
-                qualifiers.push(self.expect_identifier()?);
-            } else {
-                break;
-            }
+        // Parse OF/IN qualifications (OF and IN are synonymous in COBOL)
+        while self.check_keyword(Keyword::Of) || self.check_keyword(Keyword::In) {
+            self.advance(); // consume OF or IN
+            qualifiers.push(self.expect_identifier()?);
         }
 
         // Parse subscripts and/or reference modification
