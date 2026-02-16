@@ -680,6 +680,122 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_entry_statement() {
+        let text = r#"
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. T.
+            PROCEDURE DIVISION.
+                ENTRY "ALTENTRY" USING WS-PARM.
+                STOP RUN.
+        "#;
+        let (program, errors) = parse_text(text);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let program = program.unwrap();
+        let proc = program.procedure.unwrap();
+        if let ProcedureBody::Statements(stmts) = &proc.body {
+            let entry = stmts.iter().find(|s| matches!(s, Statement::Entry(_)));
+            assert!(entry.is_some(), "Expected ENTRY statement");
+            if let Statement::Entry(e) = entry.unwrap() {
+                assert_eq!(e.literal, "ALTENTRY");
+                assert_eq!(e.using.len(), 1);
+            }
+        } else {
+            // Paragraphs body — find ENTRY in the first paragraph's statements
+            if let ProcedureBody::Paragraphs(paras) = &proc.body {
+                let has_entry = paras.iter().any(|p| {
+                    p.statements.iter().any(|s| matches!(s, Statement::Entry(_)))
+                });
+                assert!(has_entry, "Expected ENTRY statement in paragraphs");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_alter_statement() {
+        let text = r#"
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. T.
+            PROCEDURE DIVISION.
+                ALTER PARA-1 TO PROCEED TO PARA-2.
+                STOP RUN.
+        "#;
+        let (program, errors) = parse_text(text);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let program = program.unwrap();
+        let proc = program.procedure.unwrap();
+        if let ProcedureBody::Statements(stmts) = &proc.body {
+            let alter = stmts.iter().find(|s| matches!(s, Statement::Alter(_)));
+            assert!(alter.is_some(), "Expected ALTER statement");
+            if let Statement::Alter(a) = alter.unwrap() {
+                assert_eq!(a.source, "PARA-1");
+                assert_eq!(a.target, "PARA-2");
+            }
+        } else if let ProcedureBody::Paragraphs(paras) = &proc.body {
+            let has_alter = paras.iter().any(|p| {
+                p.statements.iter().any(|s| matches!(s, Statement::Alter(_)))
+            });
+            assert!(has_alter, "Expected ALTER statement in paragraphs");
+        }
+    }
+
+    #[test]
+    fn test_parse_invoke_statement() {
+        let text = r#"
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. T.
+            DATA DIVISION.
+            WORKING-STORAGE SECTION.
+            01 MY-OBJ PIC X(10).
+            01 WS-RESULT PIC X(10).
+            PROCEDURE DIVISION.
+                INVOKE MY-OBJ "methodName" RETURNING WS-RESULT.
+                STOP RUN.
+        "#;
+        let (program, errors) = parse_text(text);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let program = program.unwrap();
+        let proc = program.procedure.unwrap();
+        if let ProcedureBody::Statements(stmts) = &proc.body {
+            let invoke = stmts.iter().find(|s| matches!(s, Statement::Invoke(_)));
+            assert!(invoke.is_some(), "Expected INVOKE statement");
+            if let Statement::Invoke(i) = invoke.unwrap() {
+                assert_eq!(i.method, "methodName");
+                assert!(i.returning.is_some());
+            }
+        } else if let ProcedureBody::Paragraphs(paras) = &proc.body {
+            let has_invoke = paras.iter().any(|p| {
+                p.statements.iter().any(|s| matches!(s, Statement::Invoke(_)))
+            });
+            assert!(has_invoke, "Expected INVOKE statement in paragraphs");
+        }
+    }
+
+    #[test]
+    fn test_parse_stop_literal() {
+        let text = r#"
+            IDENTIFICATION DIVISION.
+            PROGRAM-ID. T.
+            PROCEDURE DIVISION.
+                STOP "CHECKPOINT 1".
+                STOP RUN.
+        "#;
+        let (program, errors) = parse_text(text);
+        assert!(errors.is_empty(), "Errors: {:?}", errors);
+        let program = program.unwrap();
+        let proc = program.procedure.unwrap();
+        if let ProcedureBody::Statements(stmts) = &proc.body {
+            let stop_lit = stmts.iter().find(|s| {
+                if let Statement::StopRun(sr) = s { sr.is_literal } else { false }
+            });
+            assert!(stop_lit.is_some(), "Expected STOP literal statement");
+            if let Statement::StopRun(sr) = stop_lit.unwrap() {
+                assert!(sr.is_literal);
+                assert!(sr.return_code.is_some());
+            }
+        }
+    }
+
+    #[test]
     fn test_analyze_picture() {
         let (cat, size, dec) = data::analyze_picture("X(10)");
         assert_eq!(cat, PictureCategory::Alphanumeric);
