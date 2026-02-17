@@ -189,8 +189,11 @@ impl FieldTable {
     }
 
     /// Set the active field to the one containing the given screen position.
-    /// Used for SEND MAP CURSOR(n) support.
+    /// Used for SEND MAP CURSOR(row,col) support.
+    /// If the position lands in a protected field (or between fields),
+    /// advance to the next unprotected field.
     pub fn set_cursor_to_position(&mut self, pos: &ScreenPosition) {
+        // First try to find an unprotected field containing this position
         for (input_idx, &field_idx) in self.input_order.iter().enumerate() {
             let field = &self.fields[field_idx];
             if field.row == pos.row && pos.col >= field.col && pos.col < field.col + field.length {
@@ -200,6 +203,38 @@ impl FieldTable {
                 return;
             }
         }
+
+        // Position is in a protected field or empty area — advance to
+        // the next unprotected field after this screen position.
+        let target_linear = (pos.row - 1) * self.cols + (pos.col - 1);
+        let mut best: Option<(usize, usize)> = None; // (input_idx, linear_pos)
+        for (input_idx, &field_idx) in self.input_order.iter().enumerate() {
+            let field = &self.fields[field_idx];
+            let field_linear = (field.row - 1) * self.cols + (field.col - 1);
+            if field_linear >= target_linear
+                && (best.is_none() || field_linear < best.unwrap().1)
+            {
+                best = Some((input_idx, field_linear));
+            }
+        }
+        // If no field after the position, wrap to the first unprotected field
+        if let Some((input_idx, _)) = best {
+            self.active_input = Some(input_idx);
+            let field_idx = self.input_order[input_idx];
+            self.fields[field_idx].cursor_offset = 0;
+        } else if !self.input_order.is_empty() {
+            self.active_input = Some(0);
+            let field_idx = self.input_order[0];
+            self.fields[field_idx].cursor_offset = 0;
+        }
+    }
+
+    /// Set cursor from a linear screen offset (CURSOR(data-value)).
+    /// Converts the offset to row/col based on current screen dimensions.
+    pub fn set_cursor_to_offset(&mut self, offset: usize) {
+        let row = offset / self.cols + 1;
+        let col = offset % self.cols + 1;
+        self.set_cursor_to_position(&ScreenPosition::new(row, col));
     }
 
     /// Get the cursor screen position based on the active field.
@@ -686,5 +721,54 @@ INPUT    DFHMDF POS=(3,1),LENGTH=10,ATTRB=(UNPROT),COLOR=GREEN
         let input = table.fields().iter().find(|f| f.name == "INPUT").unwrap();
         assert!(!input.attribute.is_protected());
         assert_eq!(input.color, Some(FieldColor::Green));
+    }
+
+    #[test]
+    fn test_cursor_offset_positioning() {
+        // NAME is at row 1, col 12 => linear offset = 0*80 + 11 = 11
+        let map = create_test_map();
+        let mut table = FieldTable::from_bms_map(&map);
+
+        // Set cursor to offset 11 (row 1, col 12) — should land in NAME
+        table.set_cursor_to_offset(11);
+        let active = table.active_field().unwrap();
+        assert_eq!(active.name, "NAME");
+        assert_eq!(active.cursor_offset, 0);
+    }
+
+    #[test]
+    fn test_cursor_offset_within_field() {
+        let map = create_test_map();
+        let mut table = FieldTable::from_bms_map(&map);
+
+        // offset 14 = row 1, col 15 => NAME starts at col 12, so offset = 3
+        table.set_cursor_to_offset(14);
+        let active = table.active_field().unwrap();
+        assert_eq!(active.name, "NAME");
+        assert_eq!(active.cursor_offset, 3);
+    }
+
+    #[test]
+    fn test_cursor_in_protected_field_advances() {
+        // LABEL is at row 1, col 1 (protected). Setting cursor there
+        // should advance to NAME (row 1, col 12).
+        let map = create_test_map();
+        let mut table = FieldTable::from_bms_map(&map);
+
+        table.set_cursor_to_offset(0); // row 1, col 1 — LABEL (protected)
+        let active = table.active_field().unwrap();
+        assert_eq!(active.name, "NAME"); // advanced to next unprotected
+    }
+
+    #[test]
+    fn test_cursor_position_precedence_over_ic() {
+        let map = create_test_map();
+        let mut table = FieldTable::from_bms_map(&map);
+
+        // IC is on NAME, but CURSOR(position) should override
+        // AGE is at row 2, col 12 => offset = 80 + 11 = 91
+        table.set_cursor_to_offset(91);
+        let active = table.active_field().unwrap();
+        assert_eq!(active.name, "AGE");
     }
 }
