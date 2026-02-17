@@ -28,14 +28,18 @@ mod aix;
 mod btree;
 mod cluster;
 mod esds;
+pub mod freespace;
 mod ksds;
 pub mod lds;
 mod rrds;
+pub mod spanned;
 
 pub use aix::{AixDefinition, AlternateIndex, VsamPath};
 pub use btree::{BPlusTree, DEFAULT_ORDER};
 pub use cluster::{ClusterParams, KeySpec, VsamCluster, VsamType};
 pub use esds::{Esds, EsdsResult};
+pub use freespace::{FreeSpaceConfig, FreeSpaceManager, FreeSpaceStatistics};
 pub use ksds::{FileStatus, Ksds, KsdsResult};
 pub use lds::{Lds, LDS_PAGE_SIZE};
 pub use rrds::{Rrds, RrdsResult};
+pub use spanned::{Segment, SpannedRecordManager, SDW_SIZE};

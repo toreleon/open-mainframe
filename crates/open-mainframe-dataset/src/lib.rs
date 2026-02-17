@@ -48,7 +48,8 @@ pub use types::{
     DatasetAttributes, DatasetOrg, DatasetRef, DispAction, DispSpec, Disposition, RecordFormat,
 };
 pub use vsam::{
-    AixDefinition, AlternateIndex, BPlusTree, ClusterParams, Esds, EsdsResult, FileStatus, KeySpec,
-    Ksds, KsdsResult, Lds, Rrds, RrdsResult, VsamCluster, VsamPath, VsamType, DEFAULT_ORDER,
-    LDS_PAGE_SIZE,
+    AixDefinition, AlternateIndex, BPlusTree, ClusterParams, Esds, EsdsResult, FileStatus,
+    FreeSpaceConfig, FreeSpaceManager, FreeSpaceStatistics, KeySpec, Ksds, KsdsResult, Lds, Rrds,
+    RrdsResult, Segment, SpannedRecordManager, VsamCluster, VsamPath, VsamType, DEFAULT_ORDER,
+    LDS_PAGE_SIZE, SDW_SIZE,
 };
