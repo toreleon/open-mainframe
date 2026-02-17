@@ -51,3 +51,13 @@
   - agent/src/state.py (updated — extends CopilotKitState for messages + copilotkit fields, added active_node)
   - agent/src/agent.py (updated — migrated from flat create_agent to StateGraph with router → compile/chat + ToolNode)
 - Notes: Migrated from Batch 1-2 flat create_agent pattern to explicit StateGraph with router → capability node dispatching. Router classifies all 6 intents (ASSESS, COMPILE, EXECUTE, EXPLAIN, DATASET, CHAT) but only COMPILE has a dedicated node; others fall back to chat. ToolNode uses all 10 tools; route_after_tools conditional edge returns to originating capability node via active_node state field. MemorySaver checkpointer configured for HITL support in later batches.
+
+## Batch 4: Execution Agent (E-600)
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - agent/src/nodes/execute.py (execute node with HITL interrupt for run_jcl + interpret_cobol, includes parse_jcl)
+  - agent/src/nodes/router.py (updated — EXECUTE intent routes to execute node)
+  - agent/src/nodes/__init__.py (updated — exports execute_node)
+  - agent/src/agent.py (updated — execute node added to StateGraph, route_after_tools expanded)
+- Notes: Execute node uses LangGraph interrupt() for human-in-the-loop approval before run_jcl and interpret_cobol. Approval payload includes action name, file path, and description. If user declines, returns cancellation message with reason. parse_jcl included in execute tools for pre-execution JCL analysis. MemorySaver checkpointer persists state across interrupt boundaries.
