@@ -529,6 +529,8 @@ pub enum SimpleStatement {
         statements: Vec<SimpleStatement>,
         /// VARYING clause: (variable, FROM, BY)
         varying: Option<(String, SimpleExpr, SimpleExpr)>,
+        /// AFTER clauses for nested VARYING: Vec<(variable, FROM, BY, UNTIL)>
+        after: Vec<VaryingAfter>,
     },
     /// INSPECT TALLYING
     InspectTallying {
@@ -807,6 +809,41 @@ pub enum SimpleCompareOp {
     GreaterOrEqual,
 }
 
+/// A single AFTER clause in PERFORM VARYING ... AFTER.
+///
+/// Each AFTER introduces a nested loop variable with its own FROM, BY, UNTIL.
+#[derive(Debug, Clone)]
+pub struct VaryingAfter {
+    /// Variable name to iterate.
+    pub variable: String,
+    /// Initial value expression.
+    pub from: SimpleExpr,
+    /// Increment expression.
+    pub by: SimpleExpr,
+    /// Termination condition.
+    pub until: SimpleCondition,
+}
+
+/// Definition of an 88-level condition name.
+///
+/// Supports single values, value lists, and THRU ranges as per COBOL standard.
+#[derive(Debug, Clone)]
+pub struct ConditionDef {
+    /// Parent data item that this condition tests.
+    pub parent: String,
+    /// List of acceptable values (single values or ranges).
+    pub values: Vec<ConditionValue>,
+}
+
+/// A single value or range in an 88-level condition definition.
+#[derive(Debug, Clone)]
+pub enum ConditionValue {
+    /// Single value: VALUE 'Y'
+    Single(String),
+    /// Range: VALUE 'A' THRU 'Z'
+    Range(String, String),
+}
+
 /// Control flow signal returned by statement execution.
 ///
 /// Used to implement unstructured control flow (GO TO, EXIT PARAGRAPH, etc.)
@@ -837,8 +874,8 @@ pub struct SimpleProgram {
     pub paragraphs: HashMap<String, Vec<SimpleStatement>>,
     /// Ordered list of paragraph names (for PERFORM THRU and fall-through).
     pub paragraph_order: Vec<String>,
-    /// Level-88 condition names: condition_name -> (parent_field, value).
-    pub condition_names: HashMap<String, (String, String)>,
+    /// Level-88 condition names: condition_name -> definition with parent field and values.
+    pub condition_names: HashMap<String, ConditionDef>,
     /// Group item layouts: group_name -> list of sub-fields with offsets.
     pub group_layouts: HashMap<String, Vec<GroupField>>,
     /// Contained (nested) programs.
@@ -1493,11 +1530,18 @@ fn execute_statement_impl(
         }
 
         SimpleStatement::SetCondition { condition_name, value } => {
-            // SET condition-name TO TRUE: set the parent field to the condition's value
+            // SET condition-name TO TRUE: set the parent field to the first value
             // SET condition-name TO FALSE: not standard COBOL, but we handle it
             if *value {
-                if let Some((parent, expected_val)) = program.condition_names.get(&condition_name.to_uppercase()) {
-                    env.set(parent, CobolValue::Alphanumeric(expected_val.clone()))?;
+                if let Some(def) = program.condition_names.get(&condition_name.to_uppercase()) {
+                    // Use the first value from the condition definition
+                    if let Some(first_val) = def.values.first() {
+                        let set_val = match first_val {
+                            ConditionValue::Single(v) => v.clone(),
+                            ConditionValue::Range(low, _) => low.clone(),
+                        };
+                        env.set(&def.parent, CobolValue::Alphanumeric(set_val))?;
+                    }
                 }
             }
             // SET condition TO FALSE not supported in standard COBOL
@@ -1622,38 +1666,57 @@ fn execute_statement_impl(
             }
         }
 
-        SimpleStatement::PerformInline { until, statements: stmts, varying } => {
+        SimpleStatement::PerformInline { until, statements: stmts, varying, after } => {
             // Initialize VARYING variable if present
             if let Some((ref var_name, ref from_expr, _)) = varying {
                 let from_val = eval_expr(from_expr, env)?;
                 env.set(var_name, from_val)?;
             }
 
-            // Determine the UNTIL condition: prefer varying's until (embedded in `until` field)
-            let effective_until = if let Some(ref _v) = varying {
-                // For PERFORM VARYING, the UNTIL is stored in the `until` field
-                until.as_ref()
-            } else {
-                until.as_ref()
-            };
+            // Initialize all AFTER variables
+            for af in after {
+                let from_val = eval_expr(&af.from, env)?;
+                env.set(&af.variable, from_val)?;
+            }
 
-            let max_iterations = 10_000; // Safety limit
+            // Determine the UNTIL condition
+            let effective_until = until.as_ref();
+
+            let max_iterations = 1_000_000; // Safety limit (higher for nested loops)
             let mut count = 0;
 
             loop {
                 if env.is_stopped() || env.is_goback() || count >= max_iterations {
                     break;
                 }
-                // Check UNTIL condition before (test before)
+                // Check outer UNTIL condition before (test before)
                 if let Some(cond) = effective_until {
                     if eval_condition(cond, env, program)? {
                         break;
                     }
                 }
-                execute_statements(stmts, program, env)?;
-                count += 1;
 
-                // Increment VARYING variable
+                if after.is_empty() {
+                    // Simple VARYING without AFTER
+                    execute_statements(stmts, program, env)?;
+                    count += 1;
+                } else {
+                    // VARYING with AFTER: run inner loop(s) before incrementing outer
+                    // Re-initialize the first AFTER variable from its FROM value
+                    let from_val = eval_expr(&after[0].from, env)?;
+                    env.set(&after[0].variable, from_val)?;
+
+                    // For multiple AFTER levels, re-initialize subsequent ones too
+                    for af in after.iter().skip(1) {
+                        let fv = eval_expr(&af.from, env)?;
+                        env.set(&af.variable, fv)?;
+                    }
+
+                    // Execute the innermost AFTER loop
+                    execute_after_loop(after, 0, stmts, program, env, &mut count, max_iterations)?;
+                }
+
+                // Increment outer VARYING variable
                 if let Some((ref var_name, _, ref by_expr)) = varying {
                     let by_val = to_numeric(&eval_expr(by_expr, env)?);
                     if let Some(current) = env.get(var_name).cloned() {
@@ -3086,6 +3149,58 @@ fn compare_values(left: &CobolValue, right: &CobolValue) -> std::cmp::Ordering {
     }
 }
 
+/// Execute nested AFTER loops for PERFORM VARYING ... AFTER.
+///
+/// Recursively handles multiple AFTER levels. Each level iterates its variable
+/// from FROM by BY until UNTIL, then the next outer level increments.
+fn execute_after_loop(
+    afters: &[VaryingAfter],
+    level: usize,
+    stmts: &[SimpleStatement],
+    program: &SimpleProgram,
+    env: &mut Environment,
+    count: &mut usize,
+    max_iterations: usize,
+) -> Result<()> {
+    if level >= afters.len() {
+        // Base case: execute the loop body
+        execute_statements(stmts, program, env)?;
+        *count += 1;
+        return Ok(());
+    }
+
+    let af = &afters[level];
+
+    loop {
+        if env.is_stopped() || env.is_goback() || *count >= max_iterations {
+            break;
+        }
+
+        // Check UNTIL condition for this AFTER level
+        if eval_condition(&af.until, env, program)? {
+            break;
+        }
+
+        if level + 1 < afters.len() {
+            // Re-initialize next AFTER level variable
+            let from_val = eval_expr(&afters[level + 1].from, env)?;
+            env.set(&afters[level + 1].variable, from_val)?;
+        }
+
+        // Recurse to inner level or execute body
+        execute_after_loop(afters, level + 1, stmts, program, env, count, max_iterations)?;
+
+        // Increment this AFTER variable
+        let by_val = to_numeric(&eval_expr(&af.by, env)?);
+        if let Some(current) = env.get(&af.variable).cloned() {
+            let new_val = to_numeric(&current).add(&by_val);
+            env.set(&af.variable, CobolValue::Numeric(new_val))?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Evaluate a condition.
 fn eval_condition(cond: &SimpleCondition, env: &Environment, program: &SimpleProgram) -> Result<bool> {
     match cond {
@@ -3122,15 +3237,18 @@ fn eval_condition(cond: &SimpleCondition, env: &Environment, program: &SimplePro
         }
 
         SimpleCondition::ConditionName(name) => {
-            // Look up the level-88 condition: condition_name -> (parent_field, expected_value)
-            if let Some((parent, expected_val)) = program.condition_names.get(&name.to_uppercase()) {
-                let actual = env.get(parent)
+            // Look up the level-88 condition: condition_name -> ConditionDef
+            if let Some(def) = program.condition_names.get(&name.to_uppercase()) {
+                let actual = env.get(&def.parent)
                     .map(|v| v.to_display_string().trim().to_string())
                     .unwrap_or_default();
-                let result = actual == *expected_val;
+                let result = def.values.iter().any(|v| match v {
+                    ConditionValue::Single(expected) => actual == *expected,
+                    ConditionValue::Range(low, high) => actual >= *low && actual <= *high,
+                });
                 if std::env::var("OPEN_MAINFRAME_DEBUG_CMP").is_ok() {
-                    eprintln!("[COND88] {} => {}={:?} expected={:?} => {}",
-                        name, parent, actual, expected_val, result);
+                    eprintln!("[COND88] {} => {}={:?} values={:?} => {}",
+                        name, def.parent, actual, def.values, result);
                 }
                 Ok(result)
             } else {
@@ -4971,5 +5089,481 @@ mod tests {
             let (y2, m2, d2) = lilian_to_gregorian(lilian);
             assert_eq!((y, m, d), (y2, m2, d2), "Roundtrip failed for {}-{}-{}", y, m, d);
         }
+    }
+
+    // ================================================================
+    // Epic 507 — PERFORM VARYING with AFTER + 88-Level Conditions
+    // ================================================================
+
+    /// Story 507.1: PERFORM VARYING with AFTER for multi-dimensional iteration.
+    /// Given PERFORM VARYING WS-ROW FROM 1 BY 1 UNTIL WS-ROW > 10
+    ///       AFTER WS-COL FROM 1 BY 1 UNTIL WS-COL > 5
+    /// Then PROCESS-CELL is called 50 times (10 rows x 5 columns).
+    #[test]
+    fn test_perform_varying_with_after() {
+        let mut env = create_test_env();
+        env.define("WS-ROW", num_meta());
+        env.define("WS-COL", num_meta());
+        env.define("WS-COUNT", num_meta());
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![
+                ("WS-ROW".to_string(), num_meta()),
+                ("WS-COL".to_string(), num_meta()),
+                ("WS-COUNT".to_string(), num_meta()),
+            ],
+            statements: vec![SimpleStatement::PerformInline {
+                // UNTIL WS-ROW > 10
+                until: Some(SimpleCondition::Compare {
+                    left: SimpleExpr::Variable("WS-ROW".to_string()),
+                    op: SimpleCompareOp::GreaterThan,
+                    right: SimpleExpr::Integer(10),
+                }),
+                statements: vec![
+                    // Body: ADD 1 TO WS-COUNT
+                    SimpleStatement::Add {
+                        values: vec![SimpleExpr::Integer(1)],
+                        to: vec!["WS-COUNT".to_string()],
+                    },
+                ],
+                // VARYING WS-ROW FROM 1 BY 1
+                varying: Some((
+                    "WS-ROW".to_string(),
+                    SimpleExpr::Integer(1),
+                    SimpleExpr::Integer(1),
+                )),
+                // AFTER WS-COL FROM 1 BY 1 UNTIL WS-COL > 5
+                after: vec![VaryingAfter {
+                    variable: "WS-COL".to_string(),
+                    from: SimpleExpr::Integer(1),
+                    by: SimpleExpr::Integer(1),
+                    until: SimpleCondition::Compare {
+                        left: SimpleExpr::Variable("WS-COL".to_string()),
+                        op: SimpleCompareOp::GreaterThan,
+                        right: SimpleExpr::Integer(5),
+                    },
+                }],
+            }],
+            paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        execute(&program, &mut env).unwrap();
+        let count = env.get("WS-COUNT").unwrap().to_display_string().trim().to_string();
+        assert_eq!(count, "50", "10 rows x 5 columns = 50 iterations");
+    }
+
+    /// Story 507.1: PERFORM VARYING with multiple AFTER levels.
+    /// 3 x 4 x 2 = 24 iterations.
+    #[test]
+    fn test_perform_varying_with_two_after_levels() {
+        let mut env = create_test_env();
+        env.define("WS-X", num_meta());
+        env.define("WS-Y", num_meta());
+        env.define("WS-Z", num_meta());
+        env.define("WS-COUNT", num_meta());
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![],
+            statements: vec![SimpleStatement::PerformInline {
+                until: Some(SimpleCondition::Compare {
+                    left: SimpleExpr::Variable("WS-X".to_string()),
+                    op: SimpleCompareOp::GreaterThan,
+                    right: SimpleExpr::Integer(3),
+                }),
+                statements: vec![SimpleStatement::Add {
+                    values: vec![SimpleExpr::Integer(1)],
+                    to: vec!["WS-COUNT".to_string()],
+                }],
+                varying: Some((
+                    "WS-X".to_string(),
+                    SimpleExpr::Integer(1),
+                    SimpleExpr::Integer(1),
+                )),
+                after: vec![
+                    VaryingAfter {
+                        variable: "WS-Y".to_string(),
+                        from: SimpleExpr::Integer(1),
+                        by: SimpleExpr::Integer(1),
+                        until: SimpleCondition::Compare {
+                            left: SimpleExpr::Variable("WS-Y".to_string()),
+                            op: SimpleCompareOp::GreaterThan,
+                            right: SimpleExpr::Integer(4),
+                        },
+                    },
+                    VaryingAfter {
+                        variable: "WS-Z".to_string(),
+                        from: SimpleExpr::Integer(1),
+                        by: SimpleExpr::Integer(1),
+                        until: SimpleCondition::Compare {
+                            left: SimpleExpr::Variable("WS-Z".to_string()),
+                            op: SimpleCompareOp::GreaterThan,
+                            right: SimpleExpr::Integer(2),
+                        },
+                    },
+                ],
+            }],
+            paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        execute(&program, &mut env).unwrap();
+        let count = env.get("WS-COUNT").unwrap().to_display_string().trim().to_string();
+        assert_eq!(count, "24", "3 x 4 x 2 = 24 iterations");
+    }
+
+    /// Story 507.1: PERFORM VARYING without AFTER (existing behavior preserved).
+    #[test]
+    fn test_perform_varying_simple_no_after() {
+        let mut env = create_test_env();
+        env.define("WS-I", num_meta());
+        env.define("WS-COUNT", num_meta());
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![],
+            statements: vec![SimpleStatement::PerformInline {
+                until: Some(SimpleCondition::Compare {
+                    left: SimpleExpr::Variable("WS-I".to_string()),
+                    op: SimpleCompareOp::GreaterThan,
+                    right: SimpleExpr::Integer(5),
+                }),
+                statements: vec![SimpleStatement::Add {
+                    values: vec![SimpleExpr::Integer(1)],
+                    to: vec!["WS-COUNT".to_string()],
+                }],
+                varying: Some((
+                    "WS-I".to_string(),
+                    SimpleExpr::Integer(1),
+                    SimpleExpr::Integer(1),
+                )),
+                after: Vec::new(),
+            }],
+            paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
+            condition_names: HashMap::new(),
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        execute(&program, &mut env).unwrap();
+        let count = env.get("WS-COUNT").unwrap().to_display_string().trim().to_string();
+        assert_eq!(count, "5", "VARYING 1..5 = 5 iterations");
+    }
+
+    /// Story 507.2: 88-level condition name with single VALUE.
+    /// Given 05 WS-STATUS PIC X. 88 VALID VALUE 'Y'. 88 INVALID VALUE 'N'.
+    /// When WS-STATUS = 'Y', then IF VALID is TRUE.
+    #[test]
+    fn test_88_level_single_value() {
+        let mut env = create_test_env();
+        env.define("WS-STATUS", DataItemMeta {
+            size: 1, decimals: 0, is_numeric: false,
+            picture: Some("X".to_string()),
+        });
+        env.set("WS-STATUS", CobolValue::Alphanumeric("Y".to_string())).unwrap();
+
+        let mut cond_names = HashMap::new();
+        cond_names.insert("VALID".to_string(), ConditionDef {
+            parent: "WS-STATUS".to_string(),
+            values: vec![ConditionValue::Single("Y".to_string())],
+        });
+        cond_names.insert("INVALID".to_string(), ConditionDef {
+            parent: "WS-STATUS".to_string(),
+            values: vec![ConditionValue::Single("N".to_string())],
+        });
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![],
+            statements: vec![],
+            paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
+            condition_names: cond_names,
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        // VALID should be TRUE when WS-STATUS = 'Y'
+        let result = eval_condition(
+            &SimpleCondition::ConditionName("VALID".to_string()),
+            &env,
+            &program,
+        ).unwrap();
+        assert!(result, "VALID should be TRUE when WS-STATUS = Y");
+
+        // INVALID should be FALSE
+        let result = eval_condition(
+            &SimpleCondition::ConditionName("INVALID".to_string()),
+            &env,
+            &program,
+        ).unwrap();
+        assert!(!result, "INVALID should be FALSE when WS-STATUS = Y");
+    }
+
+    /// Story 507.2: SET condition-name TO TRUE.
+    /// SET INVALID TO TRUE should set WS-STATUS to 'N'.
+    #[test]
+    fn test_88_level_set_to_true() {
+        let mut env = create_test_env();
+        env.define("WS-STATUS", DataItemMeta {
+            size: 1, decimals: 0, is_numeric: false,
+            picture: Some("X".to_string()),
+        });
+        env.set("WS-STATUS", CobolValue::Alphanumeric("Y".to_string())).unwrap();
+
+        let mut cond_names = HashMap::new();
+        cond_names.insert("VALID".to_string(), ConditionDef {
+            parent: "WS-STATUS".to_string(),
+            values: vec![ConditionValue::Single("Y".to_string())],
+        });
+        cond_names.insert("INVALID".to_string(), ConditionDef {
+            parent: "WS-STATUS".to_string(),
+            values: vec![ConditionValue::Single("N".to_string())],
+        });
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![],
+            statements: vec![
+                SimpleStatement::SetCondition {
+                    condition_name: "INVALID".to_string(),
+                    value: true,
+                },
+            ],
+            paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
+            condition_names: cond_names,
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        execute(&program, &mut env).unwrap();
+        let status = env.get("WS-STATUS").unwrap().to_display_string().trim().to_string();
+        assert_eq!(status, "N", "SET INVALID TO TRUE should set WS-STATUS to N");
+    }
+
+    /// Story 507.2: 88-level with multiple VALUES.
+    /// 88 VOWEL VALUE 'A' 'E' 'I' 'O' 'U'.
+    #[test]
+    fn test_88_level_multiple_values() {
+        let mut env = create_test_env();
+        env.define("WS-CHAR", DataItemMeta {
+            size: 1, decimals: 0, is_numeric: false,
+            picture: Some("X".to_string()),
+        });
+
+        let mut cond_names = HashMap::new();
+        cond_names.insert("VOWEL".to_string(), ConditionDef {
+            parent: "WS-CHAR".to_string(),
+            values: vec![
+                ConditionValue::Single("A".to_string()),
+                ConditionValue::Single("E".to_string()),
+                ConditionValue::Single("I".to_string()),
+                ConditionValue::Single("O".to_string()),
+                ConditionValue::Single("U".to_string()),
+            ],
+        });
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![],
+            statements: vec![],
+            paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
+            condition_names: cond_names,
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        // Test each vowel
+        for ch in &["A", "E", "I", "O", "U"] {
+            env.set("WS-CHAR", CobolValue::Alphanumeric(ch.to_string())).unwrap();
+            let result = eval_condition(
+                &SimpleCondition::ConditionName("VOWEL".to_string()),
+                &env,
+                &program,
+            ).unwrap();
+            assert!(result, "VOWEL should be TRUE for '{}'", ch);
+        }
+
+        // Test a consonant
+        env.set("WS-CHAR", CobolValue::Alphanumeric("B".to_string())).unwrap();
+        let result = eval_condition(
+            &SimpleCondition::ConditionName("VOWEL".to_string()),
+            &env,
+            &program,
+        ).unwrap();
+        assert!(!result, "VOWEL should be FALSE for 'B'");
+    }
+
+    /// Story 507.2: 88-level with THRU range.
+    /// 88 VALID-GRADE VALUE 'A' THRU 'D'.
+    #[test]
+    fn test_88_level_thru_range() {
+        let mut env = create_test_env();
+        env.define("WS-GRADE", DataItemMeta {
+            size: 1, decimals: 0, is_numeric: false,
+            picture: Some("X".to_string()),
+        });
+
+        let mut cond_names = HashMap::new();
+        cond_names.insert("VALID-GRADE".to_string(), ConditionDef {
+            parent: "WS-GRADE".to_string(),
+            values: vec![
+                ConditionValue::Range("A".to_string(), "D".to_string()),
+            ],
+        });
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![],
+            statements: vec![],
+            paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
+            condition_names: cond_names,
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        // 'A', 'B', 'C', 'D' should all be valid
+        for ch in &["A", "B", "C", "D"] {
+            env.set("WS-GRADE", CobolValue::Alphanumeric(ch.to_string())).unwrap();
+            let result = eval_condition(
+                &SimpleCondition::ConditionName("VALID-GRADE".to_string()),
+                &env,
+                &program,
+            ).unwrap();
+            assert!(result, "VALID-GRADE should be TRUE for '{}'", ch);
+        }
+
+        // 'E', 'F' should not be valid
+        for ch in &["E", "F"] {
+            env.set("WS-GRADE", CobolValue::Alphanumeric(ch.to_string())).unwrap();
+            let result = eval_condition(
+                &SimpleCondition::ConditionName("VALID-GRADE".to_string()),
+                &env,
+                &program,
+            ).unwrap();
+            assert!(!result, "VALID-GRADE should be FALSE for '{}'", ch);
+        }
+    }
+
+    /// Story 507.2: SET TO TRUE with multiple values uses first value.
+    #[test]
+    fn test_88_level_set_true_uses_first_value() {
+        let mut env = create_test_env();
+        env.define("WS-CHAR", DataItemMeta {
+            size: 1, decimals: 0, is_numeric: false,
+            picture: Some("X".to_string()),
+        });
+
+        let mut cond_names = HashMap::new();
+        cond_names.insert("VOWEL".to_string(), ConditionDef {
+            parent: "WS-CHAR".to_string(),
+            values: vec![
+                ConditionValue::Single("A".to_string()),
+                ConditionValue::Single("E".to_string()),
+            ],
+        });
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![],
+            statements: vec![
+                SimpleStatement::SetCondition {
+                    condition_name: "VOWEL".to_string(),
+                    value: true,
+                },
+            ],
+            paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
+            condition_names: cond_names,
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        execute(&program, &mut env).unwrap();
+        let val = env.get("WS-CHAR").unwrap().to_display_string().trim().to_string();
+        assert_eq!(val, "A", "SET VOWEL TO TRUE should set WS-CHAR to first value 'A'");
+    }
+
+    /// Story 507.2: 88-level combined values and range.
+    /// 88 PASS VALUE 'A' 'B' 'C' 'D' '1' THRU '9'.
+    #[test]
+    fn test_88_level_mixed_values_and_ranges() {
+        let mut env = create_test_env();
+        env.define("WS-CODE", DataItemMeta {
+            size: 1, decimals: 0, is_numeric: false,
+            picture: Some("X".to_string()),
+        });
+
+        let mut cond_names = HashMap::new();
+        cond_names.insert("PASS".to_string(), ConditionDef {
+            parent: "WS-CODE".to_string(),
+            values: vec![
+                ConditionValue::Single("A".to_string()),
+                ConditionValue::Single("B".to_string()),
+                ConditionValue::Range("1".to_string(), "9".to_string()),
+            ],
+        });
+
+        let program = SimpleProgram {
+            name: "TEST".to_string(),
+            data_items: vec![],
+            statements: vec![],
+            paragraphs: HashMap::new(),
+            paragraph_order: Vec::new(),
+            condition_names: cond_names,
+            group_layouts: HashMap::new(),
+            contained_programs: Vec::new(),
+            is_initial: false,
+            is_common: false,
+            declarative_handlers: HashMap::new(),
+        };
+
+        // 'A' and 'B' should pass (single values)
+        env.set("WS-CODE", CobolValue::Alphanumeric("A".to_string())).unwrap();
+        assert!(eval_condition(&SimpleCondition::ConditionName("PASS".to_string()), &env, &program).unwrap());
+
+        // '5' should pass (in range 1-9)
+        env.set("WS-CODE", CobolValue::Alphanumeric("5".to_string())).unwrap();
+        assert!(eval_condition(&SimpleCondition::ConditionName("PASS".to_string()), &env, &program).unwrap());
+
+        // 'Z' should not pass
+        env.set("WS-CODE", CobolValue::Alphanumeric("Z".to_string())).unwrap();
+        assert!(!eval_condition(&SimpleCondition::ConditionName("PASS".to_string()), &env, &program).unwrap());
     }
 }

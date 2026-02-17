@@ -489,7 +489,7 @@ fn convert_program(program: &Program) -> Result<SimpleProgram> {
     // Collect data items, initial values, level-88 condition names, and group layouts
     let mut data_items = Vec::new();
     let mut initial_values = Vec::new();
-    let mut condition_names: HashMap<String, (String, String)> = HashMap::new();
+    let mut condition_names: HashMap<String, open_mainframe_runtime::interpreter::ConditionDef> = HashMap::new();
     let mut group_layouts: HashMap<String, Vec<open_mainframe_runtime::interpreter::GroupField>> = HashMap::new();
     let mut redefines_map: Vec<(String, String)> = Vec::new();
     if let Some(ref data) = program.data {
@@ -648,7 +648,7 @@ fn collect_data_items(
     items: &[DataItem],
     out: &mut Vec<(String, DataItemMeta)>,
     inits: &mut Vec<(String, SimpleExpr)>,
-    cond_names: &mut HashMap<String, (String, String)>,
+    cond_names: &mut HashMap<String, open_mainframe_runtime::interpreter::ConditionDef>,
     redefines_map: &mut Vec<(String, String)>,
 ) {
     for item in items {
@@ -690,23 +690,42 @@ fn collect_data_items(
                 }
             }
 
-            // Collect level-88 condition names
+            // Collect level-88 condition names with full value lists and ranges
             for cv in &item.condition_values {
-                if let Some(first_val) = cv.values.first() {
-                    let val_str = match first_val {
+                let mut values = Vec::new();
+                for entry in &cv.values {
+                    match entry {
                         open_mainframe_cobol::ast::ConditionValueEntry::Single(lit) => {
-                            match &lit.kind {
+                            let val_str = match &lit.kind {
                                 LiteralKind::String(s) => s.clone(),
                                 LiteralKind::Integer(n) => n.to_string(),
                                 LiteralKind::Hex(s) => decode_hex_string(s),
                                 _ => String::new(),
-                            }
+                            };
+                            values.push(open_mainframe_runtime::interpreter::ConditionValue::Single(val_str));
                         }
-                        _ => String::new(),
-                    };
+                        open_mainframe_cobol::ast::ConditionValueEntry::Range { from, to } => {
+                            let from_str = match &from.kind {
+                                LiteralKind::String(s) => s.clone(),
+                                LiteralKind::Integer(n) => n.to_string(),
+                                _ => String::new(),
+                            };
+                            let to_str = match &to.kind {
+                                LiteralKind::String(s) => s.clone(),
+                                LiteralKind::Integer(n) => n.to_string(),
+                                _ => String::new(),
+                            };
+                            values.push(open_mainframe_runtime::interpreter::ConditionValue::Range(from_str, to_str));
+                        }
+                    }
+                }
+                if !values.is_empty() {
                     cond_names.insert(
                         cv.name.to_uppercase(),
-                        (name.to_uppercase(), val_str),
+                        open_mainframe_runtime::interpreter::ConditionDef {
+                            parent: name.to_uppercase(),
+                            values,
+                        },
                     );
                 }
             }
@@ -1119,6 +1138,7 @@ fn convert_statement(stmt: &Statement) -> Result<Option<SimpleStatement>> {
                     until,
                     statements: stmts,
                     varying,
+                    after: Vec::new(),
                 }));
             }
 
