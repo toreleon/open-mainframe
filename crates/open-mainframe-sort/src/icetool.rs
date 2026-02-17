@@ -338,6 +338,7 @@ fn execute_select(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fields::{SortField, SortOrder};
 
     #[test]
     fn test_sort_operator() {

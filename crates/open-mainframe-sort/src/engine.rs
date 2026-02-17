@@ -19,6 +19,28 @@ use crate::reformat::OutrecSpec;
 /// Default maximum records to hold in memory for sorting.
 const DEFAULT_MAX_MEMORY_RECORDS: usize = 100_000;
 
+/// Record format for input/output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordFormat {
+    /// Line-based text records (newline-delimited).
+    LineBased,
+    /// Fixed-length binary records.
+    Fixed(usize),
+    /// Variable-length records with 4-byte RDW (Record Descriptor Word).
+    VariableBlocked,
+}
+
+/// Format conversion for OUTFIL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatConversion {
+    /// No conversion.
+    None,
+    /// Fixed-to-variable: remove trailing spaces, add RDW.
+    Ftov,
+    /// Variable-to-fixed: pad/truncate to fixed length, strip RDW.
+    Vtof(usize),
+}
+
 /// Sort engine for processing records.
 pub struct SortEngine {
     /// Sort specification.
@@ -37,6 +59,10 @@ pub struct SortEngine {
     copy_mode: bool,
     /// Fixed record length (0 = variable/line-based).
     record_length: usize,
+    /// Record format for input.
+    record_format: RecordFormat,
+    /// Format conversion for output.
+    format_conversion: FormatConversion,
     /// Maximum records to hold in memory before switching to external sort.
     max_memory_records: usize,
 }
@@ -53,6 +79,8 @@ impl SortEngine {
             sum_fields: None,
             copy_mode: false,
             record_length: 0,
+            record_format: RecordFormat::LineBased,
+            format_conversion: FormatConversion::None,
             max_memory_records: DEFAULT_MAX_MEMORY_RECORDS,
         }
     }
@@ -68,6 +96,8 @@ impl SortEngine {
             sum_fields: None,
             copy_mode: true,
             record_length: 0,
+            record_format: RecordFormat::LineBased,
+            format_conversion: FormatConversion::None,
             max_memory_records: DEFAULT_MAX_MEMORY_RECORDS,
         }
     }
@@ -102,9 +132,27 @@ impl SortEngine {
         self
     }
 
-    /// Sets fixed record length.
+    /// Sets fixed record length (also sets format to Fixed).
     pub fn with_record_length(mut self, length: usize) -> Self {
         self.record_length = length;
+        if length > 0 {
+            self.record_format = RecordFormat::Fixed(length);
+        }
+        self
+    }
+
+    /// Sets the record format.
+    pub fn with_record_format(mut self, format: RecordFormat) -> Self {
+        self.record_format = format;
+        if let RecordFormat::Fixed(len) = format {
+            self.record_length = len;
+        }
+        self
+    }
+
+    /// Sets format conversion for output.
+    pub fn with_format_conversion(mut self, conversion: FormatConversion) -> Self {
+        self.format_conversion = conversion;
         self
     }
 
@@ -194,23 +242,43 @@ impl SortEngine {
         let file = File::open(path)?;
         let mut records = Vec::new();
 
-        if self.record_length > 0 {
-            // Fixed-length records
-            let mut reader = BufReader::new(file);
-            let mut buffer = vec![0u8; self.record_length];
-
-            loop {
-                match reader.read_exact(&mut buffer) {
-                    Ok(()) => records.push(buffer.clone()),
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => return Err(e.into()),
+        match self.record_format {
+            RecordFormat::Fixed(len) => {
+                let mut reader = BufReader::new(file);
+                let mut buffer = vec![0u8; len];
+                loop {
+                    match reader.read_exact(&mut buffer) {
+                        Ok(()) => records.push(buffer.clone()),
+                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
-        } else {
-            // Line-based records
-            let reader = BufReader::new(file);
-            for line in reader.lines() {
-                records.push(line?.into_bytes());
+            RecordFormat::VariableBlocked => {
+                let mut reader = BufReader::new(file);
+                loop {
+                    // Read 4-byte RDW: bytes 0-1 = record length (including RDW), bytes 2-3 = 0
+                    let mut rdw = [0u8; 4];
+                    match reader.read_exact(&mut rdw) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                        Err(e) => return Err(e.into()),
+                    }
+                    let rec_len = u16::from_be_bytes([rdw[0], rdw[1]]) as usize;
+                    if rec_len < 4 {
+                        break; // Invalid RDW
+                    }
+                    let data_len = rec_len - 4;
+                    let mut buffer = vec![0u8; data_len];
+                    reader.read_exact(&mut buffer)?;
+                    records.push(buffer);
+                }
+            }
+            RecordFormat::LineBased => {
+                let reader = BufReader::new(file);
+                for line in reader.lines() {
+                    records.push(line?.into_bytes());
+                }
             }
         }
 
@@ -226,21 +294,65 @@ impl SortEngine {
             .open(path)?;
         let mut writer = BufWriter::new(file);
 
-        if self.record_length > 0 {
-            // Fixed-length records
-            for record in records {
-                writer.write_all(record)?;
-            }
-        } else {
-            // Line-based records
-            for record in records {
-                writer.write_all(record)?;
-                writer.write_all(b"\n")?;
+        for record in records {
+            let output = self.apply_format_conversion(record);
+            match self.output_format() {
+                RecordFormat::Fixed(len) => {
+                    // Pad or truncate to fixed length
+                    if output.len() >= len {
+                        writer.write_all(&output[..len])?;
+                    } else {
+                        writer.write_all(&output)?;
+                        writer.write_all(&vec![b' '; len - output.len()])?;
+                    }
+                }
+                RecordFormat::VariableBlocked => {
+                    let rec_len = (output.len() + 4) as u16;
+                    writer.write_all(&rec_len.to_be_bytes())?;
+                    writer.write_all(&[0u8; 2])?; // Reserved bytes
+                    writer.write_all(&output)?;
+                }
+                RecordFormat::LineBased => {
+                    writer.write_all(&output)?;
+                    writer.write_all(b"\n")?;
+                }
             }
         }
 
         writer.flush()?;
         Ok(())
+    }
+
+    /// Apply format conversion to a record for output.
+    fn apply_format_conversion(&self, record: &[u8]) -> Vec<u8> {
+        match self.format_conversion {
+            FormatConversion::None => record.to_vec(),
+            FormatConversion::Ftov => {
+                // Fixed-to-variable: strip trailing spaces
+                let trimmed_len = record.iter().rposition(|&b| b != b' ')
+                    .map_or(0, |pos| pos + 1);
+                record[..trimmed_len].to_vec()
+            }
+            FormatConversion::Vtof(fixed_len) => {
+                // Variable-to-fixed: pad or truncate
+                let mut output = Vec::with_capacity(fixed_len);
+                let copy_len = record.len().min(fixed_len);
+                output.extend_from_slice(&record[..copy_len]);
+                if output.len() < fixed_len {
+                    output.resize(fixed_len, b' ');
+                }
+                output
+            }
+        }
+    }
+
+    /// Determine output record format based on conversion.
+    fn output_format(&self) -> RecordFormat {
+        match self.format_conversion {
+            FormatConversion::None => self.record_format,
+            FormatConversion::Ftov => RecordFormat::VariableBlocked,
+            FormatConversion::Vtof(len) => RecordFormat::Fixed(len),
+        }
     }
 
     /// Apply SUM processing for duplicate keys.
@@ -1225,6 +1337,136 @@ mod tests {
 
         cleanup(&input_path);
         cleanup(&output_path);
+    }
+
+    // -----------------------------------------------------------------------
+    // VB Record / FTOV / VTOF Tests (Epic 807)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_vb_read_write_sort() {
+        let input_path = test_path("vb_input.dat");
+        let output_path = test_path("vb_output.dat");
+
+        // Write VB records: RDW (4 bytes) + data
+        let mut input_data = Vec::new();
+        // Record "Charlie" (7 bytes) → RDW = 11
+        let rec1 = b"Charlie";
+        let rdw1 = (rec1.len() as u16 + 4).to_be_bytes();
+        input_data.extend_from_slice(&rdw1);
+        input_data.extend_from_slice(&[0, 0]);
+        input_data.extend_from_slice(rec1);
+
+        // Record "Alpha" (5 bytes) → RDW = 9
+        let rec2 = b"Alpha";
+        let rdw2 = (rec2.len() as u16 + 4).to_be_bytes();
+        input_data.extend_from_slice(&rdw2);
+        input_data.extend_from_slice(&[0, 0]);
+        input_data.extend_from_slice(rec2);
+
+        // Record "Bravo" (5 bytes) → RDW = 9
+        let rec3 = b"Bravo";
+        let rdw3 = (rec3.len() as u16 + 4).to_be_bytes();
+        input_data.extend_from_slice(&rdw3);
+        input_data.extend_from_slice(&[0, 0]);
+        input_data.extend_from_slice(rec3);
+
+        fs::write(&input_path, &input_data).unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 7, DataType::Character, SortOrder::Ascending));
+        let engine = SortEngine::new(spec)
+            .with_record_format(RecordFormat::VariableBlocked);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.input_records, 3);
+        assert_eq!(stats.output_records, 3);
+
+        // Read output VB records
+        let output = fs::read(&output_path).unwrap();
+        let mut pos = 0;
+        let mut sorted_records = Vec::new();
+        while pos < output.len() {
+            let rec_len = u16::from_be_bytes([output[pos], output[pos + 1]]) as usize;
+            let data = &output[pos + 4..pos + rec_len];
+            sorted_records.push(String::from_utf8_lossy(data).to_string());
+            pos += rec_len;
+        }
+
+        assert_eq!(sorted_records, vec!["Alpha", "Bravo", "Charlie"]);
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_vtof_conversion() {
+        let input_path = test_path("vtof_input.dat");
+        let output_path = test_path("vtof_output.dat");
+
+        // Write VB records of varying length
+        let mut input_data = Vec::new();
+        for rec in [b"Short" as &[u8], b"Medium Data", b"Longer Data Here"] {
+            let rdw = (rec.len() as u16 + 4).to_be_bytes();
+            input_data.extend_from_slice(&rdw);
+            input_data.extend_from_slice(&[0, 0]);
+            input_data.extend_from_slice(rec);
+        }
+        fs::write(&input_path, &input_data).unwrap();
+
+        let engine = SortEngine::copy()
+            .with_record_format(RecordFormat::VariableBlocked)
+            .with_format_conversion(FormatConversion::Vtof(20));
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.output_records, 3);
+
+        // Output should be fixed 20-byte records
+        let output = fs::read(&output_path).unwrap();
+        assert_eq!(output.len(), 60); // 3 records × 20 bytes
+
+        assert_eq!(&output[0..5], b"Short");
+        assert_eq!(&output[5..20], &vec![b' '; 15]); // padded
+        assert_eq!(&output[20..31], b"Medium Data");
+        assert_eq!(&output[40..56], b"Longer Data Here");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_ftov_conversion() {
+        let input_path = test_path("ftov_input.dat");
+        let output_path = test_path("ftov_output.dat");
+
+        // Write fixed 20-byte records with trailing spaces
+        let mut input_data = Vec::new();
+        let rec1 = format!("{:<20}", "Hello");
+        let rec2 = format!("{:<20}", "World Record");
+        input_data.extend_from_slice(rec1.as_bytes());
+        input_data.extend_from_slice(rec2.as_bytes());
+        fs::write(&input_path, &input_data).unwrap();
+
+        let engine = SortEngine::copy()
+            .with_record_format(RecordFormat::Fixed(20))
+            .with_format_conversion(FormatConversion::Ftov);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.output_records, 2);
+
+        // Read output VB records
+        let output = fs::read(&output_path).unwrap();
+        let mut pos = 0;
+        let mut records = Vec::new();
+        while pos < output.len() {
+            let rec_len = u16::from_be_bytes([output[pos], output[pos + 1]]) as usize;
+            let data = &output[pos + 4..pos + rec_len];
+            records.push(String::from_utf8_lossy(data).to_string());
+            pos += rec_len;
+        }
+
+        assert_eq!(records[0], "Hello"); // trailing spaces stripped
+        assert_eq!(records[1], "World Record"); // trailing spaces stripped
     }
 
     #[test]
