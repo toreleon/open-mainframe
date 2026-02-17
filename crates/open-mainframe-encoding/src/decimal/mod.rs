@@ -9,6 +9,7 @@
 
 mod binary;
 mod floating;
+mod ieee_float;
 mod native_binary;
 mod packed;
 mod zoned;
@@ -17,6 +18,10 @@ pub use binary::{decode_binary, encode_binary, BinaryInteger};
 pub use floating::{
     decode_hfp_long, decode_hfp_short, encode_hfp_long, encode_hfp_short, hfp_long_to_ieee,
     hfp_short_to_ieee, ieee_to_hfp_long, ieee_to_hfp_short, HfpDouble, HfpFloat,
+};
+pub use ieee_float::{
+    decode_ieee_long, decode_ieee_short, encode_ieee_long, encode_ieee_long_into,
+    encode_ieee_short, encode_ieee_short_into, IeeeDouble, IeeeFloat,
 };
 pub use native_binary::{
     decode_native_binary, encode_native_binary, validate_native_range, NativeBinaryInteger,

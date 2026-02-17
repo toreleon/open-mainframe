@@ -37,13 +37,18 @@ pub mod error;
 
 // Re-export commonly used types at crate root
 pub use decimal::{
-    decode_binary, decode_hfp_long, decode_hfp_short, decode_native_binary, encode_binary,
-    encode_hfp_long, encode_hfp_short, encode_native_binary, hfp_long_to_ieee, hfp_short_to_ieee,
-    ieee_to_hfp_long, ieee_to_hfp_short, pack_decimal, unpack_decimal, unzone_decimal,
-    validate_native_range, zone_decimal, BinaryInteger, HfpDouble, HfpFloat, NativeBinaryInteger,
-    PackedDecimal, Sign, ZonedDecimal,
+    decode_binary, decode_hfp_long, decode_hfp_short, decode_ieee_long, decode_ieee_short,
+    decode_native_binary, encode_binary, encode_hfp_long, encode_hfp_short, encode_ieee_long,
+    encode_ieee_long_into, encode_ieee_short, encode_ieee_short_into, encode_native_binary,
+    hfp_long_to_ieee, hfp_short_to_ieee, ieee_to_hfp_long, ieee_to_hfp_short, pack_decimal,
+    unpack_decimal, unzone_decimal, validate_native_range, zone_decimal, BinaryInteger, HfpDouble,
+    HfpFloat, IeeeDouble, IeeeFloat, NativeBinaryInteger, PackedDecimal, Sign, ZonedDecimal,
 };
 pub use ebcdic::{
+    collation::{
+        classify_ebcdic, compare_ebcdic_bytes, ebcdic_compare, is_ebcdic_sorted,
+        native_collation_weight, sort_ebcdic, sort_ebcdic_refs, EbcdicCharClass,
+    },
     CodePage, CodePageRegistry, CP037, CP1047, CP1140, CP1141, CP1142, CP1143, CP1144, CP1145,
     CP1146, CP1147, CP1148, CP1149, CP273, CP277, CP278, CP280, CP284, CP285, CP297, CP500,
     CP871,

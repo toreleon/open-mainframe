@@ -11,6 +11,7 @@
 //!
 //! Use [`CodePageRegistry`] or [`CodePage::from_ccsid`] for runtime lookup.
 
+pub mod collation;
 mod extended_tables;
 mod registry;
 mod tables;
