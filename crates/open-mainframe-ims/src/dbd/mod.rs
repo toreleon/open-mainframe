@@ -38,6 +38,21 @@ pub struct LogicalChild {
     pub paired: bool,
 }
 
+/// A DATASET macro definition (physical storage characteristics).
+#[derive(Debug, Clone)]
+pub struct DatasetDefinition {
+    /// DD name (the DD1 value, e.g. "CUSTDD")
+    pub dd_name: String,
+    /// Device type (e.g. "3390")
+    pub device: Option<String>,
+    /// Block size in bytes
+    pub block_size: Option<usize>,
+    /// Scan size (optional)
+    pub scan: Option<usize>,
+    /// Associated segment name (context from parser position)
+    pub segment: String,
+}
+
 /// A complete Database Definition.
 #[derive(Debug, Clone)]
 pub struct DatabaseDefinition {
@@ -55,6 +70,8 @@ pub struct DatabaseDefinition {
     pub secondary_indexes: Vec<SecondaryIndex>,
     /// Logical child relationships defined via LCHILD
     pub logical_children: Vec<LogicalChild>,
+    /// Physical dataset definitions from DATASET macros
+    pub datasets: Vec<DatasetDefinition>,
 }
 
 impl DatabaseDefinition {
@@ -68,6 +85,7 @@ impl DatabaseDefinition {
             hierarchy: HashMap::new(),
             secondary_indexes: Vec::new(),
             logical_children: Vec::new(),
+            datasets: Vec::new(),
         }
     }
 
@@ -119,6 +137,19 @@ impl DatabaseDefinition {
     /// Add a logical child relationship.
     pub fn add_logical_child(&mut self, lchild: LogicalChild) {
         self.logical_children.push(lchild);
+    }
+
+    /// Add a dataset definition.
+    pub fn add_dataset(&mut self, dataset: DatasetDefinition) {
+        self.datasets.push(dataset);
+    }
+
+    /// Get dataset definitions for a segment.
+    pub fn get_datasets(&self, segment: &str) -> Vec<&DatasetDefinition> {
+        self.datasets
+            .iter()
+            .filter(|d| d.segment.eq_ignore_ascii_case(segment))
+            .collect()
     }
 
     /// Get logical children of a segment.
@@ -300,6 +331,40 @@ impl FieldType {
     }
 }
 
+/// Parse BYTES parameter — either a simple number or `(max,min)` tuple.
+///
+/// Returns `(max_bytes, Option<min_bytes>)`.
+fn parse_bytes_param(raw: &str) -> (usize, Option<usize>) {
+    let trimmed = raw.trim();
+    if trimmed.contains(',') {
+        // Tuple form: "200,50" (parentheses already stripped by macro parser)
+        let parts: Vec<&str> = trimmed.split(',').collect();
+        let max_bytes = parts[0].trim().parse::<usize>().unwrap_or(0);
+        let min_bytes = parts.get(1).and_then(|s| s.trim().parse::<usize>().ok());
+        (max_bytes, min_bytes)
+    } else {
+        // Simple numeric value
+        let bytes = trimmed.parse::<usize>().unwrap_or(0);
+        (bytes, None)
+    }
+}
+
+/// Parse NAME parameter — either a simple name or `(segment,database)` tuple.
+///
+/// Returns `(name, database)` where database is empty if not a tuple.
+fn parse_name_tuple(raw: &str) -> (String, String) {
+    let trimmed = raw.trim();
+    if trimmed.contains(',') {
+        // Tuple form: "ORDLINE,ORDERDB" (parentheses already stripped by macro parser)
+        let parts: Vec<&str> = trimmed.splitn(2, ',').collect();
+        let name = parts[0].trim().to_string();
+        let db = parts.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
+        (name, db)
+    } else {
+        (trimmed.to_string(), String::new())
+    }
+}
+
 /// DBD Parser.
 pub struct DbdParser {
     lines: Vec<String>,
@@ -356,13 +421,48 @@ impl DbdParser {
                         let parent = params.get("PARENT").cloned().unwrap_or_default();
                         // Handle PARENT=0 as root
                         let parent = if parent == "0" { String::new() } else { parent };
-                        let bytes: usize = params
-                            .get("BYTES")
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0);
+
+                        // Parse BYTES — could be a simple number or tuple (max,min)
+                        let bytes_raw = params.get("BYTES").cloned().unwrap_or_default();
+                        let (max_bytes, min_bytes) = parse_bytes_param(&bytes_raw);
 
                         last_segment_name = name.clone();
-                        current_segment = Some(SegmentDefinition::new(&name, &parent, bytes));
+                        let mut seg = SegmentDefinition::new(&name, &parent, max_bytes);
+
+                        // Variable-length segment support
+                        if let Some(min) = min_bytes {
+                            seg.min_bytes = Some(min);
+                            seg.variable_length = true;
+                        }
+
+                        // Compression routine
+                        if let Some(comprtn) = params.get("COMPRTN") {
+                            if !comprtn.is_empty() {
+                                seg.comprtn = Some(comprtn.clone());
+                                seg.variable_length = true;
+                            }
+                        }
+
+                        current_segment = Some(seg);
+                    }
+                    "DATASET" => {
+                        // Physical dataset definition
+                        if let Some(ref mut db) = dbd {
+                            let dd_name = params.get("DD1").cloned().unwrap_or_default();
+                            let device = params.get("DEVICE").cloned();
+                            let block_size = params.get("SIZE")
+                                .and_then(|s| s.parse::<usize>().ok());
+                            let scan = params.get("SCAN")
+                                .and_then(|s| s.parse::<usize>().ok());
+
+                            db.add_dataset(DatasetDefinition {
+                                dd_name,
+                                device,
+                                block_size,
+                                scan,
+                                segment: last_segment_name.clone(),
+                            });
+                        }
                     }
                     "FIELD" => {
                         if let Some(ref mut seg) = current_segment {
@@ -415,14 +515,22 @@ impl DbdParser {
                     "LCHILD" => {
                         // Logical child relationship
                         if let Some(ref mut db) = dbd {
-                            let name = params.get("NAME").cloned().unwrap_or_default();
-                            let lchild_db = params.get("SOURCE").or(params.get("INDEX"))
-                                .cloned().unwrap_or_default();
+                            let name_raw = params.get("NAME").cloned().unwrap_or_default();
+
+                            // NAME can be a simple name or tuple (segment,database)
+                            let (lchild_name, lchild_db) = parse_name_tuple(&name_raw);
+
+                            // SOURCE/INDEX overrides the db from NAME tuple if present
+                            let lchild_db = params.get("SOURCE")
+                                .or(params.get("INDEX"))
+                                .cloned()
+                                .unwrap_or(lchild_db);
+
                             let pointer = params.get("POINTER").cloned();
                             let paired = params.contains_key("PAIRED");
 
                             db.add_logical_child(LogicalChild {
-                                name,
+                                name: lchild_name,
                                 lchild_db,
                                 parent_segment: last_segment_name.clone(),
                                 pointer,
@@ -773,6 +881,217 @@ mod tests {
         assert!(dbd.get_secondary_index("CUSTNAME_IX").is_some());
         assert!(dbd.get_secondary_index("custname_ix").is_some());
         assert!(dbd.get_secondary_index("NONEXIST").is_none());
+    }
+
+    // --- Epic 410: DBD Parser Enhancements ---
+
+    #[test]
+    fn test_parse_dataset_macro() {
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             DATASET DD1=CUSTDD,DEVICE=3390,SIZE=4096
+             SEGM  NAME=CUSTOMER,BYTES=100,PARENT=0
+             FIELD NAME=CUSTNO,START=1,BYTES=10,TYPE=C,SEQ
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        assert_eq!(dbd.datasets.len(), 1);
+        let ds = &dbd.datasets[0];
+        assert_eq!(ds.dd_name, "CUSTDD");
+        assert_eq!(ds.device, Some("3390".to_string()));
+        assert_eq!(ds.block_size, Some(4096));
+    }
+
+    #[test]
+    fn test_parse_dataset_with_size_in_parens() {
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             DATASET DD1=ORDERDD,DEVICE=3390,SIZE=(4096)
+             SEGM  NAME=ORDERS,BYTES=200,PARENT=0
+             FIELD NAME=ORDNO,START=1,BYTES=8,TYPE=C,SEQ
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        assert_eq!(dbd.datasets.len(), 1);
+        assert_eq!(dbd.datasets[0].dd_name, "ORDERDD");
+        assert_eq!(dbd.datasets[0].device, Some("3390".to_string()));
+    }
+
+    #[test]
+    fn test_get_datasets_for_segment() {
+        let mut dbd = DatabaseDefinition::new("TEST", AccessMethod::HIDAM);
+        dbd.add_dataset(DatasetDefinition {
+            dd_name: "CUSTDD".to_string(),
+            device: Some("3390".to_string()),
+            block_size: Some(4096),
+            scan: None,
+            segment: "CUSTOMER".to_string(),
+        });
+
+        let datasets = dbd.get_datasets("CUSTOMER");
+        assert_eq!(datasets.len(), 1);
+        assert_eq!(datasets[0].dd_name, "CUSTDD");
+
+        let datasets = dbd.get_datasets("NONEXIST");
+        assert!(datasets.is_empty());
+    }
+
+    #[test]
+    fn test_lchild_with_name_tuple() {
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             SEGM  NAME=CUSTOMER,BYTES=100,PARENT=0
+             FIELD NAME=CUSTNO,START=1,BYTES=10,TYPE=C,SEQ
+             LCHILD NAME=(ORDLINE,ORDERDB),POINTER=SNGL
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        assert_eq!(dbd.logical_children.len(), 1);
+        let lc = &dbd.logical_children[0];
+        assert_eq!(lc.name, "ORDLINE");
+        assert_eq!(lc.lchild_db, "ORDERDB");
+        assert_eq!(lc.parent_segment, "CUSTOMER");
+        assert_eq!(lc.pointer, Some("SNGL".to_string()));
+    }
+
+    #[test]
+    fn test_lchild_with_name_tuple_and_paired() {
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             SEGM  NAME=CUSTOMER,BYTES=100,PARENT=0
+             FIELD NAME=CUSTNO,START=1,BYTES=10,TYPE=C,SEQ
+             LCHILD NAME=(DETAIL,DETAILDB),POINTER=DBLE,PAIRED
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        assert_eq!(dbd.logical_children.len(), 1);
+        let lc = &dbd.logical_children[0];
+        assert_eq!(lc.name, "DETAIL");
+        assert_eq!(lc.lchild_db, "DETAILDB");
+        assert_eq!(lc.pointer, Some("DBLE".to_string()));
+        assert!(lc.paired);
+    }
+
+    #[test]
+    fn test_variable_length_segment_bytes_tuple() {
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             SEGM  NAME=REMARK,BYTES=(200,50),PARENT=0
+             FIELD NAME=RMKNO,START=1,BYTES=4,TYPE=C,SEQ
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        let remark = dbd.get_segment("REMARK").unwrap();
+        assert_eq!(remark.bytes, 200);
+        assert_eq!(remark.min_bytes, Some(50));
+        assert!(remark.variable_length);
+    }
+
+    #[test]
+    fn test_variable_length_segment_with_comprtn() {
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             SEGM  NAME=REMARK,BYTES=(200,50),COMPRTN=CMPRTN01,PARENT=0
+             FIELD NAME=RMKNO,START=1,BYTES=4,TYPE=C,SEQ
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        let remark = dbd.get_segment("REMARK").unwrap();
+        assert_eq!(remark.bytes, 200);
+        assert_eq!(remark.min_bytes, Some(50));
+        assert!(remark.variable_length);
+        assert_eq!(remark.comprtn, Some("CMPRTN01".to_string()));
+    }
+
+    #[test]
+    fn test_fixed_length_segment_no_min_bytes() {
+        let source = r#"
+             DBD   NAME=CUSTDB,ACCESS=HIDAM
+             SEGM  NAME=CUSTOMER,BYTES=100,PARENT=0
+             FIELD NAME=CUSTNO,START=1,BYTES=10,TYPE=C,SEQ
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        let customer = dbd.get_segment("CUSTOMER").unwrap();
+        assert_eq!(customer.bytes, 100);
+        assert_eq!(customer.min_bytes, None);
+        assert!(!customer.variable_length);
+        assert_eq!(customer.comprtn, None);
+    }
+
+    #[test]
+    fn test_parse_bytes_param_simple() {
+        assert_eq!(parse_bytes_param("100"), (100, None));
+    }
+
+    #[test]
+    fn test_parse_bytes_param_tuple() {
+        assert_eq!(parse_bytes_param("200,50"), (200, Some(50)));
+    }
+
+    #[test]
+    fn test_parse_name_tuple_simple() {
+        assert_eq!(parse_name_tuple("ORDER"), ("ORDER".to_string(), String::new()));
+    }
+
+    #[test]
+    fn test_parse_name_tuple_pair() {
+        assert_eq!(parse_name_tuple("ORDLINE,ORDERDB"), ("ORDLINE".to_string(), "ORDERDB".to_string()));
+    }
+
+    #[test]
+    fn test_combined_dataset_lchild_variable_segment() {
+        let source = r#"
+             DBD   NAME=ORDERDB,ACCESS=HDAM
+             DATASET DD1=ORDDD,DEVICE=3390,SIZE=8192
+             SEGM  NAME=ORDER,BYTES=100,PARENT=0
+             FIELD NAME=ORDNO,START=1,BYTES=8,TYPE=C,SEQ
+             LCHILD NAME=(SHIPMENT,SHIPDB),POINTER=SNGL
+             SEGM  NAME=LINEITEM,BYTES=(80,20),COMPRTN=CMPACK01,PARENT=ORDER
+             FIELD NAME=LINENO,START=1,BYTES=4,TYPE=C,SEQ
+             DBDGEN
+        "#;
+
+        let mut parser = DbdParser::new();
+        let dbd = parser.parse(source).unwrap();
+
+        // DATASET check
+        assert_eq!(dbd.datasets.len(), 1);
+        assert_eq!(dbd.datasets[0].dd_name, "ORDDD");
+        assert_eq!(dbd.datasets[0].block_size, Some(8192));
+
+        // LCHILD check
+        assert_eq!(dbd.logical_children.len(), 1);
+        assert_eq!(dbd.logical_children[0].name, "SHIPMENT");
+        assert_eq!(dbd.logical_children[0].lchild_db, "SHIPDB");
+
+        // Variable-length segment check
+        let lineitem = dbd.get_segment("LINEITEM").unwrap();
+        assert_eq!(lineitem.bytes, 80);
+        assert_eq!(lineitem.min_bytes, Some(20));
+        assert!(lineitem.variable_length);
+        assert_eq!(lineitem.comprtn, Some("CMPACK01".to_string()));
     }
 
     #[test]
