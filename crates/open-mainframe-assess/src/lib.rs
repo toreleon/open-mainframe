@@ -25,11 +25,13 @@ pub mod metrics;
 pub mod report;
 pub mod compatibility;
 pub mod scanner;
+pub mod sql_analysis;
 
 pub use analyzer::{Analyzer, AnalysisResult};
 pub use ast_analyzer::AstAnalyzer;
 pub use callgraph::{CallGraph, CallEdge, CallType};
 pub use cics_inventory::{CicsInventory, CicsCommand, CicsCategory, SupportStatus};
+pub use sql_analysis::{SqlAnalysis, SqlStatement, SqlComplexity};
 pub use metrics::{CodeMetrics, ComplexityLevel};
 pub use report::{Report, ReportFormat};
 pub use compatibility::{CompatibilityChecker, CompatibilityIssue};
