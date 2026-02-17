@@ -31,6 +31,7 @@ pub mod catalog;
 pub mod error;
 pub mod gdg;
 pub mod idcams;
+pub mod pds;
 pub mod qsam;
 pub mod types;
 pub mod vsam;
@@ -39,6 +40,7 @@ pub use catalog::{Catalog, CatalogEntry};
 pub use error::DatasetError;
 pub use gdg::{GdgBase, GdgGeneration, GdgGenerationInfo, GdgListInfo, GdgOptions, GenerationNumber};
 pub use idcams::{Idcams, IdcamsCommand, IdcamsResult};
+pub use pds::{IspfStats, Pds, PdsMember};
 pub use qsam::{read_all_records, write_records, OpenMode, QsamReader, QsamWriter};
 pub use types::{
     DatasetAttributes, DatasetOrg, DatasetRef, DispAction, DispSpec, Disposition, RecordFormat,
