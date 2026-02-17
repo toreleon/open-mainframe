@@ -61,3 +61,13 @@
   - agent/src/nodes/__init__.py (updated — exports execute_node)
   - agent/src/agent.py (updated — execute node added to StateGraph, route_after_tools expanded)
 - Notes: Execute node uses LangGraph interrupt() for human-in-the-loop approval before run_jcl and interpret_cobol. Approval payload includes action name, file path, and description. If user declines, returns cancellation message with reason. parse_jcl included in execute tools for pre-execution JCL analysis. MemorySaver checkpointer persists state across interrupt boundaries.
+
+## Batch 5: Explanation Agent (E-700)
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - agent/src/nodes/explain.py (code explanation + business rule extraction, optional lex_cobol/parse_jcl tools)
+  - agent/src/nodes/router.py (updated — EXPLAIN intent routes to explain node, refactored to route_map)
+  - agent/src/nodes/__init__.py (updated — exports explain_node)
+  - agent/src/agent.py (updated — explain node added to StateGraph, route_after_tools expanded)
+- Notes: Explain node is primarily LLM-driven but can optionally use lex_cobol and parse_jcl for structural grounding. Provides section-by-section COBOL division explanations, data structure identification, business rule extraction in "When [condition], then [action]" format, and external dependency highlighting (CALL, COPY, EXEC SQL/CICS). Router refactored to use route_map dict for cleaner dispatch.

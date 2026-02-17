@@ -7,10 +7,12 @@ from .router import router_node
 from .chat import chat_node
 from .compile import compile_node
 from .execute import execute_node
+from .explain import explain_node
 
 __all__ = [
     "router_node",
     "chat_node",
     "compile_node",
     "execute_node",
+    "explain_node",
 ]
