@@ -19,6 +19,7 @@
 //! assert_eq!(String::from_utf8(output).unwrap(), "HELLO WORLD\n");
 //! ```
 
+pub mod date_time;
 pub mod decimal;
 pub mod error;
 pub mod file_io;
@@ -30,6 +31,10 @@ pub mod storage;
 pub mod string;
 pub mod value;
 
+pub use date_time::{
+    ceedate, ceedays, ceesecs, date_of_integer, date_to_lilian, day_of_integer,
+    integer_of_date, integer_of_day, is_leap_year, lilian_to_date, FeedbackCode,
+};
 pub use decimal::{add, add_to, compute, divide, multiply, power, subtract_from};
 pub use decimal::{ArithmeticResult, RoundingMode};
 pub use error::RuntimeError;
