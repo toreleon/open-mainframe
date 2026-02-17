@@ -353,6 +353,78 @@ impl CursorManager {
         Ok(HashMap::new())
     }
 
+    /// Fetch multiple rows at once (FETCH ... FOR n ROWS).
+    ///
+    /// Returns a vector of row maps. SQLERRD[2] is set to the actual number
+    /// of rows fetched. If fewer rows than requested are available, SQLCODE
+    /// is set to 100 (not found) and the partial result is returned.
+    pub fn fetch_rows(
+        &mut self,
+        cursor_name: &str,
+        count: usize,
+    ) -> Db2Result<Vec<HashMap<String, SqlValue>>> {
+        self.sqlca.reset();
+
+        let name = cursor_name.to_uppercase();
+
+        // Check if cursor exists
+        let cursor = match self.cursors.get(&name) {
+            Some(c) => c,
+            None => {
+                self.sqlca.set_error(-504, "Cursor not declared");
+                return Ok(Vec::new());
+            }
+        };
+
+        // Check if open
+        if cursor.state != CursorState::Open {
+            self.sqlca.set_error(Sqlca::CURSOR_NOT_OPEN, "Cursor not open");
+            return Ok(Vec::new());
+        }
+
+        if count == 0 {
+            self.sqlca.set_success();
+            self.sqlca.set_rows_affected(0);
+            return Ok(Vec::new());
+        }
+
+        if self.mock_mode {
+            return self.fetch_mock_rows(&name, count);
+        }
+
+        Ok(Vec::new())
+    }
+
+    /// Fetch multiple rows in mock mode.
+    fn fetch_mock_rows(
+        &mut self,
+        cursor_name: &str,
+        count: usize,
+    ) -> Db2Result<Vec<HashMap<String, SqlValue>>> {
+        let mut results = Vec::new();
+
+        for _ in 0..count {
+            let row = self.fetch_mock_row_directed(cursor_name, FetchDirection::Next)?;
+            if self.sqlca.is_not_found() {
+                break;
+            }
+            results.push(row);
+        }
+
+        let fetched = results.len();
+        if fetched == 0 {
+            self.sqlca.set_not_found();
+        } else if fetched < count {
+            // Partial result — set SQLCODE 100 per DB2 convention
+            self.sqlca.set_sqlcode(100);
+        } else {
+            self.sqlca.set_success();
+        }
+        self.sqlca.set_rows_affected(fetched as i32);
+
+        Ok(results)
+    }
+
     /// Fetch a row in mock mode (forward-only NEXT).
     fn fetch_mock_row(&mut self, cursor_name: &str) -> Db2Result<HashMap<String, SqlValue>> {
         self.fetch_mock_row_directed(cursor_name, FetchDirection::Next)
@@ -1162,5 +1234,107 @@ mod tests {
         // NEXT → row 2 again
         let r4 = manager.fetch_direction("SC1", FetchDirection::Next).unwrap();
         assert_eq!(r4.get("WS-ID").unwrap().as_integer(), Some(2));
+    }
+
+    // --- Epic 307: Multi-Row FETCH ---
+
+    #[test]
+    fn test_fetch_rows_all_available() {
+        let mut manager = CursorManager::new();
+        let cursor = create_test_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("C1", &input).unwrap();
+        manager.set_mock_results("C1", create_test_rows());
+
+        // FETCH FOR 3 ROWS — exactly 3 rows available
+        let rows = manager.fetch_rows("C1", 3).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(manager.sqlca().is_success());
+        assert_eq!(manager.sqlca().rows_affected(), 3);
+    }
+
+    #[test]
+    fn test_fetch_rows_partial() {
+        let mut manager = CursorManager::new();
+        let cursor = create_test_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("C1", &input).unwrap();
+        manager.set_mock_results("C1", create_test_rows()); // 3 rows
+
+        // FETCH FOR 10 ROWS — only 3 available
+        let rows = manager.fetch_rows("C1", 10).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(manager.sqlca().is_not_found()); // SQLCODE 100
+        assert_eq!(manager.sqlca().rows_affected(), 3);
+    }
+
+    #[test]
+    fn test_fetch_rows_empty() {
+        let mut manager = CursorManager::new();
+        let cursor = create_test_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("C1", &input).unwrap();
+        // No mock results set — empty cursor
+
+        let rows = manager.fetch_rows("C1", 5).unwrap();
+        assert!(rows.is_empty());
+        assert!(manager.sqlca().is_not_found());
+    }
+
+    #[test]
+    fn test_fetch_rows_zero_count() {
+        let mut manager = CursorManager::new();
+        let cursor = create_test_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("C1", &input).unwrap();
+        manager.set_mock_results("C1", create_test_rows());
+
+        let rows = manager.fetch_rows("C1", 0).unwrap();
+        assert!(rows.is_empty());
+        assert!(manager.sqlca().is_success());
+        assert_eq!(manager.sqlca().rows_affected(), 0);
+    }
+
+    #[test]
+    fn test_fetch_rows_then_single_fetch() {
+        let mut manager = CursorManager::new();
+        let cursor = create_test_cursor();
+        manager.declare(cursor).unwrap();
+
+        let input = HashMap::new();
+        manager.open("C1", &input).unwrap();
+        manager.set_mock_results("C1", create_test_rows()); // 3 rows
+
+        // Fetch first 2 rows
+        let rows = manager.fetch_rows("C1", 2).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get("WS-ID").unwrap().as_integer(), Some(1));
+        assert_eq!(rows[1].get("WS-ID").unwrap().as_integer(), Some(2));
+
+        // Single fetch should get row 3
+        let row3 = manager.fetch("C1").unwrap();
+        assert!(manager.sqlca().is_success());
+        assert_eq!(row3.get("WS-ID").unwrap().as_integer(), Some(3));
+    }
+
+    #[test]
+    fn test_fetch_rows_cursor_not_open() {
+        let mut manager = CursorManager::new();
+        let cursor = create_test_cursor();
+        manager.declare(cursor).unwrap();
+        // Not opened
+
+        let rows = manager.fetch_rows("C1", 5).unwrap();
+        assert!(rows.is_empty());
+        assert!(manager.sqlca().is_error());
+        assert_eq!(manager.sqlca().sqlcode(), Sqlca::CURSOR_NOT_OPEN);
     }
 }

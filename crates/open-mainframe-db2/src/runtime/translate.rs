@@ -64,6 +64,15 @@ impl SqlTranslator {
         // Translate data types in CAST expressions
         result = self.translate_data_types(&result);
 
+        // Translate FOR UPDATE OF col1,col2 → FOR UPDATE
+        result = self.translate_for_update_of(&result);
+
+        // Translate SET CURRENT SCHEMA → SET search_path TO
+        result = self.translate_set_current_schema(&result);
+
+        // Translate special registers
+        result = self.translate_special_registers(&result);
+
         result
     }
 
@@ -265,6 +274,102 @@ impl SqlTranslator {
             .replace("DBCLOB", "TEXT")
     }
 
+    /// Translate FOR UPDATE OF col1, col2 → FOR UPDATE.
+    ///
+    /// PostgreSQL FOR UPDATE doesn't support column-level specification.
+    fn translate_for_update_of(&self, sql: &str) -> String {
+        let upper = sql.to_uppercase();
+
+        if let Some(pos) = upper.find("FOR UPDATE OF ") {
+            let before = &sql[..pos];
+            let after = &sql[pos + 14..]; // skip "FOR UPDATE OF "
+
+            // Skip column names until we hit a keyword or end of string
+            let end_keywords = ["WHERE", "ORDER", "FETCH", "LIMIT", "WITH", "FOR", "OPTIMIZE"];
+            let remaining_upper = after.to_uppercase();
+            let mut end = after.len();
+
+            for kw in &end_keywords {
+                if let Some(kw_pos) = remaining_upper.find(kw) {
+                    if kw_pos < end {
+                        end = kw_pos;
+                    }
+                }
+            }
+
+            let after_cols = &after[end..];
+            return format!("{}FOR UPDATE {}", before, after_cols);
+        }
+
+        sql.to_string()
+    }
+
+    /// Translate SET CURRENT SCHEMA = 'X' → SET search_path TO 'X'.
+    fn translate_set_current_schema(&self, sql: &str) -> String {
+        let upper = sql.to_uppercase();
+
+        if let Some(pos) = upper.find("SET CURRENT SCHEMA") {
+            let after = &sql[pos + 18..]; // skip "SET CURRENT SCHEMA"
+            // Expect optional spaces, then '=' or whitespace, then the value
+            let trimmed = after.trim_start();
+            let value_start = trimmed.strip_prefix('=').unwrap_or(trimmed);
+            let schema_value = value_start.trim();
+            return format!("SET search_path TO {schema_value}");
+        }
+
+        sql.to_string()
+    }
+
+    /// Translate DB2 special registers to PostgreSQL equivalents.
+    fn translate_special_registers(&self, sql: &str) -> String {
+        let mut result = sql.to_string();
+
+        // CURRENT SQLID → current_schema
+        let upper = result.to_uppercase();
+        if let Some(pos) = upper.find("CURRENT SQLID") {
+            result = format!(
+                "{}current_schema{}",
+                &result[..pos],
+                &result[pos + 13..]
+            );
+        }
+
+        // CURRENT SCHEMA (as a value, not SET) → current_schema
+        let upper = result.to_uppercase();
+        if let Some(pos) = upper.find("CURRENT SCHEMA") {
+            // Only if not preceded by SET (which is handled separately)
+            if pos < 4 || result[..pos].to_uppercase().trim_end() != "SET" {
+                result = format!(
+                    "{}current_schema{}",
+                    &result[..pos],
+                    &result[pos + 14..]
+                );
+            }
+        }
+
+        // CURRENT DEGREE → '1' (PostgreSQL is single-node)
+        let upper = result.to_uppercase();
+        if let Some(pos) = upper.find("CURRENT DEGREE") {
+            result = format!("{}'{}'{}",
+                &result[..pos],
+                "1",
+                &result[pos + 14..]
+            );
+        }
+
+        // CURRENT SERVER → current_database()
+        let upper = result.to_uppercase();
+        if let Some(pos) = upper.find("CURRENT SERVER") {
+            result = format!(
+                "{}current_database(){}",
+                &result[..pos],
+                &result[pos + 14..]
+            );
+        }
+
+        result
+    }
+
     /// Extract function arguments (finds matching closing parenthesis).
     fn extract_function_args(&self, sql: &str) -> Option<(String, usize)> {
         let mut depth = 1;
@@ -383,5 +488,108 @@ mod tests {
         let sql = "SELECT VALUE(A, B) FROM T";
         let result = translator.translate(sql);
         assert!(result.contains("COALESCE"));
+    }
+
+    // --- Epic 308: SQL Dialect Translation Expansion ---
+
+    #[test]
+    fn test_for_update_of_single_column() {
+        let translator = SqlTranslator::new();
+
+        let sql = "SELECT * FROM EMP FOR UPDATE OF SALARY";
+        let result = translator.translate(sql);
+        assert!(result.contains("FOR UPDATE"));
+        assert!(!result.contains("FOR UPDATE OF"));
+    }
+
+    #[test]
+    fn test_for_update_of_multiple_columns() {
+        let translator = SqlTranslator::new();
+
+        let sql = "SELECT * FROM EMP FOR UPDATE OF SALARY, NAME, DEPT";
+        let result = translator.translate(sql);
+        assert!(result.contains("FOR UPDATE"));
+        assert!(!result.contains("FOR UPDATE OF"));
+    }
+
+    #[test]
+    fn test_for_update_of_no_change_plain() {
+        let translator = SqlTranslator::new();
+
+        // Plain FOR UPDATE (no OF) should stay unchanged
+        let sql = "SELECT * FROM EMP FOR UPDATE";
+        let result = translator.translate(sql);
+        assert!(result.contains("FOR UPDATE"));
+    }
+
+    #[test]
+    fn test_set_current_schema_with_equals() {
+        let translator = SqlTranslator::new();
+
+        let sql = "SET CURRENT SCHEMA = 'MYSCHEMA'";
+        let result = translator.translate(sql);
+        assert_eq!(result, "SET search_path TO 'MYSCHEMA'");
+    }
+
+    #[test]
+    fn test_set_current_schema_without_equals() {
+        let translator = SqlTranslator::new();
+
+        let sql = "SET CURRENT SCHEMA MYSCHEMA";
+        let result = translator.translate(sql);
+        assert_eq!(result, "SET search_path TO MYSCHEMA");
+    }
+
+    #[test]
+    fn test_current_sqlid_register() {
+        let translator = SqlTranslator::new();
+
+        let sql = "SELECT CURRENT SQLID FROM SYSIBM.SYSDUMMY1";
+        let result = translator.translate(sql);
+        assert!(result.contains("current_schema"));
+        assert!(!result.contains("CURRENT SQLID"));
+    }
+
+    #[test]
+    fn test_current_degree_register() {
+        let translator = SqlTranslator::new();
+
+        let sql = "SELECT CURRENT DEGREE FROM SYSIBM.SYSDUMMY1";
+        let result = translator.translate(sql);
+        assert!(result.contains("'1'"));
+        assert!(!result.contains("CURRENT DEGREE"));
+    }
+
+    #[test]
+    fn test_current_server_register() {
+        let translator = SqlTranslator::new();
+
+        let sql = "SELECT CURRENT SERVER FROM SYSIBM.SYSDUMMY1";
+        let result = translator.translate(sql);
+        assert!(result.contains("current_database()"));
+        assert!(!result.contains("CURRENT SERVER"));
+    }
+
+    #[test]
+    fn test_optimize_for_removal() {
+        let translator = SqlTranslator::new();
+
+        let sql = "SELECT * FROM T OPTIMIZE FOR 100 ROWS";
+        let result = translator.translate(sql);
+        assert!(!result.contains("OPTIMIZE FOR"));
+        assert!(!result.contains("100 ROWS"));
+    }
+
+    #[test]
+    fn test_combined_translation() {
+        let translator = SqlTranslator::new();
+
+        // Multiple DB2-isms in one statement
+        let sql = "SELECT CURRENT TIMESTAMP, VALUE(A, B) FROM T FETCH FIRST 5 ROWS ONLY";
+        let result = translator.translate(sql);
+        assert!(result.contains("CURRENT_TIMESTAMP"));
+        assert!(result.contains("COALESCE"));
+        assert!(result.contains("LIMIT 5"));
+        assert!(!result.contains("FETCH FIRST"));
     }
 }
