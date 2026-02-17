@@ -24,6 +24,7 @@
 
 pub mod dbd;
 pub mod dli;
+pub mod persist;
 pub mod preprocess;
 pub mod psb;
 pub mod runtime;
@@ -103,6 +104,10 @@ pub enum StatusCode {
     AI,
     /// Segment I/O error
     AK,
+    /// No more messages in queue (I/O PCB)
+    QC,
+    /// No more segments in current message (I/O PCB)
+    QD,
     /// Unknown status
     Unknown(char, char),
 }
@@ -124,6 +129,8 @@ impl StatusCode {
             ('A', 'D') => StatusCode::AD,
             ('A', 'I') => StatusCode::AI,
             ('A', 'K') => StatusCode::AK,
+            ('Q', 'C') => StatusCode::QC,
+            ('Q', 'D') => StatusCode::QD,
             _ => StatusCode::Unknown(c1, c2),
         }
     }
@@ -144,6 +151,8 @@ impl StatusCode {
             StatusCode::AD => "AD".to_string(),
             StatusCode::AI => "AI".to_string(),
             StatusCode::AK => "AK".to_string(),
+            StatusCode::QC => "QC".to_string(),
+            StatusCode::QD => "QD".to_string(),
             StatusCode::Unknown(c1, c2) => format!("{}{}", c1, c2),
         }
     }

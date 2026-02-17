@@ -1293,6 +1293,7 @@ dependencies = [
 name = "open-mainframe-ims"
 version = "0.1.0"
 dependencies = [
+ "postgres",
  "serde",
  "serde_json",
  "thiserror",

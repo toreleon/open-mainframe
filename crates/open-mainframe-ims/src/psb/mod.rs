@@ -100,6 +100,16 @@ pub struct ProgramCommBlock {
     pub segment_level: u8,
     /// Key feedback area
     pub key_feedback: Vec<u8>,
+    /// I/O PCB: logical terminal name (LTERM)
+    pub lterm_name: String,
+    /// I/O PCB: user ID
+    pub user_id: String,
+    /// I/O PCB: date of last status update (YYYYDDD)
+    pub status_date: String,
+    /// I/O PCB: time of last status update (HHMMSSth)
+    pub status_time: String,
+    /// I/O PCB: input message sequence number
+    pub input_msg_seq: u32,
 }
 
 impl ProgramCommBlock {
@@ -115,10 +125,21 @@ impl ProgramCommBlock {
             status: crate::StatusCode::Ok,
             segment_level: 0,
             key_feedback: vec![0; keylen],
+            lterm_name: String::new(),
+            user_id: String::new(),
+            status_date: String::new(),
+            status_time: String::new(),
+            input_msg_seq: 0,
         }
     }
 
-    /// Create a new I/O PCB for system service calls.
+    /// Create a new I/O PCB for system service calls and message handling.
+    ///
+    /// The I/O PCB carries status information including:
+    /// - LTERM name: logical terminal for message originator
+    /// - User ID: authenticated user
+    /// - Status date/time: timestamp of last DL/I call
+    /// - Input message sequence number
     pub fn new_io() -> Self {
         Self {
             pcb_type: PcbType::Io,
@@ -130,6 +151,11 @@ impl ProgramCommBlock {
             status: crate::StatusCode::Ok,
             segment_level: 0,
             key_feedback: Vec::new(),
+            lterm_name: String::new(),
+            user_id: String::new(),
+            status_date: String::new(),
+            status_time: String::new(),
+            input_msg_seq: 0,
         }
     }
 
@@ -145,6 +171,11 @@ impl ProgramCommBlock {
             status: crate::StatusCode::Ok,
             segment_level: 0,
             key_feedback: Vec::new(),
+            lterm_name: String::new(),
+            user_id: String::new(),
+            status_date: String::new(),
+            status_time: String::new(),
+            input_msg_seq: 0,
         }
     }
 

@@ -4,12 +4,49 @@
 //! Uses an in-memory hierarchical store that can be persisted to PostgreSQL.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use crate::dbd::DatabaseDefinition;
 use crate::dli::store::{HierarchicalStore, QualOp};
 use crate::dli::{DliCall, DliFunction, DliProcessor, DliResult, Ssa, SsaOperator};
-use crate::psb::{ProgramCommBlock, ProgramSpecBlock};
+use crate::psb::{PcbType, ProgramCommBlock, ProgramSpecBlock};
 use crate::{ImsError, ImsResult, StatusCode};
+
+/// A queued message for IMS message processing (MPP-style).
+#[derive(Debug, Clone)]
+pub struct ImsMessage {
+    /// Originating logical terminal name
+    pub lterm: String,
+    /// Transaction code
+    pub tran_code: String,
+    /// Message segments (multi-segment messages)
+    pub segments: Vec<Vec<u8>>,
+    /// User ID of message originator
+    pub user_id: String,
+}
+
+impl ImsMessage {
+    /// Create a new single-segment message.
+    pub fn new(lterm: &str, tran_code: &str, data: Vec<u8>) -> Self {
+        Self {
+            lterm: lterm.to_string(),
+            tran_code: tran_code.to_string(),
+            segments: vec![data],
+            user_id: String::new(),
+        }
+    }
+
+    /// Create a new message with a user ID.
+    pub fn with_user_id(mut self, user_id: &str) -> Self {
+        self.user_id = user_id.to_string();
+        self
+    }
+
+    /// Add a segment to a multi-segment message.
+    pub fn add_segment(&mut self, data: Vec<u8>) {
+        self.segments.push(data);
+    }
+}
 
 /// IMS Runtime for executing DL/I calls.
 pub struct ImsRuntime {
@@ -31,6 +68,14 @@ pub struct ImsRuntime {
     log_records: Vec<Vec<u8>>,
     /// Runtime statistics
     stats: RuntimeStats,
+    /// Input message queue (for GU to I/O PCB)
+    input_queue: VecDeque<ImsMessage>,
+    /// Output message queue (from ISRT to I/O PCB)
+    output_queue: Vec<ImsMessage>,
+    /// Current input message being processed
+    current_input: Option<ImsMessage>,
+    /// Index into current input message segments (for multi-segment GN)
+    current_input_seg_index: usize,
 }
 
 /// Runtime statistics for STAT call.
@@ -78,6 +123,10 @@ impl ImsRuntime {
             checkpoint_ids: Vec::new(),
             log_records: Vec::new(),
             stats: RuntimeStats::default(),
+            input_queue: VecDeque::new(),
+            output_queue: Vec::new(),
+            current_input: None,
+            current_input_seg_index: 0,
         }
     }
 
@@ -130,14 +179,6 @@ impl ImsRuntime {
             .get_mut(call.pcb_index)
             .ok_or(ImsError::PcbNotFound(format!("PCB index {}", call.pcb_index)))?;
 
-        let dbname = pcb.dbname.clone();
-        let store = self
-            .databases
-            .entry(dbname.clone())
-            .or_insert_with(|| HierarchicalStore::new(&dbname));
-
-        let position = self.positions.entry(dbname.clone()).or_default();
-
         // Track statistics
         self.stats.total_calls += 1;
         match call.function {
@@ -155,6 +196,19 @@ impl ImsRuntime {
         if call.function.is_system_service() {
             return self.execute_system_service(call);
         }
+
+        // I/O PCB message operations (GU/ISRT to I/O PCB)
+        if pcb.pcb_type == PcbType::Io {
+            return self.execute_io_pcb_call(call);
+        }
+
+        let dbname = pcb.dbname.clone();
+        let store = self
+            .databases
+            .entry(dbname.clone())
+            .or_insert_with(|| HierarchicalStore::new(&dbname));
+
+        let position = self.positions.entry(dbname.clone()).or_default();
 
         match call.function {
             DliFunction::GU => execute_gu(store, call, pcb, position),
@@ -197,6 +251,130 @@ impl ImsRuntime {
             .with_ssas(ssas)
             .with_io_area(data);
         self.execute(&call)
+    }
+
+    // -----------------------------------------------------------------------
+    // Message Queue Operations (Epic 402)
+    // -----------------------------------------------------------------------
+
+    /// Queue an input message for processing.
+    ///
+    /// In a real IMS system, messages arrive from terminals via IMS/TM.
+    /// This method allows test code and the runtime to enqueue messages
+    /// that will be delivered via GU to the I/O PCB.
+    pub fn enqueue_input(&mut self, msg: ImsMessage) {
+        self.input_queue.push_back(msg);
+    }
+
+    /// Get output messages (responses written via ISRT to I/O PCB).
+    pub fn output_messages(&self) -> &[ImsMessage] {
+        &self.output_queue
+    }
+
+    /// Drain and return all output messages.
+    pub fn take_output_messages(&mut self) -> Vec<ImsMessage> {
+        std::mem::take(&mut self.output_queue)
+    }
+
+    /// Execute a DL/I call against the I/O PCB (GU reads input, ISRT writes output).
+    fn execute_io_pcb_call(&mut self, call: &DliCall) -> ImsResult<DliResult> {
+        match call.function {
+            DliFunction::GU => {
+                // GU to I/O PCB: dequeue next input message
+                if let Some(msg) = self.input_queue.pop_front() {
+                    let data = msg.segments.first().cloned().unwrap_or_default();
+
+                    // Update I/O PCB fields
+                    if let Some(ref mut psb) = self.psb {
+                        if let Some(io_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                            io_pcb.lterm_name = msg.lterm.clone();
+                            io_pcb.user_id = msg.user_id.clone();
+                            io_pcb.input_msg_seq += 1;
+                            io_pcb.set_status(StatusCode::Ok);
+                        }
+                    }
+
+                    self.current_input = Some(msg);
+                    self.current_input_seg_index = 1; // first segment already delivered
+
+                    Ok(DliResult::ok(data, ""))
+                } else {
+                    // No message available — QC status
+                    if let Some(ref mut psb) = self.psb {
+                        if let Some(io_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                            io_pcb.set_status(StatusCode::QC);
+                        }
+                    }
+                    Ok(DliResult::error(StatusCode::QC))
+                }
+            }
+            DliFunction::GN => {
+                // GN to I/O PCB: get next segment of current input message
+                if let Some(ref msg) = self.current_input {
+                    if self.current_input_seg_index < msg.segments.len() {
+                        let data = msg.segments[self.current_input_seg_index].clone();
+                        self.current_input_seg_index += 1;
+
+                        if let Some(ref mut psb) = self.psb {
+                            if let Some(io_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                                io_pcb.set_status(StatusCode::Ok);
+                            }
+                        }
+
+                        Ok(DliResult::ok(data, ""))
+                    } else {
+                        // No more segments in this message
+                        if let Some(ref mut psb) = self.psb {
+                            if let Some(io_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                                io_pcb.set_status(StatusCode::QD);
+                            }
+                        }
+                        Ok(DliResult::error(StatusCode::QD))
+                    }
+                } else {
+                    // No current message
+                    if let Some(ref mut psb) = self.psb {
+                        if let Some(io_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                            io_pcb.set_status(StatusCode::QC);
+                        }
+                    }
+                    Ok(DliResult::error(StatusCode::QC))
+                }
+            }
+            DliFunction::ISRT => {
+                // ISRT to I/O PCB: queue response message to originating terminal
+                let lterm = self
+                    .current_input
+                    .as_ref()
+                    .map(|m| m.lterm.clone())
+                    .unwrap_or_default();
+                let tran_code = self
+                    .current_input
+                    .as_ref()
+                    .map(|m| m.tran_code.clone())
+                    .unwrap_or_default();
+
+                let response = ImsMessage::new(&lterm, &tran_code, call.io_area.clone());
+                self.output_queue.push(response);
+
+                if let Some(ref mut psb) = self.psb {
+                    if let Some(io_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                        io_pcb.set_status(StatusCode::Ok);
+                    }
+                }
+
+                Ok(DliResult::ok(vec![], ""))
+            }
+            _ => {
+                // Other functions not supported on I/O PCB
+                if let Some(ref mut psb) = self.psb {
+                    if let Some(io_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                        io_pcb.set_status(StatusCode::AD);
+                    }
+                }
+                Ok(DliResult::error(StatusCode::AD))
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1367,6 +1545,151 @@ mod tests {
         }
 
         assert_eq!(runtime.checkpoint_ids().len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Epic 402: Message Queue Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_gu_io_pcb_reads_input_message() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Enqueue a message
+        let msg = super::ImsMessage::new("TERM01", "INQY", b"Hello from terminal".to_vec())
+            .with_user_id("USER01");
+        runtime.enqueue_input(msg);
+
+        // GU to I/O PCB (index 0)
+        let gu_call = DliCall::new(DliFunction::GU, 0);
+        let result = runtime.execute(&gu_call).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.segment_data.unwrap(), b"Hello from terminal");
+
+        // Verify I/O PCB fields were updated
+        let psb = runtime.get_psb().unwrap();
+        let io_pcb = &psb.pcbs[0];
+        assert_eq!(io_pcb.lterm_name, "TERM01");
+        assert_eq!(io_pcb.user_id, "USER01");
+        assert_eq!(io_pcb.input_msg_seq, 1);
+    }
+
+    #[test]
+    fn test_gu_io_pcb_no_message_returns_qc() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // GU to I/O PCB with no messages queued
+        let gu_call = DliCall::new(DliFunction::GU, 0);
+        let result = runtime.execute(&gu_call).unwrap();
+        assert_eq!(result.status, StatusCode::QC);
+    }
+
+    #[test]
+    fn test_isrt_io_pcb_writes_output_message() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Enqueue input first (establishes originating terminal)
+        let msg = super::ImsMessage::new("TERM01", "INQY", b"Request".to_vec());
+        runtime.enqueue_input(msg);
+
+        let gu_call = DliCall::new(DliFunction::GU, 0);
+        runtime.execute(&gu_call).unwrap();
+
+        // ISRT to I/O PCB — send response
+        let isrt_call = DliCall::new(DliFunction::ISRT, 0)
+            .with_io_area(b"Response data".to_vec());
+        let result = runtime.execute(&isrt_call).unwrap();
+        assert!(result.is_ok());
+
+        // Verify output was queued
+        let output = runtime.output_messages();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].lterm, "TERM01");
+        assert_eq!(output[0].segments[0], b"Response data");
+    }
+
+    #[test]
+    fn test_multi_segment_input_message() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Create multi-segment message
+        let mut msg = super::ImsMessage::new("TERM01", "TXN1", b"Segment 1".to_vec());
+        msg.add_segment(b"Segment 2".to_vec());
+        msg.add_segment(b"Segment 3".to_vec());
+        runtime.enqueue_input(msg);
+
+        // GU gets first segment
+        let gu_call = DliCall::new(DliFunction::GU, 0);
+        let result = runtime.execute(&gu_call).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.segment_data.unwrap(), b"Segment 1");
+
+        // GN gets second segment
+        let gn_call = DliCall::new(DliFunction::GN, 0);
+        let result = runtime.execute(&gn_call).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.segment_data.unwrap(), b"Segment 2");
+
+        // GN gets third segment
+        let result = runtime.execute(&gn_call).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.segment_data.unwrap(), b"Segment 3");
+
+        // GN returns QD — no more segments
+        let result = runtime.execute(&gn_call).unwrap();
+        assert_eq!(result.status, StatusCode::QD);
+    }
+
+    #[test]
+    fn test_multiple_messages_in_queue() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // Enqueue two messages
+        runtime.enqueue_input(super::ImsMessage::new("TERM01", "T1", b"Msg1".to_vec()));
+        runtime.enqueue_input(super::ImsMessage::new("TERM02", "T2", b"Msg2".to_vec()));
+
+        // First GU gets first message
+        let gu_call = DliCall::new(DliFunction::GU, 0);
+        let result = runtime.execute(&gu_call).unwrap();
+        assert_eq!(result.segment_data.unwrap(), b"Msg1");
+
+        // Second GU gets second message
+        let result = runtime.execute(&gu_call).unwrap();
+        assert_eq!(result.segment_data.unwrap(), b"Msg2");
+
+        // I/O PCB lterm should reflect the last message
+        let psb = runtime.get_psb().unwrap();
+        assert_eq!(psb.pcbs[0].lterm_name, "TERM02");
+    }
+
+    #[test]
+    fn test_take_output_messages() {
+        let mut runtime = create_io_pcb_runtime();
+
+        runtime.enqueue_input(super::ImsMessage::new("TERM01", "T1", b"Req".to_vec()));
+        let gu_call = DliCall::new(DliFunction::GU, 0);
+        runtime.execute(&gu_call).unwrap();
+
+        // Send two responses
+        let isrt = DliCall::new(DliFunction::ISRT, 0).with_io_area(b"Resp1".to_vec());
+        runtime.execute(&isrt).unwrap();
+        let isrt = DliCall::new(DliFunction::ISRT, 0).with_io_area(b"Resp2".to_vec());
+        runtime.execute(&isrt).unwrap();
+
+        // Drain output
+        let output = runtime.take_output_messages();
+        assert_eq!(output.len(), 2);
+        assert!(runtime.output_messages().is_empty());
+    }
+
+    #[test]
+    fn test_io_pcb_rejects_unsupported_functions() {
+        let mut runtime = create_io_pcb_runtime();
+
+        // DLET on I/O PCB should return AD
+        let dlet_call = DliCall::new(DliFunction::DLET, 0);
+        let result = runtime.execute(&dlet_call).unwrap();
+        assert_eq!(result.status, StatusCode::AD);
     }
 
     #[test]

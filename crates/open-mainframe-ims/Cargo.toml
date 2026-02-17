@@ -11,5 +11,10 @@ description = "IMS/DB hierarchical database support for OpenMainframe"
 thiserror.workspace = true
 serde = { workspace = true }
 serde_json = "1"
+postgres = { version = "0.19", optional = true }
+
+[features]
+default = []
+postgres = ["dep:postgres"]
 
 [dev-dependencies]
