@@ -122,6 +122,119 @@ impl SortField {
     }
 }
 
+/// Extract numeric value from bytes according to data type.
+pub(crate) fn extract_numeric(data: &[u8], data_type: DataType) -> i64 {
+    match data_type {
+        DataType::Character => {
+            // Interpret character digits as numeric
+            let s = std::str::from_utf8(data).unwrap_or("0");
+            s.trim().parse::<i64>().unwrap_or(0)
+        }
+        DataType::ZonedDecimal => parse_zoned_decimal(data),
+        DataType::PackedDecimal => parse_packed_decimal(data),
+        DataType::Binary | DataType::FixedPoint => parse_binary(data),
+    }
+}
+
+/// Pack a numeric value into bytes according to data type.
+pub(crate) fn pack_numeric(value: i64, target: &mut [u8], data_type: DataType) {
+    match data_type {
+        DataType::Character => {
+            let s = format!("{}", value);
+            let bytes = s.as_bytes();
+            // Right-justify in field
+            let start = target.len().saturating_sub(bytes.len());
+            for b in target.iter_mut().take(start) {
+                *b = b'0';
+            }
+            for (i, &byte) in bytes.iter().enumerate() {
+                if start + i < target.len() {
+                    target[start + i] = byte;
+                }
+            }
+        }
+        DataType::ZonedDecimal => pack_zoned_decimal(value, target),
+        DataType::PackedDecimal => pack_packed_decimal(value, target),
+        DataType::Binary | DataType::FixedPoint => pack_binary(value, target),
+    }
+}
+
+/// Pack a zoned decimal value into bytes.
+fn pack_zoned_decimal(value: i64, target: &mut [u8]) {
+    let is_negative = value < 0;
+    let abs_val = value.unsigned_abs();
+
+    let mut digits = Vec::new();
+    let mut v = abs_val;
+    if v == 0 {
+        digits.push(0u8);
+    } else {
+        while v > 0 {
+            digits.push((v % 10) as u8);
+            v /= 10;
+        }
+    }
+    digits.reverse();
+
+    let len = target.len();
+    let start = len.saturating_sub(digits.len());
+    for (i, byte) in target.iter_mut().enumerate() {
+        let digit = if i >= start {
+            digits[i - start]
+        } else {
+            0
+        };
+        if i == len - 1 {
+            let sign = if is_negative { 0xD0 } else { 0xF0 };
+            *byte = sign | digit;
+        } else {
+            *byte = 0xF0 | digit;
+        }
+    }
+}
+
+/// Pack a packed decimal value into bytes.
+fn pack_packed_decimal(value: i64, target: &mut [u8]) {
+    if target.is_empty() {
+        return;
+    }
+    let is_negative = value < 0;
+    let abs_val = value.unsigned_abs();
+
+    // Total digit capacity: (len * 2) - 1 (last nibble is sign)
+    let total_digits = target.len() * 2 - 1;
+    let mut digits = vec![0u8; total_digits];
+    let mut v = abs_val;
+    for d in digits.iter_mut().rev() {
+        *d = (v % 10) as u8;
+        v /= 10;
+    }
+
+    let mut digit_idx = 0;
+    let last_idx = target.len() - 1;
+    for (i, byte) in target.iter_mut().enumerate() {
+        if i < last_idx {
+            let high = digits.get(digit_idx).copied().unwrap_or(0);
+            let low = digits.get(digit_idx + 1).copied().unwrap_or(0);
+            *byte = (high << 4) | low;
+            digit_idx += 2;
+        } else {
+            let high = digits.get(digit_idx).copied().unwrap_or(0);
+            let sign = if is_negative { 0x0D } else { 0x0C };
+            *byte = (high << 4) | sign;
+        }
+    }
+}
+
+/// Pack a binary value into bytes (big-endian).
+fn pack_binary(value: i64, target: &mut [u8]) {
+    let bytes = value.to_be_bytes();
+    let start = 8usize.saturating_sub(target.len());
+    for (i, b) in target.iter_mut().enumerate() {
+        *b = bytes[start + i];
+    }
+}
+
 /// Compare zoned decimal values.
 fn compare_zoned_decimal(a: &[u8], b: &[u8]) -> Ordering {
     let a_val = parse_zoned_decimal(a);
@@ -351,6 +464,47 @@ mod tests {
         // -1 in 2-byte signed
         let data_neg = [0xFF, 0xFF];
         assert_eq!(parse_binary(&data_neg), -1);
+    }
+
+    #[test]
+    fn test_extract_pack_roundtrip_packed_decimal() {
+        let mut buf = [0u8; 3];
+        pack_packed_decimal(12345, &mut buf);
+        assert_eq!(parse_packed_decimal(&buf), 12345);
+
+        pack_packed_decimal(-99, &mut buf);
+        assert_eq!(parse_packed_decimal(&buf), -99);
+    }
+
+    #[test]
+    fn test_extract_pack_roundtrip_zoned_decimal() {
+        let mut buf = [0u8; 4];
+        pack_zoned_decimal(1234, &mut buf);
+        assert_eq!(parse_zoned_decimal(&buf), 1234);
+
+        pack_zoned_decimal(-56, &mut buf);
+        assert_eq!(parse_zoned_decimal(&buf), -56);
+    }
+
+    #[test]
+    fn test_extract_pack_roundtrip_binary() {
+        let mut buf = [0u8; 4];
+        pack_binary(42, &mut buf);
+        assert_eq!(parse_binary(&buf), 42);
+
+        pack_binary(-1, &mut buf);
+        assert_eq!(parse_binary(&buf), -1);
+    }
+
+    #[test]
+    fn test_extract_numeric_dispatch() {
+        // Packed decimal
+        let pd = [0x12, 0x3C]; // 123+
+        assert_eq!(extract_numeric(&pd, DataType::PackedDecimal), 123);
+
+        // Binary
+        let bi = [0x00, 0x00, 0x01, 0x00]; // 256
+        assert_eq!(extract_numeric(&bi, DataType::Binary), 256);
     }
 
     #[test]

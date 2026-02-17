@@ -244,10 +244,14 @@ impl SortEngine {
     }
 
     /// Apply SUM processing for duplicate keys.
+    ///
+    /// When `sum_fields` is empty (FIELDS=NONE), duplicates are simply removed.
+    /// When `sum_fields` contains field definitions, numeric fields are accumulated
+    /// across records with identical sort keys.
     fn apply_sum(
         &self,
         records: &[Vec<u8>],
-        _sum_fields: &[(usize, usize, crate::fields::DataType)],
+        sum_fields: &[(usize, usize, crate::fields::DataType)],
     ) -> Vec<Vec<u8>> {
         if records.is_empty() {
             return Vec::new();
@@ -262,17 +266,19 @@ impl SortEngine {
         let mut current_key_record: Option<Vec<u8>> = None;
 
         for record in records {
-            match &current_key_record {
+            match &mut current_key_record {
                 None => {
                     current_key_record = Some(record.clone());
                 }
                 Some(prev) => {
                     if sort_spec.compare(prev, record) == std::cmp::Ordering::Equal {
-                        // Duplicate key - for now, just keep first (FIELDS=NONE behavior)
-                        // TODO: Implement actual summation for numeric fields
+                        // Duplicate key — accumulate numeric SUM fields
+                        if !sum_fields.is_empty() {
+                            accumulate_sum_fields(prev, record, sum_fields);
+                        }
+                        // If sum_fields is empty (FIELDS=NONE), just skip (dedup)
                     } else {
-                        result.push(prev.clone());
-                        current_key_record = Some(record.clone());
+                        result.push(std::mem::replace(prev, record.clone()));
                     }
                 }
             }
@@ -283,6 +289,38 @@ impl SortEngine {
         }
 
         result
+    }
+
+    /// Apply SUM during external sort merge.
+    ///
+    /// Returns (output record, was_accumulated) so the caller knows whether
+    /// the record was merged into the accumulator or is a new key.
+    fn accumulate_or_emit(
+        &self,
+        accumulator: &mut Option<Vec<u8>>,
+        record: &[u8],
+        sort_spec: &SortSpec,
+        sum_fields: &[(usize, usize, crate::fields::DataType)],
+    ) -> Option<Vec<u8>> {
+        match accumulator {
+            None => {
+                *accumulator = Some(record.to_vec());
+                None
+            }
+            Some(ref mut acc) => {
+                if sort_spec.compare(acc, record) == Ordering::Equal {
+                    // Duplicate — accumulate
+                    if !sum_fields.is_empty() {
+                        accumulate_sum_fields(acc, record, sum_fields);
+                    }
+                    None
+                } else {
+                    // New key — emit old, start new accumulator
+                    let emit = std::mem::replace(acc, record.to_vec());
+                    Some(emit)
+                }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -393,8 +431,9 @@ impl SortEngine {
         let mut output_count = 0;
 
         // SUM state for duplicate handling during merge
+        let sum_fields_ref = self.sum_fields.as_deref().unwrap_or(&[]);
         let has_sum = self.sum_fields.is_some();
-        let mut prev_record: Option<Vec<u8>> = None;
+        let mut accumulator: Option<Vec<u8>> = None;
 
         while let Some(entry) = heap.pop() {
             let record = entry.record;
@@ -409,30 +448,60 @@ impl SortEngine {
                 });
             }
 
-            // Apply SUM deduplication
+            // Apply SUM accumulation or pass through
             if has_sum {
-                if let Some(ref prev) = prev_record {
-                    if sort_spec.compare(prev, &record) == Ordering::Equal {
-                        continue; // Duplicate — skip
+                if let Some(emit) = self.accumulate_or_emit(
+                    &mut accumulator,
+                    &record,
+                    sort_spec,
+                    sum_fields_ref,
+                ) {
+                    let output_rec = if let Some(ref outrec) = self.outrec {
+                        outrec.reformat(&emit)
+                    } else {
+                        emit
+                    };
+                    if self.record_length > 0 {
+                        writer.write_all(&output_rec)?;
+                    } else {
+                        writer.write_all(&output_rec)?;
+                        writer.write_all(b"\n")?;
                     }
+                    output_count += 1;
                 }
-                prev_record = Some(record.clone());
-            }
-
-            // Apply OUTREC
-            let output_rec = if let Some(ref outrec) = self.outrec {
-                outrec.reformat(&record)
             } else {
-                record
-            };
-
-            if self.record_length > 0 {
-                writer.write_all(&output_rec)?;
-            } else {
-                writer.write_all(&output_rec)?;
-                writer.write_all(b"\n")?;
+                // No SUM — write directly
+                let output_rec = if let Some(ref outrec) = self.outrec {
+                    outrec.reformat(&record)
+                } else {
+                    record
+                };
+                if self.record_length > 0 {
+                    writer.write_all(&output_rec)?;
+                } else {
+                    writer.write_all(&output_rec)?;
+                    writer.write_all(b"\n")?;
+                }
+                output_count += 1;
             }
-            output_count += 1;
+        }
+
+        // Flush final accumulated record
+        if has_sum {
+            if let Some(last) = accumulator {
+                let output_rec = if let Some(ref outrec) = self.outrec {
+                    outrec.reformat(&last)
+                } else {
+                    last
+                };
+                if self.record_length > 0 {
+                    writer.write_all(&output_rec)?;
+                } else {
+                    writer.write_all(&output_rec)?;
+                    writer.write_all(b"\n")?;
+                }
+                output_count += 1;
+            }
         }
 
         writer.flush()?;
@@ -595,6 +664,42 @@ impl Drop for TempRunFiles {
     fn drop(&mut self) {
         for path in &self.paths {
             let _ = fs::remove_file(path);
+        }
+    }
+}
+
+/// Accumulate SUM fields from `source` into `target`.
+///
+/// For each SUM field, extract the numeric value from `source`,
+/// add it to the value in `target`, and write the result back to `target`.
+fn accumulate_sum_fields(
+    target: &mut [u8],
+    source: &[u8],
+    sum_fields: &[(usize, usize, crate::fields::DataType)],
+) {
+    use crate::fields::{extract_numeric, pack_numeric};
+
+    for &(position, length, data_type) in sum_fields {
+        let start = position.saturating_sub(1);
+        let end = start + length;
+
+        // Extract values from both records
+        let target_val = if end <= target.len() {
+            extract_numeric(&target[start..end], data_type)
+        } else {
+            0
+        };
+
+        let source_val = if end <= source.len() {
+            extract_numeric(&source[start..end], data_type)
+        } else {
+            0
+        };
+
+        // Accumulate and write back
+        let sum = target_val.saturating_add(source_val);
+        if end <= target.len() {
+            pack_numeric(sum, &mut target[start..end], data_type);
         }
     }
 }
@@ -908,6 +1013,215 @@ mod tests {
 
         let output = fs::read_to_string(&output_path).unwrap();
         assert_eq!(output, "A1\nA2\nA3\nA4\n");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    // -----------------------------------------------------------------------
+    // SUM Tests (Epic 803)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_sum_fields_none_dedup() {
+        let input_path = test_path("sum_none_in.dat");
+        let output_path = test_path("sum_none_out.dat");
+
+        // Three records with key "AAA", two with "BBB"
+        fs::write(&input_path, "AAA100\nAAA200\nAAA300\nBBB400\nBBB500\n").unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 3, DataType::Character, SortOrder::Ascending));
+        let engine = SortEngine::new(spec).with_sum(vec![]);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.output_records, 2);
+        assert_eq!(stats.summed_records, 3);
+
+        let output = fs::read_to_string(&output_path).unwrap();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(&lines[0][..3], "AAA");
+        assert_eq!(&lines[1][..3], "BBB");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_sum_packed_decimal_accumulation() {
+        let input_path = test_path("sum_pd_in.dat");
+        let output_path = test_path("sum_pd_out.dat");
+
+        // Fixed-length records: 3-byte key + 3-byte packed decimal
+        // 3-byte PD: 5 digit positions (3*2 - 1 = 5)
+        // PD 100 = 0x00 0x10 0x0C, PD 200 = 0x00 0x20 0x0C, PD 300 = 0x00 0x30 0x0C
+        let mut records: Vec<u8> = Vec::new();
+        // Record 1: AAA + PD 100
+        records.extend_from_slice(b"AAA");
+        records.extend_from_slice(&[0x00, 0x10, 0x0C]);
+        // Record 2: AAA + PD 200
+        records.extend_from_slice(b"AAA");
+        records.extend_from_slice(&[0x00, 0x20, 0x0C]);
+        // Record 3: AAA + PD 300
+        records.extend_from_slice(b"AAA");
+        records.extend_from_slice(&[0x00, 0x30, 0x0C]);
+        // Record 4: BBB + PD 400
+        records.extend_from_slice(b"BBB");
+        records.extend_from_slice(&[0x00, 0x40, 0x0C]);
+
+        fs::write(&input_path, &records).unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 3, DataType::Character, SortOrder::Ascending));
+
+        let engine = SortEngine::new(spec)
+            .with_sum(vec![(4, 3, DataType::PackedDecimal)])
+            .with_record_length(6);
+
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+        assert_eq!(stats.output_records, 2);
+
+        // Read the output
+        let output = fs::read(&output_path).unwrap();
+        assert_eq!(output.len(), 12); // 2 records × 6 bytes
+
+        // First record: AAA + sum of 100+200+300 = 600 packed
+        assert_eq!(&output[0..3], b"AAA");
+        let sum_val = crate::fields::extract_numeric(&output[3..6], DataType::PackedDecimal);
+        assert_eq!(sum_val, 600);
+
+        // Second record: BBB + 400
+        assert_eq!(&output[6..9], b"BBB");
+        let val2 = crate::fields::extract_numeric(&output[9..12], DataType::PackedDecimal);
+        assert_eq!(val2, 400);
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_sum_binary_accumulation() {
+        let input_path = test_path("sum_bi_in.dat");
+        let output_path = test_path("sum_bi_out.dat");
+
+        // Fixed-length records: 2-byte key + 4-byte binary
+        let mut records: Vec<u8> = Vec::new();
+        // Record 1: "AB" + binary 1000
+        records.extend_from_slice(b"AB");
+        records.extend_from_slice(&1000i32.to_be_bytes());
+        // Record 2: "AB" + binary 2000
+        records.extend_from_slice(b"AB");
+        records.extend_from_slice(&2000i32.to_be_bytes());
+        // Record 3: "CD" + binary 500
+        records.extend_from_slice(b"CD");
+        records.extend_from_slice(&500i32.to_be_bytes());
+
+        fs::write(&input_path, &records).unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 2, DataType::Character, SortOrder::Ascending));
+
+        let engine = SortEngine::new(spec)
+            .with_sum(vec![(3, 4, DataType::Binary)])
+            .with_record_length(6);
+
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+        assert_eq!(stats.output_records, 2);
+
+        let output = fs::read(&output_path).unwrap();
+        assert_eq!(output.len(), 12);
+
+        // AB: 1000 + 2000 = 3000
+        let sum = crate::fields::extract_numeric(&output[2..6], DataType::Binary);
+        assert_eq!(sum, 3000);
+
+        // CD: 500
+        let val = crate::fields::extract_numeric(&output[8..12], DataType::Binary);
+        assert_eq!(val, 500);
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_sum_multiple_fields() {
+        let input_path = test_path("sum_multi_in.dat");
+        let output_path = test_path("sum_multi_out.dat");
+
+        // 2-byte key + 4-byte binary (field1) + 4-byte binary (field2)
+        let mut records: Vec<u8> = Vec::new();
+        // Record 1: "AA" + 10 + 100
+        records.extend_from_slice(b"AA");
+        records.extend_from_slice(&10i32.to_be_bytes());
+        records.extend_from_slice(&100i32.to_be_bytes());
+        // Record 2: "AA" + 20 + 200
+        records.extend_from_slice(b"AA");
+        records.extend_from_slice(&20i32.to_be_bytes());
+        records.extend_from_slice(&200i32.to_be_bytes());
+
+        fs::write(&input_path, &records).unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 2, DataType::Character, SortOrder::Ascending));
+
+        let engine = SortEngine::new(spec)
+            .with_sum(vec![
+                (3, 4, DataType::Binary),
+                (7, 4, DataType::Binary),
+            ])
+            .with_record_length(10);
+
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+        assert_eq!(stats.output_records, 1);
+
+        let output = fs::read(&output_path).unwrap();
+        let f1 = crate::fields::extract_numeric(&output[2..6], DataType::Binary);
+        let f2 = crate::fields::extract_numeric(&output[6..10], DataType::Binary);
+        assert_eq!(f1, 30);
+        assert_eq!(f2, 300);
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_sum_external_sort_accumulation() {
+        let input_path = test_path("sum_ext_in.dat");
+        let output_path = test_path("sum_ext_out.dat");
+
+        // 2-byte key + 4-byte binary, max_memory_records=2 to force external sort
+        let mut records: Vec<u8> = Vec::new();
+        // 4 records with key "AA" and 4 with key "BB"
+        for val in [10i32, 20, 30, 40] {
+            records.extend_from_slice(b"AA");
+            records.extend_from_slice(&val.to_be_bytes());
+        }
+        for val in [100i32, 200] {
+            records.extend_from_slice(b"BB");
+            records.extend_from_slice(&val.to_be_bytes());
+        }
+
+        fs::write(&input_path, &records).unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 2, DataType::Character, SortOrder::Ascending));
+
+        let engine = SortEngine::new(spec)
+            .with_sum(vec![(3, 4, DataType::Binary)])
+            .with_record_length(6)
+            .with_max_memory_records(2);
+
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+        assert_eq!(stats.output_records, 2);
+
+        let output = fs::read(&output_path).unwrap();
+        // AA: 10+20+30+40 = 100
+        let aa_sum = crate::fields::extract_numeric(&output[2..6], DataType::Binary);
+        assert_eq!(aa_sum, 100);
+        // BB: 100+200 = 300
+        let bb_sum = crate::fields::extract_numeric(&output[8..12], DataType::Binary);
+        assert_eq!(bb_sum, 300);
 
         cleanup(&input_path);
         cleanup(&output_path);
