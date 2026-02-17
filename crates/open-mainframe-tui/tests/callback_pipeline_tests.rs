@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use open_mainframe_cics::bms::{BmsMap, BmsParser};
 use open_mainframe_cics::terminal::SendMapOptions;
 use open_mainframe_tui::fields::FieldTable;
-use open_mainframe_tui::session::{Session, SessionConfig};
+use open_mainframe_tui::session::{Session, SessionConfig, TerminalModel};
 
 /// Create a basic SessionConfig for testing (no actual TUI terminal needed).
 fn test_config() -> SessionConfig {
@@ -22,6 +22,7 @@ fn test_config() -> SessionConfig {
         color_theme: "classic".to_string(),
         userid: None,
         initial_transid: None,
+        terminal_model: TerminalModel::Model2,
     }
 }
 

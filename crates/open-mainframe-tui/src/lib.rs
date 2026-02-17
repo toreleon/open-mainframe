@@ -49,4 +49,4 @@ pub mod styles;
 pub use color::ColorTheme;
 pub use error::SessionError;
 pub use event::{CrosstermEventSource, EventSource, MockEventSource};
-pub use session::{Session, SessionConfig, SessionState};
+pub use session::{Session, SessionConfig, SessionState, TerminalModel};

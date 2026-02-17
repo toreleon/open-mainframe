@@ -58,6 +58,16 @@ fn map_key_code(code: &KeyCode, modifiers: &KeyModifiers) -> InputAction {
         };
     }
 
+    // Alt+1/2/3 → PA1/PA2/PA3
+    if modifiers.contains(KeyModifiers::ALT) {
+        return match code {
+            KeyCode::Char('1') => InputAction::AidKey(aid::PA1),
+            KeyCode::Char('2') => InputAction::AidKey(aid::PA2),
+            KeyCode::Char('3') => InputAction::AidKey(aid::PA3),
+            _ => InputAction::None,
+        };
+    }
+
     match code {
         // Printable characters
         KeyCode::Char(c) => InputAction::Character(*c),
@@ -195,5 +205,30 @@ mod tests {
         assert_eq!(aid_name(aid::ENTER), "ENTER");
         assert_eq!(aid_name(aid::PF3), "PF3");
         assert_eq!(aid_name(aid::CLEAR), "CLEAR");
+        assert_eq!(aid_name(aid::PA1), "PA1");
+        assert_eq!(aid_name(aid::PA2), "PA2");
+        assert_eq!(aid_name(aid::PA3), "PA3");
+    }
+
+    #[test]
+    fn test_pa_key_mapping() {
+        // Alt+1 → PA1
+        let event = make_key_event(KeyCode::Char('1'), KeyModifiers::ALT);
+        assert_eq!(map_key_event(&event), InputAction::AidKey(aid::PA1));
+
+        // Alt+2 → PA2
+        let event = make_key_event(KeyCode::Char('2'), KeyModifiers::ALT);
+        assert_eq!(map_key_event(&event), InputAction::AidKey(aid::PA2));
+
+        // Alt+3 → PA3
+        let event = make_key_event(KeyCode::Char('3'), KeyModifiers::ALT);
+        assert_eq!(map_key_event(&event), InputAction::AidKey(aid::PA3));
+    }
+
+    #[test]
+    fn test_alt_other_keys_ignored() {
+        // Alt+4 should produce no action
+        let event = make_key_event(KeyCode::Char('4'), KeyModifiers::ALT);
+        assert_eq!(map_key_event(&event), InputAction::None);
     }
 }

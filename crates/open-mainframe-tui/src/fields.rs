@@ -49,11 +49,16 @@ impl FieldEntry {
     }
 
     /// Get the screen position for a given offset within the field.
-    pub fn position_at(&self, offset: usize) -> ScreenPosition {
-        // Handle wrapping across rows (80-column screen)
-        let cols = 80usize;
+    /// Uses the given column width for row wrapping.
+    pub fn position_at_cols(&self, offset: usize, cols: usize) -> ScreenPosition {
         let total_offset = (self.row - 1) * cols + (self.col - 1) + offset;
         ScreenPosition::new(total_offset / cols + 1, total_offset % cols + 1)
+    }
+
+    /// Get the screen position for a given offset within the field.
+    /// Uses the default 80-column width.
+    pub fn position_at(&self, offset: usize) -> ScreenPosition {
+        self.position_at_cols(offset, 80)
     }
 }
 
@@ -65,6 +70,10 @@ pub struct FieldTable {
     input_order: Vec<usize>,
     /// Currently active input field index (into input_order).
     active_input: Option<usize>,
+    /// Screen columns (default 80).
+    cols: usize,
+    /// Screen rows (default 24).
+    rows: usize,
 }
 
 impl FieldTable {
@@ -74,6 +83,19 @@ impl FieldTable {
             fields: Vec::new(),
             input_order: Vec::new(),
             active_input: None,
+            cols: 80,
+            rows: 24,
+        }
+    }
+
+    /// Create an empty field table with custom screen dimensions.
+    pub fn with_dimensions(rows: usize, cols: usize) -> Self {
+        Self {
+            fields: Vec::new(),
+            input_order: Vec::new(),
+            active_input: None,
+            cols,
+            rows,
         }
     }
 
@@ -124,11 +146,26 @@ impl FieldTable {
             Some(0)
         });
 
+        // Derive dimensions from the BMS map SIZE
+        let (rows, cols) = map.size;
+
         Self {
             fields,
             input_order,
             active_input,
+            cols,
+            rows,
         }
+    }
+
+    /// Get the screen column count.
+    pub fn screen_cols(&self) -> usize {
+        self.cols
+    }
+
+    /// Get the screen row count.
+    pub fn screen_rows(&self) -> usize {
+        self.rows
     }
 
     /// Get all fields.
@@ -167,8 +204,9 @@ impl FieldTable {
 
     /// Get the cursor screen position based on the active field.
     pub fn cursor_position(&self) -> Option<ScreenPosition> {
+        let cols = self.cols;
         self.active_field()
-            .map(|f| f.position_at(f.cursor_offset))
+            .map(|f| f.position_at_cols(f.cursor_offset, cols))
     }
 
     /// Move to the next unprotected field (Tab).
@@ -357,7 +395,7 @@ impl FieldTable {
             None => return,
         };
         // Find the closest input field on a preceding row at same column
-        let target_row = if cur_row > 1 { cur_row - 1 } else { 24 };
+        let target_row = if cur_row > 1 { cur_row - 1 } else { self.rows };
         self.move_to_row(target_row, cur_col);
     }
 
@@ -368,7 +406,7 @@ impl FieldTable {
             Some(f) => (f.row, f.col + f.cursor_offset),
             None => return,
         };
-        let target_row = if cur_row < 24 { cur_row + 1 } else { 1 };
+        let target_row = if cur_row < self.rows { cur_row + 1 } else { 1 };
         self.move_to_row(target_row, cur_col);
     }
 
@@ -471,6 +509,17 @@ impl FieldTable {
 impl Default for FieldTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl std::fmt::Debug for FieldTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FieldTable")
+            .field("field_count", &self.fields.len())
+            .field("input_count", &self.input_order.len())
+            .field("rows", &self.rows)
+            .field("cols", &self.cols)
+            .finish()
     }
 }
 

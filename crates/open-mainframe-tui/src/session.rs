@@ -20,6 +20,50 @@ pub type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 use open_mainframe_cics::bms::{BmsMap, ScreenSize};
 use open_mainframe_cics::terminal::{ScreenBuffer, SendMapOptions};
 
+/// 3270 terminal model determining screen dimensions.
+///
+/// Each model provides a default and (optionally) an alternate screen size.
+/// `EWA` (Erase/Write Alternate) switches to the alternate size; `EW`
+/// (Erase/Write) reverts to the default size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TerminalModel {
+    /// 24 rows x 80 columns.
+    #[default]
+    Model2,
+    /// 32 rows x 80 columns.
+    Model3,
+    /// 43 rows x 80 columns.
+    Model4,
+    /// 27 rows x 132 columns (default 24x80, alternate 27x132).
+    Model5,
+}
+
+impl TerminalModel {
+    /// Default screen dimensions for this model.
+    pub fn default_size(self) -> ScreenSize {
+        ScreenSize::Model2
+    }
+
+    /// Alternate (EWA) screen dimensions for this model.
+    pub fn alternate_size(self) -> ScreenSize {
+        match self {
+            TerminalModel::Model2 => ScreenSize::Model2,
+            TerminalModel::Model3 => ScreenSize::Model3,
+            TerminalModel::Model4 => ScreenSize::Model4,
+            TerminalModel::Model5 => ScreenSize::Model5,
+        }
+    }
+
+    /// Dimensions (rows, cols) for the given screen size variant.
+    pub fn dimensions(self, alternate: bool) -> (usize, usize) {
+        if alternate {
+            self.alternate_size().dimensions()
+        } else {
+            self.default_size().dimensions()
+        }
+    }
+}
+
 use crate::color::ColorTheme;
 use crate::error::SessionError;
 use crate::fields::FieldTable;
@@ -46,6 +90,8 @@ pub struct SessionConfig {
     pub userid: Option<String>,
     /// Initial transaction ID.
     pub initial_transid: Option<String>,
+    /// Terminal model (Model 2-5) controlling screen dimensions.
+    pub terminal_model: TerminalModel,
 }
 
 /// Session state in the pseudo-conversational lifecycle.
@@ -88,6 +134,12 @@ pub struct Session {
     current_program: String,
     /// Whether the screen needs a redraw.
     needs_redraw: bool,
+    /// Whether we are using the alternate (EWA) screen size.
+    use_alternate: bool,
+    /// Current screen rows.
+    screen_rows: usize,
+    /// Current screen columns.
+    screen_cols: usize,
 }
 
 impl Session {
@@ -99,6 +151,9 @@ impl Session {
             .file_stem()
             .map(|s| s.to_string_lossy().to_uppercase())
             .unwrap_or_default();
+
+        // Start with default screen size (always 24x80)
+        let (rows, cols) = config.terminal_model.dimensions(false);
 
         Self {
             config,
@@ -117,7 +172,44 @@ impl Session {
             },
             current_program: program,
             needs_redraw: true,
+            use_alternate: false,
+            screen_rows: rows,
+            screen_cols: cols,
         }
+    }
+
+    /// Switch to the alternate (EWA) screen size.
+    pub fn erase_write_alternate(&mut self) {
+        if self.use_alternate {
+            return;
+        }
+        self.use_alternate = true;
+        let (rows, cols) = self.config.terminal_model.dimensions(true);
+        self.screen_rows = rows;
+        self.screen_cols = cols;
+        let screen_size = self.config.terminal_model.alternate_size();
+        self.screen = ScreenBuffer::new(screen_size);
+        self.field_table = FieldTable::new();
+        self.needs_redraw = true;
+    }
+
+    /// Switch back to the default (EW) screen size.
+    pub fn erase_write(&mut self) {
+        if !self.use_alternate {
+            return;
+        }
+        self.use_alternate = false;
+        let (rows, cols) = self.config.terminal_model.dimensions(false);
+        self.screen_rows = rows;
+        self.screen_cols = cols;
+        self.screen = ScreenBuffer::new(ScreenSize::Model2);
+        self.field_table = FieldTable::new();
+        self.needs_redraw = true;
+    }
+
+    /// Get the current screen dimensions (rows, cols).
+    pub fn screen_dimensions(&self) -> (usize, usize) {
+        (self.screen_rows, self.screen_cols)
     }
 
     /// Update the screen from a SEND MAP operation.
@@ -230,11 +322,22 @@ impl Session {
                 }
 
                 InputAction::AidKey(aid_code) => {
+                    use open_mainframe_cics::runtime::eib::aid;
+
                     // CLEAR key: clear all unprotected fields first
-                    if aid_code == open_mainframe_cics::runtime::eib::aid::CLEAR {
+                    if aid_code == aid::CLEAR {
                         self.field_table.clear_unprotected();
                         self.field_table.home();
                         self.update_cursor_status();
+                    }
+
+                    // PA keys are "short read" — return only AID + cursor,
+                    // no field data is transmitted.
+                    if aid_code == aid::PA1
+                        || aid_code == aid::PA2
+                        || aid_code == aid::PA3
+                    {
+                        return Ok((aid_code, HashMap::new()));
                     }
 
                     // Collect modified field data
@@ -331,17 +434,19 @@ impl Session {
         let theme = &self.theme;
         let field_table = &self.field_table;
         let status = &self.status;
+        let rows = self.screen_rows;
+        let cols = self.screen_cols;
 
         terminal
             .draw(|frame| {
                 let size = frame.area();
 
-                // Layout: 24 rows for screen, remaining for status
+                // Layout: screen rows for 3270 screen, remaining for status
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
-                        Constraint::Length(24), // 3270 screen area
-                        Constraint::Min(2),     // Status line
+                        Constraint::Length(rows as u16), // 3270 screen area
+                        Constraint::Min(2),              // Status line
                     ])
                     .split(size);
 
@@ -349,8 +454,8 @@ impl Session {
                 let screen_widget = FieldRenderedScreen {
                     field_table,
                     theme,
-                    rows: 24,
-                    cols: 80,
+                    rows,
+                    cols,
                 };
                 frame.render_widget(screen_widget, chunks[0]);
 
@@ -360,8 +465,8 @@ impl Session {
 
                 // Position terminal cursor
                 if let Some(pos) = field_table.cursor_position() {
-                    let x = chunks[0].x + (pos.col - 1).min(79) as u16;
-                    let y = chunks[0].y + (pos.row - 1).min(23) as u16;
+                    let x = chunks[0].x + (pos.col - 1).min(cols - 1) as u16;
+                    let y = chunks[0].y + (pos.row - 1).min(rows - 1) as u16;
                     frame.set_cursor_position((x, y));
                 }
             })
@@ -426,6 +531,7 @@ mod tests {
             color_theme: "classic".to_string(),
             userid: None,
             initial_transid: None,
+            terminal_model: TerminalModel::Model2,
         };
         assert_eq!(config.initial_program.to_str(), Some("COSGN00C.cbl"));
     }
@@ -441,6 +547,7 @@ mod tests {
             color_theme: "classic".to_string(),
             userid: None,
             initial_transid: None,
+            terminal_model: TerminalModel::Model2,
         };
         let session = Session::new(config);
         assert_eq!(session.current_program, "COSGN00C");
@@ -457,5 +564,71 @@ mod tests {
             commarea: None,
         };
         let _ending = SessionState::Ending { exit_code: 0 };
+    }
+
+    #[test]
+    fn test_terminal_model_default_size() {
+        let model = TerminalModel::Model2;
+        assert_eq!(model.dimensions(false), (24, 80));
+        assert_eq!(model.dimensions(true), (24, 80));
+    }
+
+    #[test]
+    fn test_terminal_model_4_sizes() {
+        let model = TerminalModel::Model4;
+        // Default is always 24x80
+        assert_eq!(model.dimensions(false), (24, 80));
+        // Alternate is 43x80
+        assert_eq!(model.dimensions(true), (43, 80));
+    }
+
+    #[test]
+    fn test_terminal_model_5_sizes() {
+        let model = TerminalModel::Model5;
+        assert_eq!(model.dimensions(false), (24, 80));
+        assert_eq!(model.dimensions(true), (27, 132));
+    }
+
+    #[test]
+    fn test_session_model4_screen_dimensions() {
+        let config = SessionConfig {
+            initial_program: PathBuf::from("TEST.cbl"),
+            include_paths: vec![],
+            data_files: vec![],
+            program_dir: None,
+            transid_map: HashMap::new(),
+            color_theme: "classic".to_string(),
+            userid: None,
+            initial_transid: None,
+            terminal_model: TerminalModel::Model4,
+        };
+        let session = Session::new(config);
+        // Starts with default size (24x80)
+        assert_eq!(session.screen_dimensions(), (24, 80));
+    }
+
+    #[test]
+    fn test_erase_write_alternate_switches_screen() {
+        let config = SessionConfig {
+            initial_program: PathBuf::from("TEST.cbl"),
+            include_paths: vec![],
+            data_files: vec![],
+            program_dir: None,
+            transid_map: HashMap::new(),
+            color_theme: "classic".to_string(),
+            userid: None,
+            initial_transid: None,
+            terminal_model: TerminalModel::Model5,
+        };
+        let mut session = Session::new(config);
+        assert_eq!(session.screen_dimensions(), (24, 80));
+
+        // Switch to alternate (27x132)
+        session.erase_write_alternate();
+        assert_eq!(session.screen_dimensions(), (27, 132));
+
+        // Switch back to default (24x80)
+        session.erase_write();
+        assert_eq!(session.screen_dimensions(), (24, 80));
     }
 }

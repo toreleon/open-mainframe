@@ -118,6 +118,7 @@ impl Widget for FieldRenderedScreen<'_> {
         }
 
         // Render each field with full attribute + extended color/highlight support
+        let screen_cols = self.field_table.screen_cols();
         for field in self.field_table.fields() {
             let style = styles::cell_style(
                 Some(&field.attribute),
@@ -127,7 +128,7 @@ impl Widget for FieldRenderedScreen<'_> {
             );
 
             for (i, &ch_byte) in field.content.iter().enumerate() {
-                let pos = field.position_at(i);
+                let pos = field.position_at_cols(i, screen_cols);
                 let buf_x = area.x + (pos.col - 1) as u16;
                 let buf_y = area.y + (pos.row - 1) as u16;
 
