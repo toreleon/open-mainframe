@@ -219,6 +219,12 @@ enum Commands {
         transid_map: Vec<String>,
     },
 
+    /// Assess COBOL source files for modernization readiness
+    Assess {
+        #[command(subcommand)]
+        command: commands::assess::AssessCommand,
+    },
+
     /// DB2 SQL preprocessing and utilities
     Db2(commands::db2::Db2Args),
 
@@ -311,6 +317,7 @@ fn main() -> Result<()> {
                 commands::bms::run(input, output)
             }
         }
+        Commands::Assess { command } => commands::assess::run(command, fmt),
         Commands::Db2(args) => commands::db2::execute(args),
         Commands::Config { action } => match action {
             ConfigAction::Show => {

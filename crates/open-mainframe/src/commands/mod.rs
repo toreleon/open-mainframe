@@ -1,5 +1,6 @@
 //! CLI command implementations.
 
+pub mod assess;
 pub mod bms;
 pub mod check;
 pub mod cics;

@@ -81,3 +81,13 @@
   - agent/src/nodes/__init__.py (updated — exports dataset_node)
   - agent/src/agent.py (updated — dataset node added to StateGraph, route_after_tools expanded)
 - Notes: Dataset node uses list_catalog and idcams_command tools. HITL interrupt triggers before DELETE operations with approval payload including command string. System prompt covers DEFINE, DELETE, REPRO, LISTCAT, PRINT with common IDCAMS patterns. All 5 capability nodes now wired (compile, execute, explain, dataset + chat fallback). Only ASSESS remains for Batch 8.
+
+## Batch 7: Assess CLI Prerequisites (E-100) — RUST
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - crates/open-mainframe/src/commands/assess.rs (NEW — AssessCommand enum + run_scan/run_file handlers)
+  - crates/open-mainframe/src/commands/mod.rs (updated — added pub mod assess)
+  - crates/open-mainframe/src/main.rs (updated — Assess variant in Commands enum + dispatch)
+  - crates/open-mainframe/Cargo.toml (updated — added open-mainframe-assess dependency)
+- Notes: Wires existing open-mainframe-assess crate (Scanner, Analyzer, Report) into the CLI. `assess scan <dir>` discovers COBOL files, runs analysis, produces aggregated report. `assess file <path>` analyzes a single file. Both support --format json for agent tool integration. Scan supports -I for copybook paths, --pattern for glob filtering, --no-recursive. Compiles cleanly with cargo check.
