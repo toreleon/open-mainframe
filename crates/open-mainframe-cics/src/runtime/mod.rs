@@ -10,7 +10,10 @@ mod files;
 pub use commands::{CicsRuntime, ProgramRegistry};
 pub use dispatcher::{CicsDispatcher, CommandParamBlock, DispatchError, DispatchResult};
 pub use eib::Eib;
-pub use files::{CicsFile, FileManager, FileMode, FileRecord};
+pub use files::{
+    CicsFile, FctEntry, FileManager, FileMode, FileRecord, PersistentFileManager,
+    VsamAccessMethod,
+};
 
 use crate::channels::ChannelManager;
 
