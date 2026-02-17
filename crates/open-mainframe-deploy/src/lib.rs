@@ -25,14 +25,20 @@
 
 mod config;
 mod health;
+pub mod instrumentation;
 mod metrics;
+pub mod server;
 mod tracing_setup;
 
 pub use config::{Config, DatabaseConfig, ObservabilityConfig, ServerConfig};
 pub use health::{HealthChecker, HealthStatus, ReadinessStatus};
+pub use instrumentation::{
+    CicsInstrumentation, CobolInstrumentation, ImsInstrumentation, InstrumentedRuntime,
+};
 pub use metrics::{
     CicsMetrics, CobolMetrics, DatabaseMetrics, ImsMetrics, Metrics, MetricsRegistry,
 };
+pub use server::{start_servers, ServerHandle};
 pub use tracing_setup::{init_tracing, LogFormat, TracingConfig};
 
 /// Re-export prometheus for custom metrics
