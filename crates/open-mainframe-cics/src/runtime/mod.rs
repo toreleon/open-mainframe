@@ -10,6 +10,8 @@ pub use commands::{CicsRuntime, ProgramRegistry};
 pub use eib::Eib;
 pub use files::{CicsFile, FileManager, FileMode, FileRecord};
 
+use crate::channels::ChannelManager;
+
 
 /// COMMAREA (Communication Area) for passing data between programs.
 #[derive(Debug, Clone, Default)]
@@ -93,6 +95,8 @@ pub struct TransactionContext {
     pub start_time: u64,
     /// COMMAREA
     pub commarea: Option<Commarea>,
+    /// Channel manager for channel/container support.
+    pub channels: ChannelManager,
     /// Condition handlers
     pub handlers: Vec<ConditionHandler>,
     /// Abend handler label
@@ -108,6 +112,7 @@ impl TransactionContext {
             user_id: None,
             start_time: 0,
             commarea: None,
+            channels: ChannelManager::new(),
             handlers: Vec::new(),
             abend_handler: None,
         }

@@ -23,6 +23,7 @@
 //! ```
 
 pub mod bms;
+pub mod channels;
 pub mod interval;
 pub mod preprocess;
 pub mod queues;

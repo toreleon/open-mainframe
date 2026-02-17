@@ -102,6 +102,14 @@ pub enum CicsCommandType {
     Syncpoint,
     /// ABEND - abnormal end
     Abend,
+    /// PUT CONTAINER - store data in channel container
+    PutContainer,
+    /// GET CONTAINER - retrieve data from channel container
+    GetContainer,
+    /// MOVE CONTAINER - move container between channels
+    MoveContainer,
+    /// DELETE CONTAINER - remove container from channel
+    DeleteContainer,
     /// Other/unknown command
     Other,
 }
@@ -123,7 +131,34 @@ impl CicsCommandType {
             "READ" => CicsCommandType::Read,
             "WRITE" => CicsCommandType::Write,
             "REWRITE" => CicsCommandType::Rewrite,
-            "DELETE" => CicsCommandType::Delete,
+            "PUT" => {
+                if words.len() > 1 && words[1].starts_with("CONTAINER") {
+                    CicsCommandType::PutContainer
+                } else {
+                    CicsCommandType::Other
+                }
+            }
+            "GET" => {
+                if words.len() > 1 && words[1].starts_with("CONTAINER") {
+                    CicsCommandType::GetContainer
+                } else {
+                    CicsCommandType::Other
+                }
+            }
+            "MOVE" => {
+                if words.len() > 1 && words[1].starts_with("CONTAINER") {
+                    CicsCommandType::MoveContainer
+                } else {
+                    CicsCommandType::Other
+                }
+            }
+            "DELETE" => {
+                if words.len() > 1 && words[1].starts_with("CONTAINER") {
+                    CicsCommandType::DeleteContainer
+                } else {
+                    CicsCommandType::Delete
+                }
+            }
             "SEND" => {
                 if words.len() > 1 && words[1].starts_with("MAP") {
                     CicsCommandType::SendMap
@@ -375,6 +410,10 @@ impl CicsPreprocessor {
             CicsCommandType::HandleCondition => "CICSHCND",
             CicsCommandType::HandleAbend => "CICSHABN",
             CicsCommandType::HandleAid => "CICSHAID",
+            CicsCommandType::PutContainer => "CICSPUTC",
+            CicsCommandType::GetContainer => "CICSGETC",
+            CicsCommandType::MoveContainer => "CICSMOVC",
+            CicsCommandType::DeleteContainer => "CICSDELC",
             _ => "CICSEXEC",
         };
 
@@ -466,6 +505,75 @@ mod tests {
 
         assert!(options.iter().any(|o| o.name == "TRANSID"));
         assert!(options.iter().any(|o| o.name == "IMMEDIATE" && o.value.is_none()));
+    }
+
+    // === Story 200.3: Preprocessor command types for containers ===
+
+    #[test]
+    fn test_put_container_command_type() {
+        assert_eq!(
+            CicsCommandType::from_text("PUT CONTAINER('DATA1') CHANNEL('CH') FROM(WS-DATA)"),
+            CicsCommandType::PutContainer
+        );
+    }
+
+    #[test]
+    fn test_get_container_command_type() {
+        assert_eq!(
+            CicsCommandType::from_text("GET CONTAINER('DATA1') CHANNEL('CH') INTO(WS-DATA)"),
+            CicsCommandType::GetContainer
+        );
+    }
+
+    #[test]
+    fn test_move_container_command_type() {
+        assert_eq!(
+            CicsCommandType::from_text("MOVE CONTAINER('DATA1') CHANNEL('SRC') AS('DATA1') TOCHANNEL('TGT')"),
+            CicsCommandType::MoveContainer
+        );
+    }
+
+    #[test]
+    fn test_delete_container_command_type() {
+        assert_eq!(
+            CicsCommandType::from_text("DELETE CONTAINER('DATA1') CHANNEL('CH')"),
+            CicsCommandType::DeleteContainer
+        );
+    }
+
+    #[test]
+    fn test_delete_file_still_works() {
+        // DELETE without CONTAINER should still be file delete
+        assert_eq!(
+            CicsCommandType::from_text("DELETE FILE('CUSTFILE')"),
+            CicsCommandType::Delete
+        );
+    }
+
+    #[test]
+    fn test_put_container_preprocessing() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC CICS
+             PUT CONTAINER('DATA1')
+                 CHANNEL('MY-CHANNEL')
+                 FROM(WS-DATA)
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = CicsPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        assert_eq!(result.commands.len(), 1);
+        assert_eq!(result.commands[0].command_type, CicsCommandType::PutContainer);
+        assert!(result.cobol_source.contains("CALL \"CICSPUTC\""));
+
+        // Verify options
+        let opts = &result.commands[0].options;
+        assert!(opts.iter().any(|o| o.name == "CONTAINER"));
+        assert!(opts.iter().any(|o| o.name == "CHANNEL"));
+        assert!(opts.iter().any(|o| o.name == "FROM"));
     }
 
     #[test]
