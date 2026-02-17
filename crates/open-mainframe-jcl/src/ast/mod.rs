@@ -7,6 +7,36 @@ use std::collections::HashMap;
 
 use open_mainframe_lang_core::{AstNode, Span};
 
+/// Symbol table for JCL symbolic parameter resolution.
+///
+/// Maps symbolic parameter names (without the leading `&`) to their values.
+/// Populated in priority order: PROC defaults → SET statements → EXEC overrides.
+pub type SymbolTable = HashMap<String, String>;
+
+/// An in-stream procedure defined between PROC and PEND statements.
+#[derive(Debug, Clone)]
+pub struct InStreamProc {
+    /// Procedure name (from the PROC statement name field).
+    pub name: String,
+    /// Default symbolic parameter values declared on the PROC statement.
+    pub defaults: SymbolTable,
+    /// The raw JCL statements within the procedure body (between PROC and PEND).
+    pub statements: Vec<ProcStatement>,
+}
+
+/// A statement within an in-stream procedure body.
+///
+/// Stores the raw statement data so it can be re-parsed after symbolic substitution.
+#[derive(Debug, Clone)]
+pub struct ProcStatement {
+    /// Step name (if any).
+    pub name: Option<String>,
+    /// Operation (EXEC, DD, etc.).
+    pub operation: String,
+    /// Raw operands string (with symbolic parameters still present).
+    pub operands: String,
+}
+
 /// A complete JCL job.
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -18,6 +48,10 @@ pub struct Job {
     pub steps: Vec<Step>,
     /// Source span covering the entire job.
     pub span: Span,
+    /// Symbol table populated from SET statements.
+    pub symbols: SymbolTable,
+    /// In-stream procedures defined in this job (PROC...PEND blocks).
+    pub in_stream_procs: HashMap<String, InStreamProc>,
 }
 
 impl AstNode for Job {
@@ -318,6 +352,8 @@ impl Job {
             params: JobParams::default(),
             steps: Vec::new(),
             span: Span::dummy(),
+            symbols: SymbolTable::new(),
+            in_stream_procs: HashMap::new(),
         }
     }
 

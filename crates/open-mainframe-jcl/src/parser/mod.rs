@@ -21,6 +21,12 @@ pub struct Parser<'a> {
     /// Inline data collected during parsing (step index -> data lines).
     #[allow(dead_code)]
     inline_data: HashMap<usize, Vec<String>>,
+    /// Symbol table for symbolic parameter substitution.
+    symbols: SymbolTable,
+    /// In-stream procedures found during parsing.
+    in_stream_procs: HashMap<String, InStreamProc>,
+    /// Counter for generating temporary dataset names.
+    temp_counter: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -31,6 +37,9 @@ impl<'a> Parser<'a> {
             statements: Vec::new(),
             current: 0,
             inline_data: HashMap::new(),
+            symbols: SymbolTable::new(),
+            in_stream_procs: HashMap::new(),
+            temp_counter: 0,
         }
     }
 
@@ -61,6 +70,13 @@ impl<'a> Parser<'a> {
         let mut job = self.parse_job_statement()?;
         self.current += 1;
 
+        // First pass: collect SET statements and PROC/PEND blocks
+        // We do this before parsing steps so symbols are available for substitution
+        self.collect_symbols_and_procs()?;
+
+        // Reset to parse steps
+        self.current = 1; // After JOB statement
+
         // Parse steps (EXEC + DD statements)
         while self.current < self.statements.len() {
             let stmt = &self.statements[self.current];
@@ -76,7 +92,17 @@ impl<'a> Parser<'a> {
                     job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
                     break;
                 }
-                "SET" | "IF" | "ENDIF" | "INCLUDE" | "JCLLIB" => {
+                "SET" => {
+                    // Already processed in first pass, skip
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    self.current += 1;
+                }
+                "PROC" => {
+                    // Skip PROC/PEND blocks (already collected)
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    self.skip_proc_block()?;
+                }
+                "IF" | "ENDIF" | "INCLUDE" | "JCLLIB" => {
                     // Skip these for now but extend span
                     job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
                     self.current += 1;
@@ -93,7 +119,140 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Transfer collected symbols and procs to the job
+        job.symbols = self.symbols.clone();
+        job.in_stream_procs = self.in_stream_procs.clone();
+
         Ok(job)
+    }
+
+    /// First pass: collect SET statement values and PROC/PEND blocks.
+    fn collect_symbols_and_procs(&mut self) -> Result<(), JclError> {
+        let mut idx = 1; // Skip JOB statement
+        while idx < self.statements.len() {
+            let stmt = &self.statements[idx];
+            match stmt.operation.as_str() {
+                "SET" => {
+                    let operands = stmt.operands.clone();
+                    self.parse_set_operands(&operands)?;
+                    idx += 1;
+                }
+                "PROC" => {
+                    let proc = self.parse_proc_block(idx)?;
+                    // Skip past the PEND
+                    idx += 1; // past PROC
+                    while idx < self.statements.len() {
+                        let s = &self.statements[idx];
+                        idx += 1;
+                        if s.operation == "PEND" {
+                            break;
+                        }
+                    }
+                    self.in_stream_procs.insert(proc.name.clone(), proc);
+                }
+                _ => {
+                    idx += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Parse SET statement operands and add to symbol table.
+    ///
+    /// Handles formats like: `HLQ=PROD,ENV=DAILY` or `HLQ=PROD`
+    fn parse_set_operands(&mut self, operands: &str) -> Result<(), JclError> {
+        // SET operands are in the form NAME=VALUE,NAME=VALUE,...
+        for assignment in operands.split(',') {
+            let assignment = assignment.trim();
+            if assignment.is_empty() {
+                continue;
+            }
+            if let Some(eq_pos) = assignment.find('=') {
+                let name = assignment[..eq_pos].trim().to_uppercase();
+                let value = assignment[eq_pos + 1..].trim().to_string();
+                // Strip quotes if present
+                let value = if value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2
+                {
+                    value[1..value.len() - 1].to_string()
+                } else {
+                    value
+                };
+                self.symbols.insert(name, value);
+            }
+        }
+        Ok(())
+    }
+
+    /// Parse a PROC...PEND block starting at the given index.
+    fn parse_proc_block(&self, start_idx: usize) -> Result<InStreamProc, JclError> {
+        let proc_stmt = &self.statements[start_idx];
+        let proc_name = proc_stmt
+            .name
+            .clone()
+            .ok_or_else(|| JclError::ParseError {
+                message: format!("PROC statement must have a name at line {}", proc_stmt.line),
+            })?;
+
+        // Parse PROC defaults from operands (e.g., "HLQ=TEST,ENV=DEV")
+        let mut defaults = SymbolTable::new();
+        for assignment in proc_stmt.operands.split(',') {
+            let assignment = assignment.trim();
+            if assignment.is_empty() {
+                continue;
+            }
+            if let Some(eq_pos) = assignment.find('=') {
+                let name = assignment[..eq_pos].trim().to_uppercase();
+                let value = assignment[eq_pos + 1..].trim().to_string();
+                defaults.insert(name, value);
+            }
+        }
+
+        // Collect statements between PROC and PEND
+        let mut body_stmts = Vec::new();
+        let mut idx = start_idx + 1;
+        while idx < self.statements.len() {
+            let stmt = &self.statements[idx];
+            if stmt.operation == "PEND" {
+                break;
+            }
+            body_stmts.push(ProcStatement {
+                name: stmt.name.clone(),
+                operation: stmt.operation.clone(),
+                operands: stmt.operands.clone(),
+            });
+            idx += 1;
+        }
+
+        if idx >= self.statements.len() {
+            return Err(JclError::ParseError {
+                message: format!(
+                    "PROC {} at line {} has no matching PEND",
+                    proc_name, proc_stmt.line
+                ),
+            });
+        }
+
+        Ok(InStreamProc {
+            name: proc_name,
+            defaults,
+            statements: body_stmts,
+        })
+    }
+
+    /// Skip past a PROC/PEND block during the second pass.
+    fn skip_proc_block(&mut self) -> Result<(), JclError> {
+        self.current += 1; // Skip PROC
+        while self.current < self.statements.len() {
+            let stmt = &self.statements[self.current];
+            self.current += 1;
+            if stmt.operation == "PEND" {
+                return Ok(());
+            }
+        }
+        Err(JclError::ParseError {
+            message: "PROC without matching PEND".to_string(),
+        })
     }
 
     /// Parse a JOB statement.
@@ -197,13 +356,106 @@ impl<'a> Parser<'a> {
         Ok(job)
     }
 
+    /// Perform text-level symbolic parameter substitution on an operand string.
+    ///
+    /// Handles:
+    /// - `&NAME` → resolved value from symbol table
+    /// - `&&NAME` → system-generated temporary dataset name
+    /// - `&NAME..` → resolved value followed by a single period (double-period becomes single)
+    /// - Unknown `&NAME` → left as-is
+    fn substitute_symbols(&mut self, text: &str) -> String {
+        let mut result = String::with_capacity(text.len());
+        let chars: Vec<char> = text.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            if chars[i] == '&' {
+                // Check for double ampersand (temporary dataset name)
+                if i + 1 < chars.len() && chars[i + 1] == '&' {
+                    // &&NAME → system-generated temp name
+                    i += 2; // skip &&
+                    let mut name = String::new();
+                    while i < chars.len()
+                        && (chars[i].is_ascii_alphanumeric()
+                            || chars[i] == '@'
+                            || chars[i] == '#'
+                            || chars[i] == '$')
+                    {
+                        name.push(chars[i]);
+                        i += 1;
+                    }
+                    // Generate a temp dataset name
+                    self.temp_counter += 1;
+                    let temp_name = format!("SYS{:05}.T{:06}.TEMP", self.temp_counter, self.temp_counter);
+                    result.push_str(&temp_name);
+                    // Handle double-period after temp name
+                    if i < chars.len() && chars[i] == '.' {
+                        i += 1; // consume the period
+                        // If next char is also a period, that's a double-period; first is consumed
+                        // by the symbolic resolution, second remains
+                        if i < chars.len() && chars[i] == '.' {
+                            result.push('.');
+                            i += 1;
+                        }
+                    }
+                } else {
+                    // Single ampersand: symbolic parameter
+                    i += 1; // skip &
+                    let mut name = String::new();
+                    while i < chars.len()
+                        && (chars[i].is_ascii_alphanumeric()
+                            || chars[i] == '@'
+                            || chars[i] == '#'
+                            || chars[i] == '$')
+                    {
+                        name.push(chars[i]);
+                        i += 1;
+                    }
+                    if name.is_empty() {
+                        // Bare & with no name, keep as-is
+                        result.push('&');
+                        continue;
+                    }
+                    let upper_name = name.to_uppercase();
+                    if let Some(value) = self.symbols.get(&upper_name) {
+                        result.push_str(value);
+                        // Handle double-period: &HLQ..DATA → value.DATA
+                        // The first period is consumed as the symbolic terminator,
+                        // the second period becomes a real period
+                        if i < chars.len() && chars[i] == '.' {
+                            i += 1; // consume first period (symbolic terminator)
+                            if i < chars.len() && chars[i] == '.' {
+                                result.push('.');
+                                i += 1;
+                            }
+                            // If there's no second period, the single period is just a terminator
+                            // and is consumed (standard IBM behavior)
+                        }
+                    } else {
+                        // Unknown symbol — leave as-is
+                        result.push('&');
+                        result.push_str(&name);
+                    }
+                }
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        }
+
+        result
+    }
+
     /// Parse an EXEC statement and its associated DDs.
     fn parse_step(&mut self) -> Result<Step, JclError> {
         let stmt = &self.statements[self.current];
         let step_name = stmt.name.clone();
+        let raw_operands = stmt.operands.clone();
+        let stmt_line = stmt.line;
 
-        // Parse operands
-        let tokens = tokenize_operands(&stmt.operands)?;
+        // Apply symbolic substitution to operands before tokenizing
+        let substituted_operands = self.substitute_symbols(&raw_operands);
+        let tokens = tokenize_operands(&substituted_operands)?;
         let mut idx = 0;
         let mut exec_type = None;
         let mut params = ExecParams::default();
@@ -269,10 +521,13 @@ impl<'a> Parser<'a> {
         }
 
         let exec_type = exec_type.ok_or_else(|| JclError::ParseError {
-            message: format!("EXEC statement missing PGM or PROC at line {}", stmt.line),
+            message: format!("EXEC statement missing PGM or PROC at line {}", stmt_line),
         })?;
 
-        let exec_span = Span::main(stmt.byte_offset, stmt.byte_end);
+        let exec_span = Span::main(
+            self.statements[self.current].byte_offset,
+            self.statements[self.current].byte_end,
+        );
         let mut step = Step {
             name: step_name,
             exec: exec_type,
@@ -349,12 +604,15 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a DD statement.
-    fn parse_dd_statement(&self) -> Result<DdStatement, JclError> {
+    fn parse_dd_statement(&mut self) -> Result<DdStatement, JclError> {
         let stmt = &self.statements[self.current];
         let dd_name = stmt.name.clone().unwrap_or_else(|| "UNNAMED".to_string());
         let dd_span = Span::main(stmt.byte_offset, stmt.byte_end);
+        let raw_operands = stmt.operands.clone();
 
-        let tokens = tokenize_operands(&stmt.operands)?;
+        // Apply symbolic substitution to DD operands
+        let substituted_operands = self.substitute_symbols(&raw_operands);
+        let tokens = tokenize_operands(&substituted_operands)?;
 
         // Check for special DD types first
         if tokens.is_empty() {
@@ -1019,6 +1277,316 @@ mod tests {
             assert_eq!(amp.mode, Some(VsamAccessMode::Direct));
         } else {
             panic!("Expected Dataset definition");
+        }
+    }
+
+    // ======================================================================
+    // Epic 100: Symbolic Parameter Substitution & SET Statement
+    // ======================================================================
+
+    /// Story 100.1: &PROGRAM substitution in EXEC operands.
+    #[test]
+    fn test_symbolic_substitution_in_exec() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+// SET PROGRAM=MYAPP
+//STEP1    EXEC PGM=&PROGRAM
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.steps.len(), 1);
+        if let ExecType::Program(ref pgm) = job.steps[0].exec {
+            assert_eq!(pgm, "MYAPP");
+        } else {
+            panic!("Expected Program after symbolic substitution");
+        }
+    }
+
+    /// Story 100.1: Double-period handling (&HLQ..DATA.&ENV → PROD.DATA.DAILY).
+    #[test]
+    fn test_symbolic_substitution_double_period() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+// SET HLQ=PROD,ENV=DAILY
+//STEP1    EXEC PGM=TEST
+//INPUT    DD DSN=&HLQ..DATA.&ENV,DISP=SHR
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "PROD.DATA.DAILY");
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 100.1: &&TEMP resolves to a system-generated temporary name.
+    #[test]
+    fn test_symbolic_substitution_temp_dataset() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=TEST
+//WORK     DD DSN=&&TEMP,DISP=(NEW,PASS)
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            // Should be a system-generated temp name, not &&TEMP
+            assert!(!def.dsn.contains("&&"), "&&TEMP should be resolved: {}", def.dsn);
+            assert!(def.dsn.contains("SYS"), "Temp name should start with SYS: {}", def.dsn);
+            assert!(def.dsn.contains("TEMP"), "Temp name should contain TEMP: {}", def.dsn);
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 100.2: SET statement parsing — symbols added to symbol table.
+    #[test]
+    fn test_set_statement_parsing() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+// SET HLQ=PROD,ENV=DAILY
+//STEP1    EXEC PGM=TEST
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.symbols.get("HLQ"), Some(&"PROD".to_string()));
+        assert_eq!(job.symbols.get("ENV"), Some(&"DAILY".to_string()));
+    }
+
+    /// Story 100.2: Later SET overrides earlier SET.
+    #[test]
+    fn test_set_statement_override() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+// SET HLQ=TEST
+// SET HLQ=PROD
+//STEP1    EXEC PGM=TEST
+//INPUT    DD DSN=&HLQ..DATA,DISP=SHR
+//"#;
+
+        let job = parse(jcl).unwrap();
+        // Later SET should override
+        assert_eq!(job.symbols.get("HLQ"), Some(&"PROD".to_string()));
+
+        // The substituted DSN should use PROD
+        let dd = &job.steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "PROD.DATA");
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 100.1: Multiple symbolic parameters in one operand.
+    #[test]
+    fn test_multiple_symbolics_in_operand() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+// SET HLQ=PROD,APP=BATCH,ENV=TEST
+//STEP1    EXEC PGM=TEST
+//INPUT    DD DSN=&HLQ..&APP..&ENV..DATA,DISP=SHR
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "PROD.BATCH.TEST.DATA");
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    // ======================================================================
+    // Epic 101: In-Stream Procedure Support (PROC/PEND)
+    // ======================================================================
+
+    /// Story 101.1: In-stream procedure parsed with defaults.
+    #[test]
+    fn test_parse_in_stream_proc() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//MYPROC   PROC HLQ=TEST
+//STEP1    EXEC PGM=MYPROG
+//INPUT    DD DSN=&HLQ..DATA,DISP=SHR
+//         PEND
+//RUN      EXEC MYPROC
+//"#;
+
+        let job = parse(jcl).unwrap();
+
+        // Procedure should be captured
+        assert!(job.in_stream_procs.contains_key("MYPROC"));
+        let proc = &job.in_stream_procs["MYPROC"];
+        assert_eq!(proc.name, "MYPROC");
+        assert_eq!(proc.defaults.get("HLQ"), Some(&"TEST".to_string()));
+        assert_eq!(proc.statements.len(), 2); // EXEC and DD
+    }
+
+    /// Story 101.2: Procedure expansion with override (HLQ=PROD).
+    #[test]
+    fn test_proc_expansion_with_override() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//MYPROC   PROC HLQ=TEST
+//STEP1    EXEC PGM=MYPROG
+//INPUT    DD DSN=&HLQ..DATA,DISP=SHR
+//         PEND
+//RUN      EXEC MYPROC,HLQ=PROD
+//"#;
+
+        let job = parse(jcl).unwrap();
+
+        // The job should have one step (the procedure call)
+        assert_eq!(job.steps.len(), 1);
+
+        // Expand the procedure
+        let mut expander = crate::procedure::ProcedureExpander::new(
+            job.in_stream_procs.clone(),
+            job.symbols.clone(),
+        );
+        let expanded = expander.expand(&job).unwrap();
+
+        // Should have one expanded step with PGM=MYPROG
+        assert_eq!(expanded.steps.len(), 1);
+        if let ExecType::Program(ref pgm) = expanded.steps[0].exec {
+            assert_eq!(pgm, "MYPROG");
+        } else {
+            panic!("Expected Program after expansion");
+        }
+
+        // DD should have DSN=PROD.DATA (HLQ overridden to PROD)
+        let dd = &expanded.steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "PROD.DATA");
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 101.2: Procedure expansion with defaults (no override).
+    #[test]
+    fn test_proc_expansion_with_defaults() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//MYPROC   PROC HLQ=TEST
+//STEP1    EXEC PGM=MYPROG
+//INPUT    DD DSN=&HLQ..DATA,DISP=SHR
+//         PEND
+//RUN      EXEC MYPROC
+//"#;
+
+        let job = parse(jcl).unwrap();
+
+        let mut expander = crate::procedure::ProcedureExpander::new(
+            job.in_stream_procs.clone(),
+            job.symbols.clone(),
+        );
+        let expanded = expander.expand(&job).unwrap();
+
+        // DD should have DSN=TEST.DATA (default HLQ=TEST from PROC)
+        let dd = &expanded.steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "TEST.DATA");
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 101.1: PROC without matching PEND produces an error.
+    #[test]
+    fn test_proc_without_pend_error() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//MYPROC   PROC HLQ=TEST
+//STEP1    EXEC PGM=MYPROG
+//"#;
+
+        let result = parse(jcl);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("PEND"), "Error should mention PEND: {}", msg);
+    }
+
+    /// Story 101.1: Multiple defaults on PROC statement.
+    #[test]
+    fn test_proc_multiple_defaults() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//MYPROC   PROC HLQ=TEST,ENV=DEV,APP=BATCH
+//STEP1    EXEC PGM=MYPROG
+//INPUT    DD DSN=&HLQ..&APP..&ENV,DISP=SHR
+//         PEND
+//RUN      EXEC MYPROC,HLQ=PROD
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let proc = &job.in_stream_procs["MYPROC"];
+        assert_eq!(proc.defaults.get("HLQ"), Some(&"TEST".to_string()));
+        assert_eq!(proc.defaults.get("ENV"), Some(&"DEV".to_string()));
+        assert_eq!(proc.defaults.get("APP"), Some(&"BATCH".to_string()));
+
+        // Expand with only HLQ overridden
+        let mut expander = crate::procedure::ProcedureExpander::new(
+            job.in_stream_procs.clone(),
+            job.symbols.clone(),
+        );
+        let expanded = expander.expand(&job).unwrap();
+        let dd = &expanded.steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            // HLQ=PROD (overridden), APP=BATCH (default), ENV=DEV (default)
+            assert_eq!(def.dsn, "PROD.BATCH.DEV");
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// SET + PROC integration: SET provides global symbol, PROC provides defaults.
+    #[test]
+    fn test_set_and_proc_integration() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+// SET GLOBAL=SHARED
+//MYPROC   PROC HLQ=TEST
+//STEP1    EXEC PGM=MYPROG
+//INPUT    DD DSN=&GLOBAL..&HLQ..DATA,DISP=SHR
+//         PEND
+//RUN      EXEC MYPROC
+//"#;
+
+        let job = parse(jcl).unwrap();
+
+        let mut expander = crate::procedure::ProcedureExpander::new(
+            job.in_stream_procs.clone(),
+            job.symbols.clone(),
+        );
+        let expanded = expander.expand(&job).unwrap();
+
+        let dd = &expanded.steps[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "SHARED.TEST.DATA");
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Procedure with SYSOUT DD.
+    #[test]
+    fn test_proc_expansion_with_sysout() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//MYPROC   PROC
+//STEP1    EXEC PGM=MYPROG
+//SYSOUT   DD SYSOUT=*
+//         PEND
+//RUN      EXEC MYPROC
+//"#;
+
+        let job = parse(jcl).unwrap();
+
+        let mut expander = crate::procedure::ProcedureExpander::new(
+            job.in_stream_procs.clone(),
+            job.symbols.clone(),
+        );
+        let expanded = expander.expand(&job).unwrap();
+
+        assert_eq!(expanded.steps.len(), 1);
+        let dd = &expanded.steps[0].dd_statements[0];
+        assert_eq!(dd.name, "SYSOUT");
+        if let DdDefinition::Sysout(ref def) = dd.definition {
+            assert_eq!(def.class, '*');
+        } else {
+            panic!("Expected Sysout definition, got {:?}", dd.definition);
         }
     }
 }
