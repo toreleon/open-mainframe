@@ -153,3 +153,16 @@
   - agent/pyproject.toml (updated — added [postgres] optional dependency group)
   - agent/.env.example (updated — documented CHECKPOINTER and POSTGRES_URI env vars)
 - Notes: Full typed state sync via useCoAgent with derived helpers (setProjectPath, hasAssessment, isOperating). useProgressSync watches agent state changes and automatically opens Assessment/Execution workspace tabs when results arrive from the agent. Checkpointer is now environment-configurable: CHECKPOINTER=memory (default, in-process MemorySaver) or CHECKPOINTER=postgres (PostgresSaver via langgraph-checkpoint-postgres). PostgreSQL deps are in [postgres] optional group to keep base install lightweight.
+
+## Batch 12: Integration Testing (E-1200)
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - tests/__init__.py
+  - tests/integration/__init__.py
+  - tests/integration/conftest.py (shared fixtures: CardDemo paths, WORKSPACE_ROOT setup, sample file fixtures)
+  - tests/integration/test_assessment.py (assess_scan, assess_file, path sanitization tests)
+  - tests/integration/test_compilation.py (compile_cobol, check_cobol tests, multi-file batch)
+  - tests/integration/test_execution.py (run_jcl, interpret_cobol, parse_jcl, lex_cobol tests)
+  - tests/integration/test_explanation.py (explanation grounding, security, node prompt validation)
+- Notes: Tests run against the aws-mainframe-modernization-carddemo sample codebase (31 COBOL files, JCL files). Tests validate tool return structure, output production, error handling for nonexistent files, path traversal rejection, and multi-file batch processing. Execution tools tested via direct invocation (bypassing agent graph HITL). Explanation tests verify lexer/parser produce structural tokens and that the explain node module is importable with a valid system prompt.
