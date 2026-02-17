@@ -71,3 +71,13 @@
   - agent/src/nodes/__init__.py (updated — exports explain_node)
   - agent/src/agent.py (updated — explain node added to StateGraph, route_after_tools expanded)
 - Notes: Explain node is primarily LLM-driven but can optionally use lex_cobol and parse_jcl for structural grounding. Provides section-by-section COBOL division explanations, data structure identification, business rule extraction in "When [condition], then [action]" format, and external dependency highlighting (CALL, COPY, EXEC SQL/CICS). Router refactored to use route_map dict for cleaner dispatch.
+
+## Batch 6: Dataset Agent (E-800)
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - agent/src/nodes/dataset.py (dataset management with list_catalog + idcams_command, HITL for DELETE)
+  - agent/src/nodes/router.py (updated — DATASET intent routes to dataset node)
+  - agent/src/nodes/__init__.py (updated — exports dataset_node)
+  - agent/src/agent.py (updated — dataset node added to StateGraph, route_after_tools expanded)
+- Notes: Dataset node uses list_catalog and idcams_command tools. HITL interrupt triggers before DELETE operations with approval payload including command string. System prompt covers DEFINE, DELETE, REPRO, LISTCAT, PRINT with common IDCAMS patterns. All 5 capability nodes now wired (compile, execute, explain, dataset + chat fallback). Only ASSESS remains for Batch 8.

@@ -22,7 +22,7 @@ Classify the user's intent into exactly one category:
 Respond with ONLY the category name."""
 
 
-async def router_node(state, config) -> Command[Literal["compile", "execute", "explain", "chat"]]:
+async def router_node(state, config) -> Command[Literal["compile", "execute", "explain", "dataset", "chat"]]:
     """Classify user intent and route to the appropriate capability node."""
     model = get_model(config)
     last_message = state["messages"][-1]
@@ -38,7 +38,8 @@ async def router_node(state, config) -> Command[Literal["compile", "execute", "e
         "COMPILE": "compile",
         "EXECUTE": "execute",
         "EXPLAIN": "explain",
+        "DATASET": "dataset",
     }
 
-    # Future batches add: assess, dataset
+    # Future batches add: assess
     return Command(goto=route_map.get(intent, "chat"))
