@@ -26,8 +26,11 @@
 mod config;
 mod health;
 pub mod instrumentation;
+pub mod k8s_manifest;
 mod metrics;
+pub mod secrets;
 pub mod server;
+pub mod trace_context;
 mod tracing_setup;
 
 pub use config::{Config, DatabaseConfig, ObservabilityConfig, ServerConfig};
@@ -38,7 +41,15 @@ pub use instrumentation::{
 pub use metrics::{
     CicsMetrics, CobolMetrics, DatabaseMetrics, ImsMetrics, Metrics, MetricsRegistry,
 };
+pub use k8s_manifest::{generate_manifests, GeneratedManifests, ManifestOverrides};
+pub use secrets::{
+    CredentialSource, DatabaseCredentials, ResolvedCredentials, SecretsResolver,
+    DEFAULT_SECRET_MOUNT_PATH,
+};
 pub use server::{start_servers, ServerHandle};
+pub use trace_context::{
+    SpanId, SpanKind, TraceId, TraceSpan, TransactionTrace,
+};
 pub use tracing_setup::{init_tracing, LogFormat, TracingConfig};
 
 /// Re-export prometheus for custom metrics
