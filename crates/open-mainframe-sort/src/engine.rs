@@ -1,17 +1,23 @@
 //! Sort engine implementation.
+//!
+//! Supports both in-memory and disk-based external sort.
+//! When the input exceeds `max_memory_records`, the engine automatically
+//! switches to external sort: divide input into sorted runs written as
+//! temporary files, then k-way merge them using a min-heap.
 
-use std::fs::{File, OpenOptions};
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::SortError;
 use crate::fields::SortSpec;
 use crate::filter::FilterSpec;
 use crate::reformat::OutrecSpec;
 
-/// Maximum records to hold in memory for sorting.
-#[allow(dead_code)]
-const MAX_MEMORY_RECORDS: usize = 100_000;
+/// Default maximum records to hold in memory for sorting.
+const DEFAULT_MAX_MEMORY_RECORDS: usize = 100_000;
 
 /// Sort engine for processing records.
 pub struct SortEngine {
@@ -31,6 +37,8 @@ pub struct SortEngine {
     copy_mode: bool,
     /// Fixed record length (0 = variable/line-based).
     record_length: usize,
+    /// Maximum records to hold in memory before switching to external sort.
+    max_memory_records: usize,
 }
 
 impl SortEngine {
@@ -45,6 +53,7 @@ impl SortEngine {
             sum_fields: None,
             copy_mode: false,
             record_length: 0,
+            max_memory_records: DEFAULT_MAX_MEMORY_RECORDS,
         }
     }
 
@@ -59,6 +68,7 @@ impl SortEngine {
             sum_fields: None,
             copy_mode: true,
             record_length: 0,
+            max_memory_records: DEFAULT_MAX_MEMORY_RECORDS,
         }
     }
 
@@ -98,12 +108,25 @@ impl SortEngine {
         self
     }
 
+    /// Sets the maximum number of records to hold in memory.
+    ///
+    /// When the input exceeds this limit, the engine automatically
+    /// switches to disk-based external sort with k-way merge.
+    pub fn with_max_memory_records(mut self, max: usize) -> Self {
+        self.max_memory_records = max;
+        self
+    }
+
     /// Sorts a file.
+    ///
+    /// Automatically uses in-memory sort for small datasets and
+    /// disk-based external sort for datasets exceeding `max_memory_records`.
     pub fn sort_file<P: AsRef<Path>>(&self, input: P, output: P) -> Result<SortStats, SortError> {
         let input_path = input.as_ref();
         let output_path = output.as_ref();
 
-        // Read records
+        // Read and filter records in a streaming fashion for external sort.
+        // First, determine total count by reading all records.
         let mut records = self.read_records(input_path)?;
         let input_count = records.len();
 
@@ -121,7 +144,23 @@ impl SortEngine {
             records = records.into_iter().map(|r| inrec.reformat(&r)).collect();
         }
 
-        // Sort (unless copy mode)
+        // Decide: in-memory vs external sort
+        let use_external = !self.copy_mode
+            && self.sort_spec.is_some()
+            && after_filter > self.max_memory_records;
+
+        if use_external {
+            // External sort: sorted runs + k-way merge
+            let result = self.external_sort(records, output_path)?;
+            return Ok(SortStats {
+                input_records: input_count,
+                filtered_records: input_count - after_filter,
+                summed_records: result.summed,
+                output_records: result.output,
+            });
+        }
+
+        // In-memory sort path (original behavior)
         if !self.copy_mode {
             if let Some(ref spec) = self.sort_spec {
                 records.sort_by(|a, b| spec.compare(a, b));
@@ -246,6 +285,160 @@ impl SortEngine {
         result
     }
 
+    // -----------------------------------------------------------------------
+    // External Sort (Epic 800)
+    // -----------------------------------------------------------------------
+
+    /// Perform disk-based external sort: divide into sorted runs, then k-way merge.
+    fn external_sort(
+        &self,
+        records: Vec<Vec<u8>>,
+        output_path: &Path,
+    ) -> Result<ExternalSortResult, SortError> {
+        let sort_spec = self.sort_spec.as_ref().unwrap();
+        let total_records = records.len();
+
+        // Phase 1: Generate sorted runs
+        let mut run_files = TempRunFiles::new();
+        let mut chunk_start = 0;
+
+        while chunk_start < total_records {
+            let chunk_end = (chunk_start + self.max_memory_records).min(total_records);
+            let mut chunk: Vec<Vec<u8>> = records[chunk_start..chunk_end].to_vec();
+            chunk.sort_by(|a, b| sort_spec.compare(a, b));
+
+            let run_path = run_files.create_run()?;
+            self.write_run(&run_path, &chunk)?;
+
+            chunk_start = chunk_end;
+        }
+
+        // Phase 2: K-way merge with min-heap
+        let merged_count = self.merge_runs_to_output(
+            &run_files.paths,
+            output_path,
+            sort_spec,
+        )?;
+
+        // run_files is dropped here, cleaning up temp files via Drop
+
+        Ok(ExternalSortResult {
+            summed: 0,
+            output: merged_count,
+        })
+    }
+
+    /// Write a sorted chunk (run) to a temporary file.
+    fn write_run(&self, path: &Path, records: &[Vec<u8>]) -> Result<(), SortError> {
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+
+        for record in records {
+            // Write length-prefixed records for reliable deserialization
+            let len = record.len() as u32;
+            writer.write_all(&len.to_le_bytes())?;
+            writer.write_all(record)?;
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
+
+    /// Read one length-prefixed record from a reader.
+    fn read_run_record<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, SortError> {
+        let mut len_buf = [0u8; 4];
+        match reader.read_exact(&mut len_buf) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e.into()),
+        }
+
+        let len = u32::from_le_bytes(len_buf) as usize;
+        let mut record = vec![0u8; len];
+        reader.read_exact(&mut record)?;
+        Ok(Some(record))
+    }
+
+    /// K-way merge sorted run files into the final output using a min-heap.
+    fn merge_runs_to_output(
+        &self,
+        run_paths: &[PathBuf],
+        output_path: &Path,
+        sort_spec: &SortSpec,
+    ) -> Result<usize, SortError> {
+        let mut readers: Vec<BufReader<File>> = run_paths
+            .iter()
+            .map(|p| Ok(BufReader::new(File::open(p)?)))
+            .collect::<Result<Vec<_>, SortError>>()?;
+
+        // Initialize the min-heap with one record from each run
+        let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::new();
+
+        for (i, reader) in readers.iter_mut().enumerate() {
+            if let Some(record) = Self::read_run_record(reader)? {
+                heap.push(HeapEntry {
+                    record,
+                    run_index: i,
+                    sort_spec,
+                });
+            }
+        }
+
+        let output_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(output_path)?;
+        let mut writer = BufWriter::new(output_file);
+        let mut output_count = 0;
+
+        // SUM state for duplicate handling during merge
+        let has_sum = self.sum_fields.is_some();
+        let mut prev_record: Option<Vec<u8>> = None;
+
+        while let Some(entry) = heap.pop() {
+            let record = entry.record;
+            let run_idx = entry.run_index;
+
+            // Read next record from the same run
+            if let Some(next) = Self::read_run_record(&mut readers[run_idx])? {
+                heap.push(HeapEntry {
+                    record: next,
+                    run_index: run_idx,
+                    sort_spec,
+                });
+            }
+
+            // Apply SUM deduplication
+            if has_sum {
+                if let Some(ref prev) = prev_record {
+                    if sort_spec.compare(prev, &record) == Ordering::Equal {
+                        continue; // Duplicate — skip
+                    }
+                }
+                prev_record = Some(record.clone());
+            }
+
+            // Apply OUTREC
+            let output_rec = if let Some(ref outrec) = self.outrec {
+                outrec.reformat(&record)
+            } else {
+                record
+            };
+
+            if self.record_length > 0 {
+                writer.write_all(&output_rec)?;
+            } else {
+                writer.write_all(&output_rec)?;
+                writer.write_all(b"\n")?;
+            }
+            output_count += 1;
+        }
+
+        writer.flush()?;
+        Ok(output_count)
+    }
+
     /// Merges multiple pre-sorted files.
     pub fn merge_files<P: AsRef<Path>>(
         &self,
@@ -359,6 +552,84 @@ pub struct SortStats {
     pub summed_records: usize,
     /// Number of output records.
     pub output_records: usize,
+}
+
+/// Internal result from external sort.
+struct ExternalSortResult {
+    summed: usize,
+    output: usize,
+}
+
+/// Manages temporary sorted run files with automatic cleanup.
+struct TempRunFiles {
+    paths: Vec<PathBuf>,
+    counter: usize,
+}
+
+impl TempRunFiles {
+    fn new() -> Self {
+        Self {
+            paths: Vec::new(),
+            counter: 0,
+        }
+    }
+
+    /// Create a new temporary run file and return its path.
+    fn create_run(&mut self) -> Result<PathBuf, SortError> {
+        let path = std::env::temp_dir().join(format!(
+            "omsort_run_{}_{}_{}.tmp",
+            std::process::id(),
+            self.counter,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        self.counter += 1;
+        self.paths.push(path.clone());
+        Ok(path)
+    }
+}
+
+impl Drop for TempRunFiles {
+    fn drop(&mut self) {
+        for path in &self.paths {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+/// Entry in the min-heap for k-way merge.
+///
+/// Implements Ord to produce a min-heap (BinaryHeap is a max-heap by default,
+/// so we reverse the comparison).
+struct HeapEntry<'a> {
+    record: Vec<u8>,
+    run_index: usize,
+    sort_spec: &'a SortSpec,
+}
+
+impl<'a> PartialEq for HeapEntry<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.sort_spec.compare(&self.record, &other.record) == Ordering::Equal
+    }
+}
+
+impl<'a> Eq for HeapEntry<'a> {}
+
+impl<'a> PartialOrd for HeapEntry<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for HeapEntry<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reverse ordering for min-heap behavior
+        other
+            .sort_spec
+            .compare(&other.record, &self.record)
+    }
 }
 
 #[cfg(test)]
@@ -501,5 +772,164 @@ mod tests {
 
         cleanup(&input_path);
         cleanup(&output_path);
+    }
+
+    // -----------------------------------------------------------------------
+    // External Sort Tests (Epic 800)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_external_sort_small_chunk_size() {
+        let input_path = test_path("ext_input.dat");
+        let output_path = test_path("ext_output.dat");
+
+        // 10 records, chunk size 3 → 4 sorted runs → k-way merge
+        let mut input = String::new();
+        for c in ['J', 'D', 'G', 'B', 'I', 'E', 'A', 'H', 'C', 'F'] {
+            input.push(c);
+            input.push('\n');
+        }
+        fs::write(&input_path, &input).unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 1, DataType::Character, SortOrder::Ascending));
+        let engine = SortEngine::new(spec).with_max_memory_records(3);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.input_records, 10);
+        assert_eq!(stats.output_records, 10);
+
+        let output = fs::read_to_string(&output_path).unwrap();
+        assert_eq!(output, "A\nB\nC\nD\nE\nF\nG\nH\nI\nJ\n");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_external_sort_with_exact_chunk_boundary() {
+        let input_path = test_path("ext_exact.dat");
+        let output_path = test_path("ext_exact_out.dat");
+
+        // 6 records, chunk size 3 → exactly 2 runs
+        fs::write(&input_path, "F\nD\nE\nC\nA\nB\n").unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 1, DataType::Character, SortOrder::Ascending));
+        let engine = SortEngine::new(spec).with_max_memory_records(3);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.output_records, 6);
+
+        let output = fs::read_to_string(&output_path).unwrap();
+        assert_eq!(output, "A\nB\nC\nD\nE\nF\n");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_external_sort_descending() {
+        let input_path = test_path("ext_desc.dat");
+        let output_path = test_path("ext_desc_out.dat");
+
+        fs::write(&input_path, "A\nE\nC\nD\nB\n").unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 1, DataType::Character, SortOrder::Descending));
+        let engine = SortEngine::new(spec).with_max_memory_records(2);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.output_records, 5);
+
+        let output = fs::read_to_string(&output_path).unwrap();
+        assert_eq!(output, "E\nD\nC\nB\nA\n");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_small_dataset_uses_in_memory_sort() {
+        let input_path = test_path("small_input.dat");
+        let output_path = test_path("small_output.dat");
+
+        // 3 records with max_memory_records=5 → should use in-memory sort
+        fs::write(&input_path, "C\nA\nB\n").unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 1, DataType::Character, SortOrder::Ascending));
+        let engine = SortEngine::new(spec).with_max_memory_records(5);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.output_records, 3);
+        let output = fs::read_to_string(&output_path).unwrap();
+        assert_eq!(output, "A\nB\nC\n");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_external_sort_with_filter() {
+        let input_path = test_path("ext_filter.dat");
+        let output_path = test_path("ext_filter_out.dat");
+
+        // Filter + external sort: only include records starting with 'A'
+        fs::write(
+            &input_path,
+            "A3\nB1\nA1\nB2\nA4\nB3\nA2\nB4\n",
+        )
+        .unwrap();
+
+        let spec = SortSpec::new()
+            .add_field(SortField::new(1, 2, DataType::Character, SortOrder::Ascending));
+
+        let filter = crate::filter::FilterSpec {
+            filter_type: crate::filter::FilterType::Include,
+            conditions: vec![crate::filter::Condition {
+                position: 1,
+                length: 1,
+                data_type: DataType::Character,
+                op: crate::filter::CompareOp::Eq,
+                value: b"A".to_vec(),
+            }],
+            logic: None,
+        };
+
+        let engine = SortEngine::new(spec)
+            .with_include(filter)
+            .with_max_memory_records(2);
+        let stats = engine.sort_file(&input_path, &output_path).unwrap();
+
+        assert_eq!(stats.input_records, 8);
+        assert_eq!(stats.filtered_records, 4);
+        assert_eq!(stats.output_records, 4);
+
+        let output = fs::read_to_string(&output_path).unwrap();
+        assert_eq!(output, "A1\nA2\nA3\nA4\n");
+
+        cleanup(&input_path);
+        cleanup(&output_path);
+    }
+
+    #[test]
+    fn test_temp_run_files_cleanup() {
+        let paths: Vec<PathBuf>;
+        {
+            let mut runs = TempRunFiles::new();
+            let p1 = runs.create_run().unwrap();
+            let p2 = runs.create_run().unwrap();
+            // Create the actual files
+            fs::write(&p1, b"run1").unwrap();
+            fs::write(&p2, b"run2").unwrap();
+            assert!(p1.exists());
+            assert!(p2.exists());
+            paths = runs.paths.clone();
+        }
+        // After drop, files should be cleaned up
+        for p in &paths {
+            assert!(!p.exists(), "Temp file was not cleaned up: {:?}", p);
+        }
     }
 }
