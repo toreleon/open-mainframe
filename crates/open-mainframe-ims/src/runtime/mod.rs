@@ -48,6 +48,90 @@ impl ImsMessage {
     }
 }
 
+/// GSAM (Generalized Sequential Access Method) dataset.
+///
+/// Provides sequential read/write access to a flat file via DL/I calls.
+#[derive(Debug, Clone)]
+pub struct GsamDataset {
+    /// Dataset name (typically the GSAM DB name)
+    pub name: String,
+    /// Records stored sequentially
+    records: Vec<Vec<u8>>,
+    /// Current read position (index into `records`)
+    read_position: usize,
+    /// Whether the dataset is open for input
+    open_input: bool,
+    /// Whether the dataset is open for output
+    open_output: bool,
+}
+
+impl GsamDataset {
+    /// Create a new empty GSAM dataset.
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            records: Vec::new(),
+            read_position: 0,
+            open_input: false,
+            open_output: false,
+        }
+    }
+
+    /// Open for input (reading).
+    pub fn open_for_input(&mut self) {
+        self.open_input = true;
+        self.read_position = 0;
+    }
+
+    /// Open for output (writing).
+    pub fn open_for_output(&mut self) {
+        self.open_output = true;
+    }
+
+    /// Read the next record (GN). Returns `None` at end of dataset.
+    pub fn read_next(&mut self) -> Option<Vec<u8>> {
+        if self.read_position < self.records.len() {
+            let data = self.records[self.read_position].clone();
+            self.read_position += 1;
+            Some(data)
+        } else {
+            None
+        }
+    }
+
+    /// Write (append) a record (ISRT).
+    pub fn write_record(&mut self, data: Vec<u8>) {
+        self.records.push(data);
+    }
+
+    /// Get total record count.
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Get current read position.
+    pub fn read_position(&self) -> usize {
+        self.read_position
+    }
+
+    /// Pre-load records (for testing / mock input).
+    pub fn load_records(&mut self, records: Vec<Vec<u8>>) {
+        self.records = records;
+        self.read_position = 0;
+    }
+
+    /// Create a snapshot for transaction rollback.
+    pub fn snapshot(&self) -> Self {
+        self.clone()
+    }
+
+    /// Restore from a snapshot.
+    pub fn restore_from(&mut self, snapshot: &Self) {
+        self.records = snapshot.records.clone();
+        self.read_position = snapshot.read_position;
+    }
+}
+
 /// IMS Runtime for executing DL/I calls.
 pub struct ImsRuntime {
     /// Loaded databases
@@ -62,6 +146,10 @@ pub struct ImsRuntime {
     positions: HashMap<String, DatabasePosition>,
     /// Snapshots of databases at last commit point (for ROLB)
     snapshots: HashMap<String, HierarchicalStore>,
+    /// GSAM datasets keyed by GSAM DB name
+    gsam_datasets: HashMap<String, GsamDataset>,
+    /// GSAM dataset snapshots for rollback
+    gsam_snapshots: HashMap<String, GsamDataset>,
     /// Checkpoint IDs recorded by CHKP calls
     checkpoint_ids: Vec<Vec<u8>>,
     /// Log records written by LOG calls
@@ -120,6 +208,8 @@ impl ImsRuntime {
             processors: Vec::new(),
             positions: HashMap::new(),
             snapshots: HashMap::new(),
+            gsam_datasets: HashMap::new(),
+            gsam_snapshots: HashMap::new(),
             checkpoint_ids: Vec::new(),
             log_records: Vec::new(),
             stats: RuntimeStats::default(),
@@ -144,6 +234,13 @@ impl ImsRuntime {
         self.databases
             .entry(dbname.to_uppercase())
             .or_insert_with(|| HierarchicalStore::new(dbname))
+    }
+
+    /// Get or create a GSAM dataset.
+    pub fn get_gsam_dataset(&mut self, name: &str) -> &mut GsamDataset {
+        self.gsam_datasets
+            .entry(name.to_uppercase())
+            .or_insert_with(|| GsamDataset::new(name))
     }
 
     /// Schedule a PSB for execution.
@@ -200,6 +297,11 @@ impl ImsRuntime {
         // I/O PCB message operations (GU/ISRT to I/O PCB)
         if pcb.pcb_type == PcbType::Io {
             return self.execute_io_pcb_call(call);
+        }
+
+        // GSAM PCB sequential I/O
+        if pcb.pcb_type == PcbType::Gsam {
+            return self.execute_gsam_call(call);
         }
 
         let dbname = pcb.dbname.clone();
@@ -378,6 +480,68 @@ impl ImsRuntime {
     }
 
     // -----------------------------------------------------------------------
+    // GSAM Operations (Epic 404)
+    // -----------------------------------------------------------------------
+
+    /// Execute a DL/I call against a GSAM PCB (GN reads, ISRT writes).
+    fn execute_gsam_call(&mut self, call: &DliCall) -> ImsResult<DliResult> {
+        let pcb = self
+            .psb
+            .as_ref()
+            .and_then(|p| p.pcbs.get(call.pcb_index))
+            .ok_or(ImsError::PcbNotFound(format!("PCB index {}", call.pcb_index)))?;
+
+        let dbname = pcb.dbname.clone();
+
+        // Ensure dataset exists
+        let dataset = self
+            .gsam_datasets
+            .entry(dbname.to_uppercase())
+            .or_insert_with(|| GsamDataset::new(&dbname));
+
+        match call.function {
+            DliFunction::GN => {
+                // GN on GSAM: read next sequential record
+                if let Some(data) = dataset.read_next() {
+                    if let Some(ref mut psb) = self.psb {
+                        if let Some(gsam_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                            gsam_pcb.set_status(StatusCode::Ok);
+                        }
+                    }
+                    Ok(DliResult::ok(data, "GSAM"))
+                } else {
+                    // End of dataset
+                    if let Some(ref mut psb) = self.psb {
+                        if let Some(gsam_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                            gsam_pcb.set_status(StatusCode::GB);
+                        }
+                    }
+                    Ok(DliResult::end_of_db())
+                }
+            }
+            DliFunction::ISRT => {
+                // ISRT on GSAM: write (append) record
+                dataset.write_record(call.io_area.clone());
+                if let Some(ref mut psb) = self.psb {
+                    if let Some(gsam_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                        gsam_pcb.set_status(StatusCode::Ok);
+                    }
+                }
+                Ok(DliResult::ok(vec![], "GSAM"))
+            }
+            _ => {
+                // GSAM only supports GN and ISRT
+                if let Some(ref mut psb) = self.psb {
+                    if let Some(gsam_pcb) = psb.pcbs.get_mut(call.pcb_index) {
+                        gsam_pcb.set_status(StatusCode::AD);
+                    }
+                }
+                Ok(DliResult::error(StatusCode::AD))
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // System Service Calls (Epic 401)
     // -----------------------------------------------------------------------
 
@@ -411,6 +575,12 @@ impl ImsRuntime {
             self.snapshots.insert(name.clone(), store.snapshot());
         }
 
+        // Snapshot GSAM datasets too
+        self.gsam_snapshots.clear();
+        for (name, ds) in &self.gsam_datasets {
+            self.gsam_snapshots.insert(name.clone(), ds.snapshot());
+        }
+
         // Reset positions
         self.positions.clear();
 
@@ -434,6 +604,12 @@ impl ImsRuntime {
         self.snapshots.clear();
         for (name, store) in &self.databases {
             self.snapshots.insert(name.clone(), store.snapshot());
+        }
+
+        // Snapshot GSAM datasets
+        self.gsam_snapshots.clear();
+        for (name, ds) in &self.gsam_datasets {
+            self.gsam_snapshots.insert(name.clone(), ds.snapshot());
         }
 
         // Reset positions
@@ -468,6 +644,20 @@ impl ImsRuntime {
             for store in self.databases.values_mut() {
                 let name = store.name.clone();
                 *store = HierarchicalStore::new(&name);
+            }
+        }
+
+        // Restore GSAM datasets
+        if !self.gsam_snapshots.is_empty() {
+            for (name, snapshot) in &self.gsam_snapshots {
+                if let Some(ds) = self.gsam_datasets.get_mut(name) {
+                    ds.restore_from(snapshot);
+                }
+            }
+        } else {
+            for ds in self.gsam_datasets.values_mut() {
+                let name = ds.name.clone();
+                *ds = GsamDataset::new(&name);
             }
         }
 
@@ -564,6 +754,10 @@ impl ImsRuntime {
         self.snapshots.clear();
         for (name, store) in &self.databases {
             self.snapshots.insert(name.clone(), store.snapshot());
+        }
+        self.gsam_snapshots.clear();
+        for (name, ds) in &self.gsam_datasets {
+            self.gsam_snapshots.insert(name.clone(), ds.snapshot());
         }
 
         Ok(())
@@ -917,18 +1111,16 @@ fn execute_isrt(
                 } else {
                     store.find_root(&ssa.segment_name)
                 }
+            } else if let Some(ref qual) = ssa.qualification {
+                store.find_child_qualified(
+                    current_parent,
+                    &ssa.segment_name,
+                    &qual.field_name,
+                    &qual.value,
+                    convert_ssa_op(qual.operator),
+                )
             } else {
-                if let Some(ref qual) = ssa.qualification {
-                    store.find_child_qualified(
-                        current_parent,
-                        &ssa.segment_name,
-                        &qual.field_name,
-                        &qual.value,
-                        convert_ssa_op(qual.operator),
-                    )
-                } else {
-                    store.find_first_child(current_parent, &ssa.segment_name)
-                }
+                store.find_first_child(current_parent, &ssa.segment_name)
             };
 
             match record {
@@ -1708,5 +1900,168 @@ mod tests {
         // Restore
         store.restore_from(&snapshot);
         assert_eq!(store.len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Epic 404: GSAM Tests
+    // -----------------------------------------------------------------------
+
+    fn create_gsam_runtime() -> ImsRuntime {
+        let mut runtime = ImsRuntime::new();
+
+        // PSB with I/O PCB at 0, DB PCB at 1, GSAM PCB at 2
+        let mut psb = ProgramSpecBlock::new("GSAMPSB", crate::psb::PsbLanguage::Cobol);
+
+        let mut db_pcb = ProgramCommBlock::new_db("TESTDB", ProcessingOptions::from_str("A"), 50);
+        db_pcb.add_senseg(SensitiveSegment::new("CUSTOMER", "", ProcessingOptions::from_str("A")));
+        psb.add_pcb(db_pcb);
+
+        let gsam_pcb = ProgramCommBlock::new_gsam("GSAMDS");
+        psb.add_pcb(gsam_pcb);
+
+        runtime.schedule_psb_with_io_pcb(psb).unwrap();
+        // After schedule: pcb[0]=IO, pcb[1]=DB, pcb[2]=GSAM
+
+        runtime
+    }
+
+    #[test]
+    fn test_gsam_read_sequential() {
+        let mut runtime = create_gsam_runtime();
+
+        // Pre-load records
+        let ds = runtime.get_gsam_dataset("GSAMDS");
+        ds.load_records(vec![
+            b"Record 1".to_vec(),
+            b"Record 2".to_vec(),
+            b"Record 3".to_vec(),
+        ]);
+
+        // GN reads sequentially (GSAM PCB is at index 2)
+        let gn = DliCall::new(DliFunction::GN, 2);
+
+        let result = runtime.execute(&gn).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.segment_data.unwrap(), b"Record 1");
+
+        let result = runtime.execute(&gn).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.segment_data.unwrap(), b"Record 2");
+
+        let result = runtime.execute(&gn).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.segment_data.unwrap(), b"Record 3");
+    }
+
+    #[test]
+    fn test_gsam_read_end_of_database() {
+        let mut runtime = create_gsam_runtime();
+
+        let ds = runtime.get_gsam_dataset("GSAMDS");
+        ds.load_records(vec![b"Only record".to_vec()]);
+
+        let gn = DliCall::new(DliFunction::GN, 2);
+
+        // Read the only record
+        let result = runtime.execute(&gn).unwrap();
+        assert!(result.is_ok());
+
+        // GB at end
+        let result = runtime.execute(&gn).unwrap();
+        assert_eq!(result.status, StatusCode::GB);
+    }
+
+    #[test]
+    fn test_gsam_read_empty_dataset() {
+        let mut runtime = create_gsam_runtime();
+        // No records loaded
+
+        let gn = DliCall::new(DliFunction::GN, 2);
+        let result = runtime.execute(&gn).unwrap();
+        assert_eq!(result.status, StatusCode::GB);
+    }
+
+    #[test]
+    fn test_gsam_write_sequential() {
+        let mut runtime = create_gsam_runtime();
+
+        let isrt1 = DliCall::new(DliFunction::ISRT, 2)
+            .with_io_area(b"Output record 1".to_vec());
+        let result = runtime.execute(&isrt1).unwrap();
+        assert!(result.is_ok());
+
+        let isrt2 = DliCall::new(DliFunction::ISRT, 2)
+            .with_io_area(b"Output record 2".to_vec());
+        let result = runtime.execute(&isrt2).unwrap();
+        assert!(result.is_ok());
+
+        // Verify records were written
+        let ds = runtime.get_gsam_dataset("GSAMDS");
+        assert_eq!(ds.record_count(), 2);
+    }
+
+    #[test]
+    fn test_gsam_write_then_read() {
+        let mut runtime = create_gsam_runtime();
+
+        // Write records
+        for i in 1..=3 {
+            let isrt = DliCall::new(DliFunction::ISRT, 2)
+                .with_io_area(format!("Record {}", i).into_bytes());
+            runtime.execute(&isrt).unwrap();
+        }
+
+        // Reset read position
+        let ds = runtime.get_gsam_dataset("GSAMDS");
+        ds.open_for_input(); // resets position to 0
+
+        // Read them back
+        let gn = DliCall::new(DliFunction::GN, 2);
+        for i in 1..=3 {
+            let result = runtime.execute(&gn).unwrap();
+            assert!(result.is_ok());
+            assert_eq!(
+                result.segment_data.unwrap(),
+                format!("Record {}", i).into_bytes()
+            );
+        }
+
+        // EOF
+        let result = runtime.execute(&gn).unwrap();
+        assert_eq!(result.status, StatusCode::GB);
+    }
+
+    #[test]
+    fn test_gsam_rejects_unsupported_function() {
+        let mut runtime = create_gsam_runtime();
+
+        // GU not supported on GSAM
+        let gu = DliCall::new(DliFunction::GU, 2)
+            .with_ssa(Ssa::unqualified("GSAM"));
+        let result = runtime.execute(&gu).unwrap();
+        assert_eq!(result.status, StatusCode::AD);
+    }
+
+    #[test]
+    fn test_gsam_pcb_type() {
+        let runtime = create_gsam_runtime();
+        let psb = runtime.get_psb().unwrap();
+        assert_eq!(psb.pcbs[2].pcb_type, crate::psb::PcbType::Gsam);
+    }
+
+    #[test]
+    fn test_gsam_dataset_snapshot_restore() {
+        let mut ds = GsamDataset::new("TEST");
+        ds.write_record(b"R1".to_vec());
+        ds.write_record(b"R2".to_vec());
+
+        let snap = ds.snapshot();
+        assert_eq!(snap.record_count(), 2);
+
+        ds.write_record(b"R3".to_vec());
+        assert_eq!(ds.record_count(), 3);
+
+        ds.restore_from(&snap);
+        assert_eq!(ds.record_count(), 2);
     }
 }
