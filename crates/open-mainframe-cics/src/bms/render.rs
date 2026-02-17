@@ -7,6 +7,17 @@ use super::parser::BmsMap;
 use super::{AttributeByte, ScreenSize};
 use std::collections::HashMap;
 
+/// 3270 extended attribute type codes.
+#[allow(dead_code)]
+pub mod attr_types {
+    /// Basic 3270 field attribute.
+    pub const BASIC_3270: u8 = 0xC0;
+    /// Extended color attribute.
+    pub const COLOR: u8 = 0x41;
+    /// Extended highlighting attribute.
+    pub const HIGHLIGHT: u8 = 0x42;
+}
+
 /// 3270 orders (commands in data stream).
 #[allow(dead_code)]
 pub mod orders {
@@ -144,10 +155,19 @@ impl MapRenderer {
         let attr_pos = field.attribute_position(cols);
         self.write_sba(attr_pos);
 
-        // Write start field
-        let attr = field.attributes.to_attribute_byte();
-        self.buffer.push(orders::SF);
-        self.buffer.push(self.encode_attribute(attr));
+        // Determine if we need extended attributes (SFE)
+        let has_color = field.attributes.color.is_some();
+        let has_highlight = field.attributes.highlight.is_some();
+
+        if has_color || has_highlight {
+            // Use SFE (Start Field Extended) with attribute pairs
+            self.write_sfe(field);
+        } else {
+            // Use basic SF (Start Field)
+            let attr = field.attributes.to_attribute_byte();
+            self.buffer.push(orders::SF);
+            self.buffer.push(self.encode_attribute(attr));
+        }
 
         // Get field data
         let data = self.get_field_data(field);
@@ -167,6 +187,45 @@ impl MapRenderer {
             let field_pos = field.buffer_position(cols);
             self.write_sba(field_pos);
             self.buffer.push(orders::IC);
+        }
+    }
+
+    /// Write SFE (Start Field Extended) order with color/highlight attributes.
+    ///
+    /// SFE format: 0x29, count, [type, value]...
+    /// - Type 0xC0: basic 3270 attribute
+    /// - Type 0x41: color
+    /// - Type 0x42: highlight
+    fn write_sfe(&mut self, field: &BmsField) {
+        let attr = field.attributes.to_attribute_byte();
+        let ext = field.attributes.to_extended();
+
+        // Count attribute pairs: always basic + optional color + optional highlight
+        let mut pair_count = 1u8; // basic attribute
+        if ext.color.is_some() {
+            pair_count += 1;
+        }
+        if ext.highlight.is_some() {
+            pair_count += 1;
+        }
+
+        self.buffer.push(orders::SFE);
+        self.buffer.push(pair_count);
+
+        // Basic 3270 field attribute
+        self.buffer.push(attr_types::BASIC_3270);
+        self.buffer.push(self.encode_attribute(attr));
+
+        // Extended color
+        if let Some(color) = ext.color {
+            self.buffer.push(attr_types::COLOR);
+            self.buffer.push(color.code());
+        }
+
+        // Extended highlighting
+        if let Some(highlight) = ext.highlight {
+            self.buffer.push(attr_types::HIGHLIGHT);
+            self.buffer.push(highlight.code());
         }
     }
 
@@ -411,6 +470,155 @@ NAME     DFHMDF POS=(1,10),LENGTH=20,ATTRB=(PROT)
 
         let text = renderer.render_text(map);
         assert!(text.contains("John Doe"));
+    }
+
+    // === Story 209.1: SFE Extended Attribute Rendering ===
+
+    #[test]
+    fn test_render_field_with_color() {
+        // AC: Given a BMS field with COLOR=RED
+        // When rendered to a 3270 data stream
+        // Then SFE order includes color attribute bytes
+        let source = r#"
+TEST     DFHMSD TYPE=MAP,LANG=COBOL
+TESTM    DFHMDI SIZE=(24,80)
+ERRMSG   DFHMDF POS=(10,5),LENGTH=40,ATTRB=(PROT),COLOR=RED
+         DFHMSD TYPE=FINAL
+"#;
+
+        let mut parser = BmsParser::new();
+        let mapset = parser.parse(source).unwrap();
+        let map = &mapset.maps[0];
+
+        let mut renderer = MapRenderer::new(ScreenSize::Model2);
+        let stream = renderer.render(map, true);
+
+        // Find SFE order in the stream (0x29)
+        let sfe_pos = stream.iter().position(|&b| b == orders::SFE);
+        assert!(sfe_pos.is_some(), "SFE order not found in stream");
+        let pos = sfe_pos.unwrap();
+
+        // After SFE: pair count, then pairs
+        let pair_count = stream[pos + 1];
+        assert_eq!(pair_count, 2); // basic + color
+
+        // Basic attribute pair
+        assert_eq!(stream[pos + 2], attr_types::BASIC_3270);
+        // stream[pos + 3] = encoded basic attribute
+
+        // Color attribute pair
+        assert_eq!(stream[pos + 4], attr_types::COLOR);
+        assert_eq!(stream[pos + 5], 0xF2); // RED = 0xF2
+    }
+
+    #[test]
+    fn test_render_field_with_highlight() {
+        let source = r#"
+TEST     DFHMSD TYPE=MAP,LANG=COBOL
+TESTM    DFHMDI SIZE=(24,80)
+WARN     DFHMDF POS=(12,5),LENGTH=30,ATTRB=(PROT),HILIGHT=REVERSE
+         DFHMSD TYPE=FINAL
+"#;
+
+        let mut parser = BmsParser::new();
+        let mapset = parser.parse(source).unwrap();
+        let map = &mapset.maps[0];
+
+        let mut renderer = MapRenderer::new(ScreenSize::Model2);
+        let stream = renderer.render(map, true);
+
+        let sfe_pos = stream.iter().position(|&b| b == orders::SFE);
+        assert!(sfe_pos.is_some(), "SFE order not found");
+        let pos = sfe_pos.unwrap();
+
+        let pair_count = stream[pos + 1];
+        assert_eq!(pair_count, 2); // basic + highlight
+
+        // Highlight attribute pair
+        assert_eq!(stream[pos + 4], attr_types::HIGHLIGHT);
+        assert_eq!(stream[pos + 5], 0xF2); // REVERSE = 0xF2
+    }
+
+    #[test]
+    fn test_render_field_with_color_and_highlight() {
+        // AC: Given COLOR=RED and HILIGHT=REVERSE
+        // Then SFE orders include both color and highlight attribute bytes
+        let source = r#"
+TEST     DFHMSD TYPE=MAP,LANG=COBOL
+TESTM    DFHMDI SIZE=(24,80)
+ALERT    DFHMDF POS=(15,10),LENGTH=20,ATTRB=(PROT,BRT),COLOR=RED,HILIGHT=REVERSE
+         DFHMSD TYPE=FINAL
+"#;
+
+        let mut parser = BmsParser::new();
+        let mapset = parser.parse(source).unwrap();
+        let map = &mapset.maps[0];
+
+        let mut renderer = MapRenderer::new(ScreenSize::Model2);
+        let stream = renderer.render(map, true);
+
+        let sfe_pos = stream.iter().position(|&b| b == orders::SFE);
+        assert!(sfe_pos.is_some(), "SFE order not found");
+        let pos = sfe_pos.unwrap();
+
+        // 3 pairs: basic + color + highlight
+        assert_eq!(stream[pos + 1], 3);
+
+        // Basic attribute
+        assert_eq!(stream[pos + 2], attr_types::BASIC_3270);
+
+        // Color (RED)
+        assert_eq!(stream[pos + 4], attr_types::COLOR);
+        assert_eq!(stream[pos + 5], 0xF2);
+
+        // Highlight (REVERSE)
+        assert_eq!(stream[pos + 6], attr_types::HIGHLIGHT);
+        assert_eq!(stream[pos + 7], 0xF2);
+    }
+
+    #[test]
+    fn test_render_field_without_extended_uses_sf() {
+        // Fields without color/highlight should still use basic SF
+        let source = r#"
+TEST     DFHMSD TYPE=MAP,LANG=COBOL
+TESTM    DFHMDI SIZE=(24,80)
+PLAIN    DFHMDF POS=(3,5),LENGTH=10,ATTRB=(PROT)
+         DFHMSD TYPE=FINAL
+"#;
+
+        let mut parser = BmsParser::new();
+        let mapset = parser.parse(source).unwrap();
+        let map = &mapset.maps[0];
+
+        let mut renderer = MapRenderer::new(ScreenSize::Model2);
+        let stream = renderer.render(map, true);
+
+        // Should have SF but NOT SFE
+        assert!(stream.contains(&orders::SF), "SF order should be present");
+        assert!(!stream.contains(&orders::SFE), "SFE should NOT be present for plain field");
+    }
+
+    #[test]
+    fn test_render_mixed_fields() {
+        // Mix of fields: some with color, some without
+        let source = r#"
+TEST     DFHMSD TYPE=MAP,LANG=COBOL
+TESTM    DFHMDI SIZE=(24,80)
+TITLE    DFHMDF POS=(1,1),LENGTH=20,ATTRB=(ASKIP)
+ERROR    DFHMDF POS=(24,1),LENGTH=60,ATTRB=(PROT),COLOR=RED,HILIGHT=BLINK
+         DFHMSD TYPE=FINAL
+"#;
+
+        let mut parser = BmsParser::new();
+        let mapset = parser.parse(source).unwrap();
+        let map = &mapset.maps[0];
+
+        let mut renderer = MapRenderer::new(ScreenSize::Model2);
+        let stream = renderer.render(map, true);
+
+        // Should have both SF (for TITLE) and SFE (for ERROR)
+        assert!(stream.contains(&orders::SF));
+        assert!(stream.contains(&orders::SFE));
     }
 
     #[test]

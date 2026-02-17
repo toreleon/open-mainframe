@@ -45,12 +45,27 @@ pub trait TerminalCallback: Send {
     fn on_receive(&mut self, max_length: usize) -> CicsResult<(Vec<u8>, u8)>;
 }
 
+/// An accumulated page entry for BMS page building.
+#[derive(Debug, Clone)]
+pub struct AccumulatedPage {
+    /// Map name
+    pub map_name: String,
+    /// Field data
+    pub data: HashMap<String, Vec<u8>>,
+    /// Send options
+    pub erase: bool,
+}
+
 /// Terminal manager for CICS transactions.
 pub struct TerminalManager {
     /// Active terminals
     terminals: HashMap<String, Terminal>,
     /// Default screen size
     default_size: ScreenSize,
+    /// Accumulated pages per terminal (for BMS page building)
+    page_buffer: HashMap<String, Vec<AccumulatedPage>>,
+    /// Delivered pages per terminal (from SEND PAGE)
+    delivered_pages: HashMap<String, Vec<Vec<AccumulatedPage>>>,
 }
 
 impl TerminalManager {
@@ -59,6 +74,8 @@ impl TerminalManager {
         Self {
             terminals: HashMap::new(),
             default_size: ScreenSize::Model2,
+            page_buffer: HashMap::new(),
+            delivered_pages: HashMap::new(),
         }
     }
 
@@ -86,6 +103,10 @@ impl TerminalManager {
     }
 
     /// Execute SEND MAP.
+    ///
+    /// When `options.accum` is true, the map is accumulated in a page buffer
+    /// instead of being sent immediately. Use `send_page()` to deliver
+    /// accumulated maps.
     pub fn send_map(
         &mut self,
         terminal_id: &str,
@@ -93,6 +114,19 @@ impl TerminalManager {
         data: &HashMap<String, Vec<u8>>,
         options: SendMapOptions,
     ) -> CicsResult<()> {
+        let tid = terminal_id.to_uppercase();
+
+        // If ACCUM is set, accumulate the map for page building
+        if options.accum {
+            let page = AccumulatedPage {
+                map_name: map.name.clone(),
+                data: data.clone(),
+                erase: options.erase,
+            };
+            self.page_buffer.entry(tid).or_default().push(page);
+            return Ok(());
+        }
+
         let terminal = self.get_or_create(terminal_id);
 
         // Create renderer and set data
@@ -115,6 +149,49 @@ impl TerminalManager {
         terminal.set_current_map(Some(map.name.clone()));
 
         Ok(())
+    }
+
+    /// Execute SEND PAGE — deliver accumulated maps to the terminal.
+    ///
+    /// All maps accumulated via SEND MAP ACCUM are collected into a single
+    /// page and stored in `delivered_pages`. The page buffer is cleared.
+    ///
+    /// Returns the number of maps in the delivered page.
+    pub fn send_page(&mut self, terminal_id: &str) -> CicsResult<usize> {
+        let tid = terminal_id.to_uppercase();
+
+        let pages = self.page_buffer.remove(&tid).unwrap_or_default();
+        let count = pages.len();
+
+        if count > 0 {
+            self.delivered_pages
+                .entry(tid)
+                .or_default()
+                .push(pages);
+        }
+
+        Ok(count)
+    }
+
+    /// Execute PURGE MESSAGE — clear all accumulated and delivered pages.
+    pub fn purge_message(&mut self, terminal_id: &str) {
+        let tid = terminal_id.to_uppercase();
+        self.page_buffer.remove(&tid);
+        self.delivered_pages.remove(&tid);
+    }
+
+    /// Get the accumulated page buffer for a terminal (for inspection/testing).
+    pub fn page_buffer(&self, terminal_id: &str) -> Option<&[AccumulatedPage]> {
+        self.page_buffer
+            .get(&terminal_id.to_uppercase())
+            .map(|v| v.as_slice())
+    }
+
+    /// Get delivered pages for a terminal (for inspection/testing).
+    pub fn delivered_pages(&self, terminal_id: &str) -> Option<&[Vec<AccumulatedPage>]> {
+        self.delivered_pages
+            .get(&terminal_id.to_uppercase())
+            .map(|v| v.as_slice())
     }
 
     /// Execute RECEIVE MAP.
@@ -246,6 +323,8 @@ pub struct SendMapOptions {
     pub alarm: bool,
     /// Reset MDT flags
     pub frset: bool,
+    /// Accumulate map for page building (BMS page building)
+    pub accum: bool,
 }
 
 impl SendMapOptions {
@@ -399,6 +478,144 @@ STATUS   DFHMDF POS=(7,10),LENGTH=15,ATTRB=(PROT)
         let term = manager.get_or_create("T001");
         assert_eq!(term.screen_size(), ScreenSize::Model4);
         assert_eq!(term.screen_size().dimensions(), (43, 80));
+    }
+
+    // === Story 209.2: BMS Page Building ===
+
+    #[test]
+    fn test_send_map_accum() {
+        // AC: Given multiple SEND MAP ACCUM calls
+        // Then maps are accumulated in the page buffer
+        let mut manager = TerminalManager::new();
+        let map = create_test_map();
+
+        let mut data1 = HashMap::new();
+        data1.insert("NAME".to_string(), b"PAGE1 LINE1".to_vec());
+
+        let mut data2 = HashMap::new();
+        data2.insert("NAME".to_string(), b"PAGE1 LINE2".to_vec());
+
+        // Send with ACCUM
+        let opts = SendMapOptions {
+            accum: true,
+            ..Default::default()
+        };
+
+        manager.send_map("T001", &map, &data1, opts.clone()).unwrap();
+        manager.send_map("T001", &map, &data2, opts).unwrap();
+
+        // Should have 2 accumulated maps
+        let buffer = manager.page_buffer("T001").unwrap();
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer[0].map_name, "TESTM");
+        assert_eq!(buffer[1].map_name, "TESTM");
+    }
+
+    #[test]
+    fn test_send_page() {
+        // AC: When SEND PAGE is issued
+        // Then accumulated maps are delivered to the terminal as pages
+        let mut manager = TerminalManager::new();
+        let map = create_test_map();
+
+        let data = HashMap::new();
+        let opts = SendMapOptions {
+            accum: true,
+            ..Default::default()
+        };
+
+        manager.send_map("T001", &map, &data, opts.clone()).unwrap();
+        manager.send_map("T001", &map, &data, opts.clone()).unwrap();
+        manager.send_map("T001", &map, &data, opts).unwrap();
+
+        // Send page — deliver accumulated maps
+        let count = manager.send_page("T001").unwrap();
+        assert_eq!(count, 3);
+
+        // Buffer should now be empty
+        assert!(manager.page_buffer("T001").is_none());
+
+        // Delivered pages should have one page with 3 maps
+        let delivered = manager.delivered_pages("T001").unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].len(), 3);
+    }
+
+    #[test]
+    fn test_send_page_empty() {
+        let mut manager = TerminalManager::new();
+        let count = manager.send_page("T001").unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_purge_message() {
+        let mut manager = TerminalManager::new();
+        let map = create_test_map();
+        let data = HashMap::new();
+
+        let opts = SendMapOptions {
+            accum: true,
+            ..Default::default()
+        };
+        manager.send_map("T001", &map, &data, opts).unwrap();
+        manager.send_page("T001").unwrap();
+
+        // Now accumulate more
+        let opts2 = SendMapOptions {
+            accum: true,
+            ..Default::default()
+        };
+        manager.send_map("T001", &map, &data, opts2).unwrap();
+
+        // Purge all
+        manager.purge_message("T001");
+
+        assert!(manager.page_buffer("T001").is_none());
+        assert!(manager.delivered_pages("T001").is_none());
+    }
+
+    #[test]
+    fn test_multiple_send_pages() {
+        let mut manager = TerminalManager::new();
+        let map = create_test_map();
+        let data = HashMap::new();
+
+        let opts = SendMapOptions {
+            accum: true,
+            ..Default::default()
+        };
+
+        // First page: 2 maps
+        manager.send_map("T001", &map, &data, opts.clone()).unwrap();
+        manager.send_map("T001", &map, &data, opts.clone()).unwrap();
+        manager.send_page("T001").unwrap();
+
+        // Second page: 1 map
+        manager.send_map("T001", &map, &data, opts).unwrap();
+        manager.send_page("T001").unwrap();
+
+        let delivered = manager.delivered_pages("T001").unwrap();
+        assert_eq!(delivered.len(), 2);
+        assert_eq!(delivered[0].len(), 2);
+        assert_eq!(delivered[1].len(), 1);
+    }
+
+    #[test]
+    fn test_accum_does_not_affect_terminal() {
+        // ACCUM sends should NOT modify the terminal screen directly
+        let mut manager = TerminalManager::new();
+        let map = create_test_map();
+        let data = HashMap::new();
+
+        let opts = SendMapOptions {
+            accum: true,
+            ..Default::default()
+        };
+        manager.send_map("T001", &map, &data, opts).unwrap();
+
+        // Terminal should not have been created (since ACCUM skips terminal render)
+        assert!(!manager.exists("T001"));
     }
 
     #[test]
