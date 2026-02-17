@@ -40,6 +40,7 @@ pub mod event;
 pub mod fields;
 pub mod input;
 pub mod mock;
+pub mod oia;
 pub mod renderer;
 pub mod session;
 pub mod status;

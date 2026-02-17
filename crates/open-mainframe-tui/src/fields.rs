@@ -6,6 +6,29 @@
 use open_mainframe_cics::bms::{AttributeByte, BmsMap, FieldColor, FieldHighlight};
 use open_mainframe_cics::terminal::ScreenPosition;
 
+/// Field validation attribute (3270 extended).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FieldValidation {
+    /// No validation.
+    #[default]
+    None,
+    /// Field must be modified before Enter is pressed.
+    MustEnter,
+    /// All positions in the field must be filled.
+    MustFill,
+}
+
+/// Result of field validation.
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    /// Name of the field that failed validation.
+    pub field_name: String,
+    /// The validation that failed.
+    pub validation: FieldValidation,
+    /// Human-readable error message.
+    pub message: String,
+}
+
 /// Entry in the field table, tracking runtime state for each BMS field.
 #[derive(Debug, Clone)]
 pub struct FieldEntry {
@@ -30,6 +53,8 @@ pub struct FieldEntry {
     pub cursor_offset: usize,
     /// Whether this field has the initial cursor (IC) attribute.
     pub initial_cursor: bool,
+    /// Field validation attribute (MUSTENTER, MUSTFILL).
+    pub validation: FieldValidation,
 }
 
 impl FieldEntry {
@@ -127,6 +152,7 @@ impl FieldTable {
                 content,
                 cursor_offset: 0,
                 initial_cursor: bms_field.attributes.initial_cursor,
+                validation: FieldValidation::None,
             };
 
             let idx = fields.len();
@@ -539,6 +565,63 @@ impl FieldTable {
     pub fn input_field_count(&self) -> usize {
         self.input_order.len()
     }
+
+    /// Set a validation attribute on a named field.
+    pub fn set_field_validation(&mut self, name: &str, validation: FieldValidation) {
+        for field in &mut self.fields {
+            if field.name.eq_ignore_ascii_case(name) {
+                field.validation = validation;
+                break;
+            }
+        }
+    }
+
+    /// Validate all input fields before processing an AID key.
+    ///
+    /// Returns a list of validation errors. An empty list means all fields
+    /// pass validation. The first error's field should receive focus and the
+    /// keyboard should be locked.
+    pub fn validate_fields(&self) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+
+        for &idx in &self.input_order {
+            let field = &self.fields[idx];
+            match field.validation {
+                FieldValidation::None => {}
+                FieldValidation::MustEnter => {
+                    if !field.modified {
+                        errors.push(ValidationError {
+                            field_name: field.name.clone(),
+                            validation: FieldValidation::MustEnter,
+                            message: format!(
+                                "Field '{}' must be modified before pressing Enter",
+                                field.name
+                            ),
+                        });
+                    }
+                }
+                FieldValidation::MustFill => {
+                    let filled = field
+                        .content
+                        .iter()
+                        .filter(|&&c| c != b' ' && c != 0)
+                        .count();
+                    if filled < field.length {
+                        errors.push(ValidationError {
+                            field_name: field.name.clone(),
+                            validation: FieldValidation::MustFill,
+                            message: format!(
+                                "Field '{}' must be completely filled ({}/{})",
+                                field.name, filled, field.length
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        errors
+    }
 }
 
 impl Default for FieldTable {
@@ -758,6 +841,101 @@ INPUT    DFHMDF POS=(3,1),LENGTH=10,ATTRB=(UNPROT),COLOR=GREEN
         table.set_cursor_to_offset(0); // row 1, col 1 — LABEL (protected)
         let active = table.active_field().unwrap();
         assert_eq!(active.name, "NAME"); // advanced to next unprotected
+    }
+
+    // -----------------------------------------------------------------------
+    // Field Validation Tests (Epic 903)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_mustenter_fails_when_not_modified() {
+        let map = create_test_map();
+        let mut table = FieldTable::from_bms_map(&map);
+        table.set_field_validation("NAME", FieldValidation::MustEnter);
+
+        let errors = table.validate_fields();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].field_name, "NAME");
+        assert_eq!(errors[0].validation, FieldValidation::MustEnter);
+    }
+
+    #[test]
+    fn test_mustenter_passes_when_modified() {
+        let map = create_test_map();
+        let mut table = FieldTable::from_bms_map(&map);
+        table.set_field_validation("NAME", FieldValidation::MustEnter);
+
+        // Type something to modify the field
+        table.type_char('J');
+        let errors = table.validate_fields();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_mustfill_fails_when_partially_filled() {
+        let map = create_test_map();
+        let mut table = FieldTable::from_bms_map(&map);
+        table.set_field_validation("NAME", FieldValidation::MustFill);
+
+        // Type 3 characters in a 20-character field
+        table.type_char('A');
+        table.type_char('B');
+        table.type_char('C');
+
+        let errors = table.validate_fields();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].field_name, "NAME");
+        assert_eq!(errors[0].validation, FieldValidation::MustFill);
+    }
+
+    #[test]
+    fn test_mustfill_passes_when_all_filled() {
+        let map = create_test_map();
+        let mut table = FieldTable::from_bms_map(&map);
+
+        // Set MUSTFILL on AGE (3 characters)
+        table.tab_forward(); // go to AGE
+        table.set_field_validation("AGE", FieldValidation::MustFill);
+
+        table.type_char('2');
+        table.type_char('5');
+        table.type_char('0');
+
+        let errors = table.validate_fields();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_mustfill_empty_field_fails() {
+        let map = create_test_map();
+        let mut table = FieldTable::from_bms_map(&map);
+        table.set_field_validation("NAME", FieldValidation::MustFill);
+
+        // Don't type anything
+        let errors = table.validate_fields();
+        assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn test_no_validation_passes() {
+        let map = create_test_map();
+        let table = FieldTable::from_bms_map(&map);
+
+        // No validation set — should pass
+        let errors = table.validate_fields();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_validation_errors() {
+        let map = create_test_map();
+        let mut table = FieldTable::from_bms_map(&map);
+        table.set_field_validation("NAME", FieldValidation::MustEnter);
+        table.set_field_validation("AGE", FieldValidation::MustFill);
+
+        // Don't modify either field
+        let errors = table.validate_fields();
+        assert_eq!(errors.len(), 2);
     }
 
     #[test]
