@@ -39,6 +39,20 @@ impl Sqlca {
     pub const DEADLOCK: i32 = -911;
     /// Connection error.
     pub const CONNECTION_ERROR: i32 = -30081;
+    /// Name not found (table, view, etc.).
+    pub const NAME_NOT_FOUND: i32 = -204;
+    /// Syntax error.
+    pub const SYNTAX_ERROR: i32 = -104;
+    /// Resource unavailable.
+    pub const RESOURCE_UNAVAILABLE: i32 = -904;
+    /// Authorization failure.
+    pub const AUTHORIZATION_FAILURE: i32 = -551;
+    /// Check constraint violation.
+    pub const CHECK_VIOLATION: i32 = -545;
+    /// Foreign key violation.
+    pub const FK_VIOLATION: i32 = -530;
+    /// Numeric overflow / data exception.
+    pub const DATA_EXCEPTION: i32 = -302;
 
     /// Create a new SQLCA with success status.
     pub fn new() -> Self {
@@ -144,17 +158,82 @@ impl Sqlca {
         self.sqlwarn[0] == 'W'
     }
 
+    /// Set SQLCA from a PostgreSQL SQLSTATE error code.
+    ///
+    /// Maps PostgreSQL 5-character SQLSTATE codes to DB2 SQLCODE values.
+    pub fn set_from_pg_state(&mut self, pg_state: &str, message: &str) {
+        let sqlcode = Self::pg_state_to_sqlcode(pg_state);
+        self.set_error(sqlcode, message);
+        // Preserve the original PG SQLSTATE
+        self.sqlstate = pg_state.to_string();
+    }
+
+    /// Map a PostgreSQL SQLSTATE to a DB2 SQLCODE.
+    pub fn pg_state_to_sqlcode(pg_state: &str) -> i32 {
+        match pg_state {
+            // Successful completion
+            "00000" => Self::SUCCESS,
+            // No data
+            "02000" => Self::NOT_FOUND,
+            // Unique violation
+            "23505" => Self::DUPLICATE_KEY,
+            // Not-null violation
+            "23502" => Self::NULL_VALUE,
+            // Check violation
+            "23514" => Self::CHECK_VIOLATION,
+            // Foreign key violation
+            "23503" => Self::FK_VIOLATION,
+            // Undefined table (42P01)
+            "42P01" => Self::NAME_NOT_FOUND,
+            // Undefined column (42703)
+            "42703" => Self::NAME_NOT_FOUND,
+            // Syntax error (42601)
+            "42601" => Self::SYNTAX_ERROR,
+            // Insufficient privilege (42501)
+            "42501" => Self::AUTHORIZATION_FAILURE,
+            // Serialization failure / deadlock
+            "40001" => Self::DEADLOCK,
+            "40P01" => Self::DEADLOCK,
+            // Numeric value out of range
+            "22003" => Self::DATA_EXCEPTION,
+            // String data right truncation
+            "22001" => Self::DATA_EXCEPTION,
+            // Connection failure
+            "08000" | "08001" | "08003" | "08006" => Self::CONNECTION_ERROR,
+            // Cardinality violation
+            "21000" => Self::TOO_MANY_ROWS,
+            // Class 22: data exception (general)
+            s if s.starts_with("22") => Self::DATA_EXCEPTION,
+            // Class 23: integrity constraint
+            s if s.starts_with("23") => Self::DUPLICATE_KEY,
+            // Class 08: connection
+            s if s.starts_with("08") => Self::CONNECTION_ERROR,
+            // Class 42: syntax/access
+            s if s.starts_with("42") => Self::SYNTAX_ERROR,
+            // Everything else
+            _ => -999, // Unknown error
+        }
+    }
+
     /// Convert SQLCODE to SQLSTATE.
     fn code_to_state(code: i32) -> String {
         match code {
-            0 => "00000".to_string(),      // Success
-            100 => "02000".to_string(),    // Not found
-            -803 => "23505".to_string(),   // Unique violation
-            -305 => "22002".to_string(),   // Null value
-            -811 => "21000".to_string(),   // Cardinality violation
-            -501 => "24501".to_string(),   // Cursor not open
-            -502 => "24502".to_string(),   // Cursor already open
-            -911 => "40001".to_string(),   // Serialization failure
+            0 => "00000".to_string(),       // Success
+            100 => "02000".to_string(),     // Not found
+            -803 => "23505".to_string(),    // Unique violation
+            -305 => "22002".to_string(),    // Null value
+            -811 => "21000".to_string(),    // Cardinality violation
+            -501 => "24501".to_string(),    // Cursor not open
+            -502 => "24502".to_string(),    // Cursor already open
+            -911 => "40001".to_string(),    // Serialization failure
+            -204 => "42704".to_string(),    // Name not found
+            -104 => "42601".to_string(),    // Syntax error
+            -904 => "57011".to_string(),    // Resource unavailable
+            -551 => "42501".to_string(),    // Authorization failure
+            -545 => "23514".to_string(),    // Check violation
+            -530 => "23503".to_string(),    // FK violation
+            -302 => "22003".to_string(),    // Data exception
+            -30081 => "08001".to_string(),  // Connection error
             _ if code < 0 => "HY000".to_string(), // General error
             _ => "00000".to_string(),
         }
@@ -274,5 +353,91 @@ mod tests {
         sqlca.reset();
         assert!(sqlca.is_success());
         assert!(sqlca.error_message().is_empty());
+    }
+
+    // --- PostgreSQL Error Mapping Tests (Story 302.3) ---
+
+    #[test]
+    fn test_pg_unique_violation_to_duplicate_key() {
+        let code = Sqlca::pg_state_to_sqlcode("23505");
+        assert_eq!(code, Sqlca::DUPLICATE_KEY); // -803
+    }
+
+    #[test]
+    fn test_pg_undefined_table_to_name_not_found() {
+        let code = Sqlca::pg_state_to_sqlcode("42P01");
+        assert_eq!(code, Sqlca::NAME_NOT_FOUND); // -204
+    }
+
+    #[test]
+    fn test_pg_undefined_column_to_name_not_found() {
+        let code = Sqlca::pg_state_to_sqlcode("42703");
+        assert_eq!(code, Sqlca::NAME_NOT_FOUND);
+    }
+
+    #[test]
+    fn test_pg_deadlock_to_deadlock() {
+        assert_eq!(Sqlca::pg_state_to_sqlcode("40001"), Sqlca::DEADLOCK);
+        assert_eq!(Sqlca::pg_state_to_sqlcode("40P01"), Sqlca::DEADLOCK);
+    }
+
+    #[test]
+    fn test_pg_connection_failure() {
+        assert_eq!(Sqlca::pg_state_to_sqlcode("08001"), Sqlca::CONNECTION_ERROR);
+        assert_eq!(Sqlca::pg_state_to_sqlcode("08006"), Sqlca::CONNECTION_ERROR);
+    }
+
+    #[test]
+    fn test_pg_syntax_error() {
+        assert_eq!(Sqlca::pg_state_to_sqlcode("42601"), Sqlca::SYNTAX_ERROR);
+    }
+
+    #[test]
+    fn test_pg_no_data() {
+        assert_eq!(Sqlca::pg_state_to_sqlcode("02000"), Sqlca::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_pg_success() {
+        assert_eq!(Sqlca::pg_state_to_sqlcode("00000"), Sqlca::SUCCESS);
+    }
+
+    #[test]
+    fn test_set_from_pg_state() {
+        let mut sqlca = Sqlca::new();
+        sqlca.set_from_pg_state("23505", "duplicate key value violates unique constraint");
+        assert_eq!(sqlca.sqlcode(), Sqlca::DUPLICATE_KEY);
+        assert_eq!(sqlca.sqlstate(), "23505");
+        assert!(sqlca.error_message().contains("duplicate key"));
+    }
+
+    #[test]
+    fn test_pg_check_violation() {
+        assert_eq!(Sqlca::pg_state_to_sqlcode("23514"), Sqlca::CHECK_VIOLATION);
+    }
+
+    #[test]
+    fn test_pg_fk_violation() {
+        assert_eq!(Sqlca::pg_state_to_sqlcode("23503"), Sqlca::FK_VIOLATION);
+    }
+
+    #[test]
+    fn test_pg_data_exception_class() {
+        // Any 22xxx should map to DATA_EXCEPTION
+        assert_eq!(Sqlca::pg_state_to_sqlcode("22003"), Sqlca::DATA_EXCEPTION);
+        assert_eq!(Sqlca::pg_state_to_sqlcode("22001"), Sqlca::DATA_EXCEPTION);
+    }
+
+    #[test]
+    fn test_code_to_state_new_codes() {
+        let mut sqlca = Sqlca::new();
+        sqlca.set_sqlcode(Sqlca::NAME_NOT_FOUND);
+        assert_eq!(sqlca.sqlstate(), "42704");
+
+        sqlca.set_sqlcode(Sqlca::SYNTAX_ERROR);
+        assert_eq!(sqlca.sqlstate(), "42601");
+
+        sqlca.set_sqlcode(Sqlca::CONNECTION_ERROR);
+        assert_eq!(sqlca.sqlstate(), "08001");
     }
 }

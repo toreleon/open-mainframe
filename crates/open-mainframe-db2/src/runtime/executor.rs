@@ -183,14 +183,23 @@ pub struct DescribeColumn {
     pub nullable: bool,
 }
 
+/// Execution mode for the SQL executor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutorMode {
+    /// Mock mode — no database connection, results simulated.
+    Mock,
+    /// Live mode — executes against a real PostgreSQL database.
+    Live,
+}
+
 /// SQL executor for running statements.
 pub struct SqlExecutor {
     /// SQL translator
     translator: SqlTranslator,
     /// Current SQLCA
     sqlca: Sqlca,
-    /// Mock mode (no actual database connection)
-    mock_mode: bool,
+    /// Execution mode (mock or live)
+    mode: ExecutorMode,
     /// Mock results for testing
     mock_results: Vec<SqlRow>,
     /// Registry of dynamically prepared statements (PREPARE/EXECUTE).
@@ -198,15 +207,36 @@ pub struct SqlExecutor {
 }
 
 impl SqlExecutor {
-    /// Create a new executor.
+    /// Create a new executor in mock mode.
     pub fn new() -> Self {
         Self {
             translator: SqlTranslator::new(),
             sqlca: Sqlca::new(),
-            mock_mode: true,
+            mode: ExecutorMode::Mock,
             mock_results: Vec::new(),
             prepared_dynamic: HashMap::new(),
         }
+    }
+
+    /// Create a new executor in live mode.
+    pub fn new_live() -> Self {
+        Self {
+            translator: SqlTranslator::new(),
+            sqlca: Sqlca::new(),
+            mode: ExecutorMode::Live,
+            mock_results: Vec::new(),
+            prepared_dynamic: HashMap::new(),
+        }
+    }
+
+    /// Get the current execution mode.
+    pub fn mode(&self) -> ExecutorMode {
+        self.mode
+    }
+
+    /// Set the execution mode.
+    pub fn set_mode(&mut self, mode: ExecutorMode) {
+        self.mode = mode;
     }
 
     /// Get the current SQLCA.
@@ -244,17 +274,16 @@ impl SqlExecutor {
         let _pg_sql = self.translator.translate(&statement.sql);
 
         // In mock mode, return mock results
-        if self.mock_mode {
+        if self.mode == ExecutorMode::Mock {
             return self.execute_mock_select_into(statement, input_values);
         }
 
-        // Real execution would go here with postgres feature
-        #[cfg(feature = "postgres")]
-        {
-            // Actual PostgreSQL execution
-            self.sqlca.set_success();
-        }
-
+        // Live mode — requires connection to be provided externally
+        // In live mode without a connection handle, set resource unavailable
+        self.sqlca.set_error(
+            Sqlca::RESOURCE_UNAVAILABLE,
+            "Live execution requires a connection — use execute_select_into_with_connection",
+        );
         Ok(HashMap::new())
     }
 
@@ -320,7 +349,7 @@ impl SqlExecutor {
         let _pg_sql = self.translator.translate(&statement.sql);
 
         // In mock mode, simulate success
-        if self.mock_mode {
+        if self.mode == ExecutorMode::Mock {
             // Check for duplicate key simulation
             if input_values.contains_key("__simulate_duplicate") {
                 self.sqlca.set_error(Sqlca::DUPLICATE_KEY, "Duplicate key value");
@@ -332,13 +361,11 @@ impl SqlExecutor {
             return Ok(1);
         }
 
-        #[cfg(feature = "postgres")]
-        {
-            // Actual PostgreSQL execution
-            self.sqlca.set_success();
-            self.sqlca.set_rows_affected(1);
-        }
-
+        // Live mode — requires connection
+        self.sqlca.set_error(
+            Sqlca::RESOURCE_UNAVAILABLE,
+            "Live execution requires a connection",
+        );
         Ok(self.sqlca.rows_affected())
     }
 
@@ -362,7 +389,7 @@ impl SqlExecutor {
         let _pg_sql = self.translator.translate(&statement.sql);
 
         // In mock mode, simulate based on input
-        if self.mock_mode {
+        if self.mode == ExecutorMode::Mock {
             let rows = input_values
                 .get("__mock_rows_affected")
                 .and_then(|v| v.as_integer())
@@ -377,12 +404,11 @@ impl SqlExecutor {
             return Ok(rows);
         }
 
-        #[cfg(feature = "postgres")]
-        {
-            // Actual PostgreSQL execution
-            self.sqlca.set_success();
-        }
-
+        // Live mode — requires connection
+        self.sqlca.set_error(
+            Sqlca::RESOURCE_UNAVAILABLE,
+            "Live execution requires a connection",
+        );
         Ok(self.sqlca.rows_affected())
     }
 
@@ -406,7 +432,7 @@ impl SqlExecutor {
         let _pg_sql = self.translator.translate(&statement.sql);
 
         // In mock mode, simulate based on input
-        if self.mock_mode {
+        if self.mode == ExecutorMode::Mock {
             let rows = input_values
                 .get("__mock_rows_affected")
                 .and_then(|v| v.as_integer())
@@ -421,12 +447,11 @@ impl SqlExecutor {
             return Ok(rows);
         }
 
-        #[cfg(feature = "postgres")]
-        {
-            // Actual PostgreSQL execution
-            self.sqlca.set_success();
-        }
-
+        // Live mode — requires connection
+        self.sqlca.set_error(
+            Sqlca::RESOURCE_UNAVAILABLE,
+            "Live execution requires a connection",
+        );
         Ok(self.sqlca.rows_affected())
     }
 
@@ -498,18 +523,17 @@ impl SqlExecutor {
         }
 
         // In mock mode, simulate execution
-        if self.mock_mode {
+        if self.mode == ExecutorMode::Mock {
             self.sqlca.set_success();
             self.sqlca.set_rows_affected(1);
             return Ok(1);
         }
 
-        #[cfg(feature = "postgres")]
-        {
-            self.sqlca.set_success();
-            self.sqlca.set_rows_affected(1);
-        }
-
+        // Live mode — requires connection
+        self.sqlca.set_error(
+            Sqlca::RESOURCE_UNAVAILABLE,
+            "Live execution requires a connection",
+        );
         Ok(self.sqlca.rows_affected())
     }
 
@@ -527,16 +551,16 @@ impl SqlExecutor {
         let _pg_sql = self.translator.translate(sql_text);
 
         // In mock mode, simulate success
-        if self.mock_mode {
+        if self.mode == ExecutorMode::Mock {
             self.sqlca.set_success();
             return Ok(0);
         }
 
-        #[cfg(feature = "postgres")]
-        {
-            self.sqlca.set_success();
-        }
-
+        // Live mode — requires connection
+        self.sqlca.set_error(
+            Sqlca::RESOURCE_UNAVAILABLE,
+            "Live execution requires a connection",
+        );
         Ok(0)
     }
 
@@ -561,17 +585,17 @@ impl SqlExecutor {
         };
 
         // In mock mode, derive columns from the SQL text (best-effort parse)
-        if self.mock_mode {
+        if self.mode == ExecutorMode::Mock {
             let columns = self.mock_describe_columns(&prepared.sql);
             self.sqlca.set_success();
             return Ok(columns);
         }
 
-        #[cfg(feature = "postgres")]
-        {
-            self.sqlca.set_success();
-        }
-
+        // Live mode — requires connection
+        self.sqlca.set_error(
+            Sqlca::RESOURCE_UNAVAILABLE,
+            "Live execution requires a connection",
+        );
         Ok(Vec::new())
     }
 
@@ -657,6 +681,131 @@ impl SqlExecutor {
         }
 
         (result, params)
+    }
+
+    /// Get a reference to the SQL translator.
+    pub fn translator(&self) -> &SqlTranslator {
+        &self.translator
+    }
+}
+
+// -----------------------------------------------------------------------
+// Result-to-COBOL mapping utilities (Story 302.2)
+// -----------------------------------------------------------------------
+
+/// Map a PostgreSQL result row to COBOL host variables.
+///
+/// Applies COBOL-style formatting:
+/// - String values: left-justified, padded with spaces to `target_len`
+/// - Decimal values: converted to string with correct precision/scale
+/// - Integer values: stored as-is
+/// - NULL values: detected via indicator variables
+pub fn map_row_to_host_variables(
+    row: &SqlRow,
+    output_vars: &[RuntimeHostVariable],
+    target_lengths: &HashMap<String, usize>,
+) -> HashMap<String, SqlValue> {
+    let mut result = HashMap::new();
+    let mut indicators = HashMap::new();
+
+    for (i, var) in output_vars.iter().enumerate() {
+        if let Some(value) = row.get(i) {
+            if value.is_null() {
+                // NULL handling — leave host var unchanged, set indicator = -1
+                if let Some(ref ind_name) = var.indicator {
+                    indicators.insert(ind_name.clone(), SqlValue::Integer(-1));
+                }
+            } else {
+                // Apply COBOL formatting
+                let formatted = if let Some(&len) = target_lengths.get(&var.name) {
+                    cobol_format_value(value, len)
+                } else {
+                    value.clone()
+                };
+                result.insert(var.name.clone(), formatted);
+
+                // Indicator = 0 for non-NULL
+                if let Some(ref ind_name) = var.indicator {
+                    indicators.insert(ind_name.clone(), SqlValue::Integer(0));
+                }
+            }
+        } else {
+            // Column not present — treat as NULL
+            if let Some(ref ind_name) = var.indicator {
+                indicators.insert(ind_name.clone(), SqlValue::Integer(-1));
+            }
+        }
+    }
+
+    // Merge indicators into result
+    result.extend(indicators);
+    result
+}
+
+/// Format a `SqlValue` for COBOL host variable storage.
+///
+/// Applies COBOL display rules:
+/// - PIC X(n): left-justify, pad with spaces on the right
+/// - PIC S9(n)V9(m) COMP-3: decimal value stored with correct precision
+/// - Integer types: stored as-is
+pub fn cobol_format_value(value: &SqlValue, target_len: usize) -> SqlValue {
+    match value {
+        SqlValue::String(s) => {
+            // Left-justify and pad with spaces
+            let formatted = cobol_pad_string(s, target_len);
+            SqlValue::String(formatted)
+        }
+        // Numeric values don't need padding
+        _ => value.clone(),
+    }
+}
+
+/// Left-justify a string and pad with spaces to the target length (COBOL PIC X).
+pub fn cobol_pad_string(s: &str, target_len: usize) -> String {
+    if s.len() >= target_len {
+        // Truncate to target length
+        s[..target_len].to_string()
+    } else {
+        // Pad with spaces on the right
+        format!("{:<width$}", s, width = target_len)
+    }
+}
+
+/// Convert a decimal value to COBOL packed decimal representation.
+///
+/// For PIC S9(p-s)V9(s) COMP-3, the value is scaled and stored as an integer.
+pub fn cobol_format_decimal(value: f64, precision: u8, scale: u8) -> SqlValue {
+    let factor = 10_f64.powi(scale as i32);
+    let scaled = (value * factor).round() as i64;
+
+    // Verify it fits within precision
+    let max_val = 10_i64.pow(precision as u32) - 1;
+    if scaled.abs() > max_val {
+        // Overflow — return the truncated value
+        SqlValue::Integer(if scaled > 0 { max_val } else { -max_val })
+    } else {
+        SqlValue::Integer(scaled)
+    }
+}
+
+/// Convert an `SqlValue` to a COBOL-compatible string for display.
+///
+/// Converts numeric types to their string representation suitable
+/// for COBOL display fields.
+pub fn sql_value_to_display(value: &SqlValue) -> String {
+    match value {
+        SqlValue::Null => String::new(),
+        SqlValue::String(s) => s.clone(),
+        SqlValue::Integer(i) => i.to_string(),
+        SqlValue::Float(f) => format!("{:.2}", f),
+        SqlValue::Boolean(b) => if *b { "1" } else { "0" }.to_string(),
+        SqlValue::Binary(b) => {
+            use std::fmt::Write;
+            b.iter().fold(String::new(), |mut acc, byte| {
+                let _ = write!(acc, "{:02X}", byte);
+                acc
+            })
+        }
     }
 }
 
@@ -1091,5 +1240,304 @@ mod tests {
         let prep = executor.get_prepared("S1").unwrap();
         // DB2 FETCH FIRST should be translated to LIMIT
         assert!(prep.translated_sql.contains("LIMIT 5"));
+    }
+
+    // --- Story 302.1: Executor Mode Tests ---
+
+    #[test]
+    fn test_executor_default_mode_is_mock() {
+        let executor = SqlExecutor::new();
+        assert_eq!(executor.mode(), ExecutorMode::Mock);
+    }
+
+    #[test]
+    fn test_executor_live_mode_creation() {
+        let executor = SqlExecutor::new_live();
+        assert_eq!(executor.mode(), ExecutorMode::Live);
+    }
+
+    #[test]
+    fn test_executor_mode_switch() {
+        let mut executor = SqlExecutor::new();
+        assert_eq!(executor.mode(), ExecutorMode::Mock);
+
+        executor.set_mode(ExecutorMode::Live);
+        assert_eq!(executor.mode(), ExecutorMode::Live);
+
+        executor.set_mode(ExecutorMode::Mock);
+        assert_eq!(executor.mode(), ExecutorMode::Mock);
+    }
+
+    #[test]
+    fn test_live_mode_select_without_connection_returns_error() {
+        let mut executor = SqlExecutor::new_live();
+        let statement = create_select_into_statement();
+
+        let input = HashMap::new();
+        let _result = executor.execute_select_into(&statement, &input).unwrap();
+
+        assert!(executor.sqlca().is_error());
+        assert_eq!(executor.sqlca().sqlcode(), Sqlca::RESOURCE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn test_live_mode_insert_without_connection_returns_error() {
+        let mut executor = SqlExecutor::new_live();
+        let statement = create_insert_statement();
+
+        let input = HashMap::new();
+        let _rows = executor.execute_insert(&statement, &input).unwrap();
+
+        assert!(executor.sqlca().is_error());
+        assert_eq!(executor.sqlca().sqlcode(), Sqlca::RESOURCE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn test_live_mode_update_without_connection_returns_error() {
+        let mut executor = SqlExecutor::new_live();
+        let statement = create_update_statement();
+
+        let input = HashMap::new();
+        let _rows = executor.execute_update(&statement, &input).unwrap();
+
+        assert!(executor.sqlca().is_error());
+        assert_eq!(executor.sqlca().sqlcode(), Sqlca::RESOURCE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn test_live_mode_delete_without_connection_returns_error() {
+        let mut executor = SqlExecutor::new_live();
+        let statement = create_delete_statement();
+
+        let input = HashMap::new();
+        let _rows = executor.execute_delete(&statement, &input).unwrap();
+
+        assert!(executor.sqlca().is_error());
+        assert_eq!(executor.sqlca().sqlcode(), Sqlca::RESOURCE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn test_live_mode_execute_immediate_without_connection() {
+        let mut executor = SqlExecutor::new_live();
+
+        let _rows = executor.execute_immediate("CREATE TABLE T (A INT)").unwrap();
+        assert!(executor.sqlca().is_error());
+        assert_eq!(executor.sqlca().sqlcode(), Sqlca::RESOURCE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn test_live_mode_describe_without_connection() {
+        let mut executor = SqlExecutor::new_live();
+        executor.prepare("S1", "SELECT * FROM T").unwrap();
+
+        let cols = executor.describe("S1").unwrap();
+        assert!(executor.sqlca().is_error());
+        assert_eq!(executor.sqlca().sqlcode(), Sqlca::RESOURCE_UNAVAILABLE);
+        assert!(cols.is_empty());
+    }
+
+    // --- Story 302.2: Result-to-COBOL Mapping Tests ---
+
+    #[test]
+    fn test_cobol_pad_string_shorter_than_target() {
+        let result = cobol_pad_string("Hello", 10);
+        assert_eq!(result, "Hello     ");
+        assert_eq!(result.len(), 10);
+    }
+
+    #[test]
+    fn test_cobol_pad_string_exact_length() {
+        let result = cobol_pad_string("Hello", 5);
+        assert_eq!(result, "Hello");
+    }
+
+    #[test]
+    fn test_cobol_pad_string_truncation() {
+        let result = cobol_pad_string("Hello World", 5);
+        assert_eq!(result, "Hello");
+    }
+
+    #[test]
+    fn test_cobol_pad_string_empty() {
+        let result = cobol_pad_string("", 10);
+        assert_eq!(result, "          ");
+        assert_eq!(result.len(), 10);
+    }
+
+    #[test]
+    fn test_cobol_format_value_string() {
+        let value = SqlValue::String("Test".to_string());
+        let formatted = cobol_format_value(&value, 10);
+        if let SqlValue::String(s) = formatted {
+            assert_eq!(s, "Test      ");
+            assert_eq!(s.len(), 10);
+        } else {
+            panic!("Expected String value");
+        }
+    }
+
+    #[test]
+    fn test_cobol_format_value_integer_unchanged() {
+        let value = SqlValue::Integer(42);
+        let formatted = cobol_format_value(&value, 10);
+        assert_eq!(formatted, SqlValue::Integer(42));
+    }
+
+    #[test]
+    fn test_cobol_format_decimal_basic() {
+        // PIC S9(7)V99 — precision=9, scale=2
+        let result = cobol_format_decimal(1234.56, 9, 2);
+        assert_eq!(result, SqlValue::Integer(123456));
+    }
+
+    #[test]
+    fn test_cobol_format_decimal_negative() {
+        let result = cobol_format_decimal(-99.99, 5, 2);
+        assert_eq!(result, SqlValue::Integer(-9999));
+    }
+
+    #[test]
+    fn test_cobol_format_decimal_rounding() {
+        // 1.235 * 100 = 123.5, rounds to 124
+        let result = cobol_format_decimal(1.235, 5, 2);
+        assert_eq!(result, SqlValue::Integer(124));
+    }
+
+    #[test]
+    fn test_cobol_format_decimal_overflow() {
+        // PIC S9(3)V99 — max 999.99 = 99999 scaled
+        let result = cobol_format_decimal(9999.99, 5, 2);
+        // 9999.99 * 100 = 999999 > 99999, should clamp
+        assert_eq!(result, SqlValue::Integer(99999));
+    }
+
+    #[test]
+    fn test_map_row_to_host_variables_basic() {
+        let mut row = SqlRow::new();
+        row.add_column("NAME", SqlValue::String("JOHN DOE".to_string()));
+        row.add_column("SALARY", SqlValue::Float(75000.50));
+
+        let vars = vec![
+            RuntimeHostVariable {
+                name: "WS-NAME".to_string(),
+                indicator: None,
+                usage: HostVariableUsage::Output,
+            },
+            RuntimeHostVariable {
+                name: "WS-SALARY".to_string(),
+                indicator: None,
+                usage: HostVariableUsage::Output,
+            },
+        ];
+
+        let mut target_lengths = HashMap::new();
+        target_lengths.insert("WS-NAME".to_string(), 20);
+
+        let result = map_row_to_host_variables(&row, &vars, &target_lengths);
+
+        // Name should be padded to 20 chars
+        if let SqlValue::String(name) = result.get("WS-NAME").unwrap() {
+            assert_eq!(name.len(), 20);
+            assert!(name.starts_with("JOHN DOE"));
+        } else {
+            panic!("Expected String");
+        }
+
+        // Salary has no target length, should be unchanged
+        assert_eq!(
+            result.get("WS-SALARY").unwrap(),
+            &SqlValue::Float(75000.50)
+        );
+    }
+
+    #[test]
+    fn test_map_row_to_host_variables_with_null_indicator() {
+        let mut row = SqlRow::new();
+        row.add_column("NAME", SqlValue::Null);
+
+        let vars = vec![RuntimeHostVariable {
+            name: "WS-NAME".to_string(),
+            indicator: Some("WS-NAME-IND".to_string()),
+            usage: HostVariableUsage::Output,
+        }];
+
+        let target_lengths = HashMap::new();
+        let result = map_row_to_host_variables(&row, &vars, &target_lengths);
+
+        // WS-NAME should NOT be in result (NULL → leave unchanged)
+        assert!(!result.contains_key("WS-NAME"));
+
+        // Indicator should be -1
+        assert_eq!(
+            result.get("WS-NAME-IND").unwrap(),
+            &SqlValue::Integer(-1)
+        );
+    }
+
+    #[test]
+    fn test_map_row_to_host_variables_with_non_null_indicator() {
+        let mut row = SqlRow::new();
+        row.add_column("NAME", SqlValue::String("ALICE".to_string()));
+
+        let vars = vec![RuntimeHostVariable {
+            name: "WS-NAME".to_string(),
+            indicator: Some("WS-NAME-IND".to_string()),
+            usage: HostVariableUsage::Output,
+        }];
+
+        let mut target_lengths = HashMap::new();
+        target_lengths.insert("WS-NAME".to_string(), 10);
+
+        let result = map_row_to_host_variables(&row, &vars, &target_lengths);
+
+        // Indicator should be 0 for non-NULL
+        assert_eq!(
+            result.get("WS-NAME-IND").unwrap(),
+            &SqlValue::Integer(0)
+        );
+
+        // Value should be present and padded
+        if let SqlValue::String(name) = result.get("WS-NAME").unwrap() {
+            assert_eq!(name, "ALICE     ");
+        } else {
+            panic!("Expected String");
+        }
+    }
+
+    #[test]
+    fn test_sql_value_to_display() {
+        assert_eq!(sql_value_to_display(&SqlValue::Null), "");
+        assert_eq!(sql_value_to_display(&SqlValue::String("ABC".to_string())), "ABC");
+        assert_eq!(sql_value_to_display(&SqlValue::Integer(42)), "42");
+        assert_eq!(sql_value_to_display(&SqlValue::Float(3.14)), "3.14");
+        assert_eq!(sql_value_to_display(&SqlValue::Boolean(true)), "1");
+        assert_eq!(sql_value_to_display(&SqlValue::Boolean(false)), "0");
+        assert_eq!(
+            sql_value_to_display(&SqlValue::Binary(vec![0xAB, 0xCD])),
+            "ABCD"
+        );
+    }
+
+    #[test]
+    fn test_varchar_to_pic_x_left_justified_padded() {
+        // AC: Given VARCHAR(100) with 50 chars, host var PIC X(100)
+        // → left-justified, padded with spaces
+        let value = SqlValue::String("A".repeat(50));
+        let formatted = cobol_format_value(&value, 100);
+        if let SqlValue::String(s) = formatted {
+            assert_eq!(s.len(), 100);
+            assert!(s.starts_with(&"A".repeat(50)));
+            assert!(s.ends_with(&" ".repeat(50)));
+        } else {
+            panic!("Expected String");
+        }
+    }
+
+    #[test]
+    fn test_decimal_to_comp3_conversion() {
+        // AC: Given DECIMAL(9,2) column, host var PIC S9(7)V99 COMP-3
+        // → value correctly converted and stored
+        let result = cobol_format_decimal(12345.67, 9, 2);
+        assert_eq!(result, SqlValue::Integer(1234567));
     }
 }

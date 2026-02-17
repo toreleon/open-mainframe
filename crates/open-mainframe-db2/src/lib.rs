@@ -28,10 +28,11 @@ pub mod runtime;
 pub mod utilities;
 
 pub use runtime::{
-    Cursor, CursorManager, CursorOptions, CursorState, Db2Connection, Db2ConnectionConfig,
-    Db2Runtime, Db2Type, DescribeColumn, PreparedDynamic, RuntimeHostVariable, RuntimeStatement,
-    Sqlca, SqlcaBuilder, SqlExecutor, SqlRow, SqlTranslator, SqlValue, TransactionConfig,
-    TransactionManager, TransactionState, TypeMapping,
+    cobol_format_decimal, cobol_format_value, cobol_pad_string, map_row_to_host_variables,
+    sql_value_to_display, Cursor, CursorManager, CursorOptions, CursorState, Db2Connection,
+    Db2ConnectionConfig, Db2Runtime, Db2Type, DescribeColumn, ExecutorMode, PreparedDynamic,
+    RuntimeHostVariable, RuntimeStatement, Sqlca, SqlcaBuilder, SqlExecutor, SqlRow, SqlTranslator,
+    SqlValue, TransactionConfig, TransactionManager, TransactionState, TypeMapping,
 };
 
 pub use utilities::{

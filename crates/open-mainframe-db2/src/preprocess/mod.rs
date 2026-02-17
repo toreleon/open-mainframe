@@ -143,12 +143,123 @@ pub enum HostVariableUsage {
     Both,
 }
 
+/// Action to take when a WHENEVER condition is triggered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WheneverAction {
+    /// No action — processing continues normally.
+    Continue,
+    /// Branch to the specified COBOL paragraph/label.
+    GoTo(String),
+}
+
+/// Tracks the current WHENEVER settings for all three conditions.
+///
+/// Each condition slot is `None` (no WHENEVER issued yet) or a
+/// `WheneverAction`.  State persists until overridden by another
+/// WHENEVER for the same condition.
+#[derive(Debug, Clone, Default)]
+pub struct WheneverState {
+    /// Action for SQLCODE < 0.
+    pub sqlerror: Option<WheneverAction>,
+    /// Action for SQLCODE = 100.
+    pub not_found: Option<WheneverAction>,
+    /// Action for SQLWARN0 = 'W'.
+    pub sqlwarning: Option<WheneverAction>,
+}
+
+impl WheneverState {
+    /// Parse a WHENEVER SQL text and update the appropriate slot.
+    ///
+    /// Expected forms:
+    /// - `WHENEVER SQLERROR CONTINUE`
+    /// - `WHENEVER SQLERROR GO TO <label>`
+    /// - `WHENEVER NOT FOUND GO TO <label>`
+    /// - `WHENEVER SQLWARNING CONTINUE`
+    pub fn apply(&mut self, sql: &str) {
+        let upper = sql.trim().to_uppercase();
+        let words: Vec<&str> = upper.split_whitespace().collect();
+
+        // words[0] = "WHENEVER"
+        if words.len() < 3 {
+            return;
+        }
+
+        // Determine which condition and where the action starts
+        let (condition, action_start) = if words[1] == "NOT" && words.get(2) == Some(&"FOUND") {
+            ("NOT_FOUND", 3)
+        } else if words[1] == "SQLERROR" {
+            ("SQLERROR", 2)
+        } else if words[1] == "SQLWARNING" {
+            ("SQLWARNING", 2)
+        } else {
+            return;
+        };
+
+        // Parse action
+        let action = if words.get(action_start) == Some(&"CONTINUE") {
+            WheneverAction::Continue
+        } else if words.get(action_start) == Some(&"GO")
+            && words.get(action_start + 1) == Some(&"TO")
+        {
+            if let Some(&label) = words.get(action_start + 2) {
+                WheneverAction::GoTo(label.to_string())
+            } else {
+                return;
+            }
+        } else if words.get(action_start) == Some(&"GOTO") {
+            if let Some(&label) = words.get(action_start + 1) {
+                WheneverAction::GoTo(label.to_string())
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        match condition {
+            "SQLERROR" => self.sqlerror = Some(action),
+            "NOT_FOUND" => self.not_found = Some(action),
+            "SQLWARNING" => self.sqlwarning = Some(action),
+            _ => {}
+        }
+    }
+
+    /// Generate COBOL IF checks based on current state.
+    ///
+    /// Returns empty string if all conditions are Continue or unset.
+    pub fn generate_checks(&self) -> String {
+        let mut checks = Vec::new();
+
+        if let Some(WheneverAction::GoTo(ref label)) = self.sqlerror {
+            checks.push(format!(
+                "           IF SQLCODE < 0 GO TO {label}"
+            ));
+        }
+
+        if let Some(WheneverAction::GoTo(ref label)) = self.not_found {
+            checks.push(format!(
+                "           IF SQLCODE = 100 GO TO {label}"
+            ));
+        }
+
+        if let Some(WheneverAction::GoTo(ref label)) = self.sqlwarning {
+            checks.push(format!(
+                "           IF SQLWARN0 = 'W' GO TO {label}"
+            ));
+        }
+
+        checks.join("\n")
+    }
+}
+
 /// SQL preprocessor for COBOL programs.
 pub struct SqlPreprocessor {
     scanner: SqlScanner,
     statements: Vec<SqlStatement>,
     host_variables: Vec<HostVariable>,
     statement_counter: usize,
+    /// Current WHENEVER state (persists across EXEC SQL blocks).
+    whenever_state: WheneverState,
 }
 
 impl SqlPreprocessor {
@@ -159,7 +270,13 @@ impl SqlPreprocessor {
             statements: Vec::new(),
             host_variables: Vec::new(),
             statement_counter: 0,
+            whenever_state: WheneverState::default(),
         }
+    }
+
+    /// Get the current WHENEVER state.
+    pub fn whenever_state(&self) -> &WheneverState {
+        &self.whenever_state
     }
 
     /// Process COBOL source and extract SQL.
@@ -167,10 +284,31 @@ impl SqlPreprocessor {
         // Scan for EXEC SQL blocks
         let blocks = self.scanner.scan(source)?;
 
-        // Process each block
+        // First pass (forward): collect statement types and compute WHENEVER
+        // state snapshots so that the reverse-order replacement pass can
+        // emit the correct IF checks for each block.
+        let mut whenever_snapshots: Vec<WheneverState> = Vec::with_capacity(blocks.len());
+        let mut forward_state = WheneverState::default();
+
+        for block in &blocks {
+            let stmt_type = SqlStatementType::from_sql(&block.sql);
+
+            if stmt_type == SqlStatementType::Whenever {
+                // Update state from this WHENEVER declaration
+                forward_state.apply(&block.sql);
+            }
+
+            // Snapshot the state *after* processing this block
+            whenever_snapshots.push(forward_state.clone());
+        }
+
+        // Record final WHENEVER state for external callers
+        self.whenever_state = forward_state;
+
+        // Second pass (reverse): replace blocks with CALL statements
         let mut cobol_lines: Vec<String> = source.lines().map(|s| s.to_string()).collect();
 
-        for block in blocks.iter().rev() {
+        for (idx, block) in blocks.iter().enumerate().rev() {
             self.statement_counter += 1;
             let stmt_num = self.statement_counter;
 
@@ -191,11 +329,28 @@ impl SqlPreprocessor {
             };
             self.statements.push(statement);
 
-            // Generate COBOL CALL replacement
-            let call_code = self.generate_call(stmt_num, stmt_type, &block.sql);
+            // Generate replacement code
+            if stmt_type == SqlStatementType::Whenever {
+                // WHENEVER is a preprocessor directive — it produces no
+                // runtime CALL, just a comment showing the declaration.
+                let replacement = format!(
+                    "      * WHENEVER: {}",
+                    block.sql.trim()
+                );
+                self.replace_block(&mut cobol_lines, block, &replacement);
+            } else {
+                // Generate COBOL CALL replacement
+                let mut call_code = self.generate_call(stmt_num, stmt_type, &block.sql);
 
-            // Replace EXEC SQL block with CALL
-            self.replace_block(&mut cobol_lines, block, &call_code);
+                // Append WHENEVER IF checks using the snapshot for this block
+                let checks = whenever_snapshots[idx].generate_checks();
+                if !checks.is_empty() {
+                    call_code.push('\n');
+                    call_code.push_str(&checks);
+                }
+
+                self.replace_block(&mut cobol_lines, block, &call_code);
+            }
         }
 
         // Reverse statements to get correct order
@@ -558,5 +713,183 @@ mod tests {
         assert_eq!(result.sql_statements.len(), 1);
         assert_eq!(result.sql_statements[0].stmt_type, SqlStatementType::SelectInto);
         assert!(result.cobol_source.contains("CALL \"SQLSELECT\""));
+    }
+
+    // --- WHENEVER Tests (Epic 301) ---
+
+    #[test]
+    fn test_whenever_state_sqlerror_goto() {
+        let mut state = WheneverState::default();
+        state.apply("WHENEVER SQLERROR GO TO ERR-PARA");
+        assert_eq!(state.sqlerror, Some(WheneverAction::GoTo("ERR-PARA".to_string())));
+    }
+
+    #[test]
+    fn test_whenever_state_not_found_goto() {
+        let mut state = WheneverState::default();
+        state.apply("WHENEVER NOT FOUND GO TO EOF-PARA");
+        assert_eq!(state.not_found, Some(WheneverAction::GoTo("EOF-PARA".to_string())));
+    }
+
+    #[test]
+    fn test_whenever_state_sqlwarning_continue() {
+        let mut state = WheneverState::default();
+        state.apply("WHENEVER SQLWARNING CONTINUE");
+        assert_eq!(state.sqlwarning, Some(WheneverAction::Continue));
+    }
+
+    #[test]
+    fn test_whenever_state_goto_single_word() {
+        let mut state = WheneverState::default();
+        state.apply("WHENEVER SQLERROR GOTO ERRPARA");
+        assert_eq!(state.sqlerror, Some(WheneverAction::GoTo("ERRPARA".to_string())));
+    }
+
+    #[test]
+    fn test_whenever_override() {
+        let mut state = WheneverState::default();
+        state.apply("WHENEVER SQLERROR GO TO ERR1");
+        assert_eq!(state.sqlerror, Some(WheneverAction::GoTo("ERR1".to_string())));
+
+        state.apply("WHENEVER SQLERROR GO TO ERR2");
+        assert_eq!(state.sqlerror, Some(WheneverAction::GoTo("ERR2".to_string())));
+    }
+
+    #[test]
+    fn test_whenever_generate_checks_sqlerror() {
+        let mut state = WheneverState::default();
+        state.sqlerror = Some(WheneverAction::GoTo("ERR-PARA".to_string()));
+        let checks = state.generate_checks();
+        assert!(checks.contains("IF SQLCODE < 0 GO TO ERR-PARA"));
+    }
+
+    #[test]
+    fn test_whenever_generate_checks_not_found() {
+        let mut state = WheneverState::default();
+        state.not_found = Some(WheneverAction::GoTo("EOF-PARA".to_string()));
+        let checks = state.generate_checks();
+        assert!(checks.contains("IF SQLCODE = 100 GO TO EOF-PARA"));
+    }
+
+    #[test]
+    fn test_whenever_generate_checks_continue_produces_nothing() {
+        let mut state = WheneverState::default();
+        state.sqlerror = Some(WheneverAction::Continue);
+        state.not_found = Some(WheneverAction::Continue);
+        let checks = state.generate_checks();
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn test_whenever_in_preprocessor_emits_if_checks() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             WHENEVER SQLERROR GO TO ERR-PARA
+           END-EXEC.
+           EXEC SQL
+             SELECT NAME INTO :WS-NAME FROM T
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        // The SELECT should have an IF SQLCODE < 0 check after the CALL
+        assert!(result.cobol_source.contains("CALL \"SQLSELECT\""));
+        assert!(result.cobol_source.contains("IF SQLCODE < 0 GO TO ERR-PARA"));
+    }
+
+    #[test]
+    fn test_whenever_scope_overrides() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             WHENEVER SQLERROR GO TO ERR1
+           END-EXEC.
+           EXEC SQL
+             INSERT INTO T VALUES (:V1)
+           END-EXEC.
+           EXEC SQL
+             WHENEVER SQLERROR GO TO ERR2
+           END-EXEC.
+           EXEC SQL
+             DELETE FROM T WHERE X = :V2
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        let lines: Vec<&str> = result.cobol_source.lines().collect();
+
+        // Find INSERT CALL and verify it jumps to ERR1
+        let insert_pos = lines.iter().position(|l| l.contains("SQLINSERT")).unwrap();
+        let insert_check = lines[insert_pos + 2]; // SQLCA line, then IF check
+        assert!(insert_check.contains("GO TO ERR1"), "INSERT should jump to ERR1, got: {}", insert_check);
+
+        // Find DELETE CALL and verify it jumps to ERR2
+        let delete_pos = lines.iter().position(|l| l.contains("SQLDELETE")).unwrap();
+        let delete_check = lines[delete_pos + 2];
+        assert!(delete_check.contains("GO TO ERR2"), "DELETE should jump to ERR2, got: {}", delete_check);
+    }
+
+    #[test]
+    fn test_whenever_continue_disables_check() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             WHENEVER NOT FOUND GO TO EOF-PARA
+           END-EXEC.
+           EXEC SQL
+             FETCH C1 INTO :V1
+           END-EXEC.
+           EXEC SQL
+             WHENEVER NOT FOUND CONTINUE
+           END-EXEC.
+           EXEC SQL
+             FETCH C1 INTO :V2
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        let src = &result.cobol_source;
+
+        // First FETCH should have NOT FOUND check
+        let first_fetch = src.find("SQLFETCH").unwrap();
+        let after_first = &src[first_fetch..];
+        let second_fetch_offset = after_first[1..].find("SQLFETCH").unwrap() + 1;
+
+        // Text between first SQLFETCH and second SQLFETCH should contain the check
+        let between = &after_first[..second_fetch_offset];
+        assert!(between.contains("IF SQLCODE = 100 GO TO EOF-PARA"));
+
+        // Text after second SQLFETCH should NOT contain the check
+        let after_second = &after_first[second_fetch_offset..];
+        assert!(!after_second.contains("IF SQLCODE = 100 GO TO EOF-PARA"));
+    }
+
+    #[test]
+    fn test_whenever_no_call_for_whenever_itself() {
+        let source = r#"       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TEST.
+       PROCEDURE DIVISION.
+           EXEC SQL
+             WHENEVER SQLERROR GO TO ERR-PARA
+           END-EXEC.
+           STOP RUN."#;
+
+        let mut preprocessor = SqlPreprocessor::new();
+        let result = preprocessor.process(source).unwrap();
+
+        // WHENEVER should NOT generate a runtime CALL
+        assert!(!result.cobol_source.contains("CALL"));
+        // It should have a comment showing the directive
+        assert!(result.cobol_source.contains("* WHENEVER"));
     }
 }
