@@ -37,8 +37,11 @@ pub mod error;
 
 // Re-export commonly used types at crate root
 pub use decimal::{
-    decode_binary, encode_binary, pack_decimal, unpack_decimal, unzone_decimal, zone_decimal,
-    BinaryInteger, PackedDecimal, Sign, ZonedDecimal,
+    decode_binary, decode_hfp_long, decode_hfp_short, decode_native_binary, encode_binary,
+    encode_hfp_long, encode_hfp_short, encode_native_binary, hfp_long_to_ieee, hfp_short_to_ieee,
+    ieee_to_hfp_long, ieee_to_hfp_short, pack_decimal, unpack_decimal, unzone_decimal,
+    validate_native_range, zone_decimal, BinaryInteger, HfpDouble, HfpFloat, NativeBinaryInteger,
+    PackedDecimal, Sign, ZonedDecimal,
 };
 pub use ebcdic::{
     CodePage, CodePageRegistry, CP037, CP1047, CP1140, CP1141, CP1142, CP1143, CP1144, CP1145,

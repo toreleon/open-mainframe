@@ -8,10 +8,19 @@
 //! - **Binary (COMP/COMP-4)**: Big-endian two's complement integers
 
 mod binary;
+mod floating;
+mod native_binary;
 mod packed;
 mod zoned;
 
 pub use binary::{decode_binary, encode_binary, BinaryInteger};
+pub use floating::{
+    decode_hfp_long, decode_hfp_short, encode_hfp_long, encode_hfp_short, hfp_long_to_ieee,
+    hfp_short_to_ieee, ieee_to_hfp_long, ieee_to_hfp_short, HfpDouble, HfpFloat,
+};
+pub use native_binary::{
+    decode_native_binary, encode_native_binary, validate_native_range, NativeBinaryInteger,
+};
 pub use packed::{pack_decimal, unpack_decimal, PackedDecimal};
 pub use zoned::{unzone_decimal, zone_decimal, ZonedDecimal};
 
