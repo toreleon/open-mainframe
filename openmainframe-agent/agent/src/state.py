@@ -1,9 +1,12 @@
 """
 Agent state definition.
+Extends CopilotKitState for message handling and frontend state sync.
 Keep in sync with frontend types in src/lib/types.ts
 """
 
 from typing import TypedDict, Optional
+
+from copilotkit import CopilotKitState
 
 
 class SourceFile(TypedDict):
@@ -39,8 +42,8 @@ class ExecutionResult(TypedDict):
     timestamp: str
 
 
-class AgentState(TypedDict):
-    """Main agent state shared between LangGraph agent and CopilotKit frontend."""
+class AgentState(CopilotKitState):
+    """Main agent state. Inherits messages + copilotkit from CopilotKitState."""
 
     # Project context
     project_path: Optional[str]
@@ -58,3 +61,6 @@ class AgentState(TypedDict):
     # Operation tracking
     current_operation: Optional[str]
     operation_progress: float  # 0.0 - 1.0
+
+    # Internal routing (set by capability nodes before routing to tools)
+    active_node: Optional[str]

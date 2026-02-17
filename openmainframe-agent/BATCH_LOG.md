@@ -37,3 +37,17 @@
   - agent/src/tools/dataset_tools.py (list_catalog, idcams_command)
   - agent/src/agent.py (updated — ALL_TOOLS wired into create_agent)
 - Notes: All tools use sanitize_path for directory traversal prevention. IDCAMS has verb allowlist (DEFINE, DELETE, REPRO, LISTCAT, PRINT) + shell metacharacter rejection. Timeouts: 300s for scan/run, 120s for compile/interpret, 30s for check/lex/parse, 60s for IDCAMS.
+
+## Batch 3: Compilation Agent (E-500)
+- Status: COMPLETE
+- Date: 2026-02-17
+- Files:
+  - agent/src/config.py (get_model factory — OpenAI/Anthropic configurable)
+  - agent/src/util.py (should_route_to_tool_node — frontend vs backend tool routing)
+  - agent/src/nodes/__init__.py (exports router_node, chat_node, compile_node)
+  - agent/src/nodes/router.py (intent classification → Command dispatch to capability nodes)
+  - agent/src/nodes/chat.py (general conversation fallback node)
+  - agent/src/nodes/compile.py (COBOL compilation with compile_cobol + check_cobol tools)
+  - agent/src/state.py (updated — extends CopilotKitState for messages + copilotkit fields, added active_node)
+  - agent/src/agent.py (updated — migrated from flat create_agent to StateGraph with router → compile/chat + ToolNode)
+- Notes: Migrated from Batch 1-2 flat create_agent pattern to explicit StateGraph with router → capability node dispatching. Router classifies all 6 intents (ASSESS, COMPILE, EXECUTE, EXPLAIN, DATASET, CHAT) but only COMPILE has a dedicated node; others fall back to chat. ToolNode uses all 10 tools; route_after_tools conditional edge returns to originating capability node via active_node state field. MemorySaver checkpointer configured for HITL support in later batches.
