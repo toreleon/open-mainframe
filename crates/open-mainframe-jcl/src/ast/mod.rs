@@ -120,6 +120,8 @@ pub struct Job {
     pub jcllib_order: Vec<String>,
     /// DD overrides for procedure steps (stepname.ddname → DdStatement).
     pub dd_overrides: Vec<DdOverride>,
+    /// OUTPUT statements defined in this job.
+    pub output_stmts: Vec<OutputStatement>,
 }
 
 /// A DD override for a procedure step.
@@ -334,6 +336,8 @@ pub struct DatasetDef {
     pub keyoff: Option<u32>,
     /// Average record count unit (AVGREC=U|K|M).
     pub avgrec: Option<String>,
+    /// GDG relative generation number (+1, 0, -1, etc.).
+    pub gdg_generation: Option<i32>,
 }
 
 /// Tape label specification.
@@ -404,6 +408,36 @@ pub struct UssFileDef {
     pub pathmode: Vec<String>,
     /// Path disposition: what to do on normal/abnormal termination.
     pub pathdisp: Option<(String, Option<String>)>,
+}
+
+/// OUTPUT JCL statement for SYSOUT processing control.
+#[derive(Debug, Clone)]
+pub struct OutputStatement {
+    /// Output statement name (1-8 characters).
+    pub name: String,
+    /// Output class.
+    pub class: Option<char>,
+    /// Destination (printer, node, etc.).
+    pub dest: Option<String>,
+    /// Number of copies.
+    pub copies: Option<u32>,
+    /// Form name.
+    pub forms: Option<String>,
+    /// Writer name.
+    pub writer: Option<String>,
+    /// Additional parameters.
+    pub other: HashMap<String, String>,
+}
+
+/// Dataset catalog trait for GDG resolution.
+///
+/// Resolves GDG relative generation references to absolute dataset names.
+pub trait DatasetCatalog {
+    /// Resolve a GDG relative reference to an absolute dataset name.
+    ///
+    /// `base` is the GDG base name (e.g., "MY.GDG") and `generation` is the
+    /// relative generation number (+1 for new, 0 for current, -1 for previous, etc.).
+    fn resolve_gdg(&self, base: &str, generation: i32) -> Result<String, String>;
 }
 
 /// VSAM Access Method Parameters.
@@ -567,6 +601,7 @@ impl Job {
             in_stream_procs: HashMap::new(),
             jcllib_order: Vec::new(),
             dd_overrides: Vec::new(),
+            output_stmts: Vec::new(),
         }
     }
 

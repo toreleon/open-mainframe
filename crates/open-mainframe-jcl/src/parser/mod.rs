@@ -87,11 +87,12 @@ impl<'a> Parser<'a> {
         let entries = self.parse_entries(&mut job, 0)?;
         job.entries = entries;
 
-        // Transfer collected symbols, procs, jcllib, and overrides to the job
+        // Transfer collected symbols, procs, jcllib, overrides, and output stmts to the job
         job.symbols = self.symbols.clone();
         job.in_stream_procs = self.in_stream_procs.clone();
         job.jcllib_order = self.jcllib_order.clone();
         job.dd_overrides = self.dd_overrides.clone();
+        // output_stmts are populated during parse_entries via parse_output_statement
 
         Ok(job)
     }
@@ -698,6 +699,12 @@ impl<'a> Parser<'a> {
                     job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
                     self.current += 1;
                 }
+                "OUTPUT" => {
+                    let output_stmt = self.parse_output_statement()?;
+                    job.output_stmts.push(output_stmt);
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    self.current += 1;
+                }
                 _ => {
                     return Err(JclError::ParseError {
                         message: format!(
@@ -1082,16 +1089,26 @@ impl<'a> Parser<'a> {
 
         self.current += 1;
 
-        // Parse DD statements for this step
+        // Parse DD statements for this step (with concatenation support).
+        // An unnamed DD (no name field) following a named DD is a concatenation.
         while self.current < self.statements.len() {
             let stmt = &self.statements[self.current];
             if stmt.operation != "DD" {
                 break;
             }
+
+            let is_unnamed = stmt.name.is_none();
             let dd = self.parse_dd_statement()?;
-            // Extend step span to cover this DD
-            step.span = step.span.extend(dd.span);
-            step.add_dd(dd);
+
+            if is_unnamed && !step.dd_statements.is_empty() {
+                // This is a concatenation — add to the previous DD
+                let prev = step.dd_statements.last_mut().unwrap();
+                step.span = step.span.extend(dd.span);
+                self.add_to_concatenation(prev, dd);
+            } else {
+                step.span = step.span.extend(dd.span);
+                step.add_dd(dd);
+            }
             self.current += 1;
         }
 
@@ -1144,6 +1161,103 @@ impl<'a> Parser<'a> {
                 *idx += 1;
                 String::new()
             }
+        }
+    }
+
+    /// Parse an OUTPUT JCL statement.
+    fn parse_output_statement(&self) -> Result<OutputStatement, JclError> {
+        let stmt = &self.statements[self.current];
+        let name = stmt.name.clone().unwrap_or_else(|| "OUT".to_string());
+        let raw_operands = stmt.operands.clone();
+        let tokens = tokenize_operands(&raw_operands)?;
+
+        let mut class = None;
+        let mut dest = None;
+        let mut copies = None;
+        let mut forms = None;
+        let mut writer = None;
+        let mut other = HashMap::new();
+
+        let mut idx = 0;
+        while idx < tokens.len() {
+            if let Token::Ident(key) = &tokens[idx] {
+                idx += 1;
+                if idx < tokens.len() && matches!(tokens[idx], Token::Equals) {
+                    idx += 1;
+                    if idx < tokens.len() {
+                        match key.as_str() {
+                            "CLASS" => {
+                                if let Token::Ident(v) = &tokens[idx] {
+                                    class = v.chars().next();
+                                }
+                            }
+                            "DEST" => {
+                                if let Token::Ident(v) | Token::String(v) = &tokens[idx] {
+                                    dest = Some(v.clone());
+                                }
+                            }
+                            "COPIES" => {
+                                if let Token::Number(n) = &tokens[idx] {
+                                    copies = Some(*n as u32);
+                                }
+                            }
+                            "FORMS" => {
+                                if let Token::Ident(v) | Token::String(v) = &tokens[idx] {
+                                    forms = Some(v.clone());
+                                }
+                            }
+                            "WRITER" => {
+                                if let Token::Ident(v) | Token::String(v) = &tokens[idx] {
+                                    writer = Some(v.clone());
+                                }
+                            }
+                            _ => {
+                                if let Token::Ident(v) | Token::String(v) = &tokens[idx] {
+                                    other.insert(key.clone(), v.clone());
+                                }
+                            }
+                        }
+                        idx += 1;
+                    }
+                }
+            } else {
+                idx += 1;
+            }
+            if idx < tokens.len() && matches!(tokens[idx], Token::Comma) {
+                idx += 1;
+            }
+        }
+
+        Ok(OutputStatement {
+            name,
+            class,
+            dest,
+            copies,
+            forms,
+            writer,
+            other,
+        })
+    }
+
+    /// Convert a DD definition to a concatenation by adding another DD to it.
+    fn add_to_concatenation(&self, prev: &mut DdStatement, new_dd: DdStatement) {
+        // Extract the dataset def from the new DD
+        let new_def = match new_dd.definition {
+            DdDefinition::Dataset(def) => *def,
+            _ => return, // Only datasets can be concatenated
+        };
+
+        match prev.definition {
+            DdDefinition::Dataset(ref old_box) => {
+                // Convert single dataset to concatenation
+                let old_def = (**old_box).clone();
+                prev.definition = DdDefinition::Concatenation(vec![old_def, new_def]);
+            }
+            DdDefinition::Concatenation(ref mut datasets) => {
+                // Add to existing concatenation
+                datasets.push(new_def);
+            }
+            _ => {} // Can't concatenate non-dataset DDs
         }
     }
 
@@ -1411,7 +1525,9 @@ impl<'a> Parser<'a> {
                     if idx < tokens.len() {
                         match key.as_str() {
                             "DSN" | "DSNAME" => {
-                                def.dsn = self.collect_dsn(tokens, &mut idx);
+                                let (dsn, gdg) = self.collect_dsn_with_gdg(tokens, &mut idx);
+                                def.dsn = dsn;
+                                def.gdg_generation = gdg;
                                 continue;
                             }
                             "DISP" => {
@@ -1568,8 +1684,12 @@ impl<'a> Parser<'a> {
     }
 
     /// Collect dataset name (may contain qualifiers).
-    fn collect_dsn(&self, tokens: &[Token], idx: &mut usize) -> String {
+    ///
+    /// Also returns a GDG relative generation number if present
+    /// (e.g., `MY.GDG(+1)` returns `("MY.GDG", Some(1))`).
+    fn collect_dsn_with_gdg(&self, tokens: &[Token], idx: &mut usize) -> (String, Option<i32>) {
         let mut dsn = String::new();
+        let mut gdg_gen = None;
 
         while *idx < tokens.len() {
             match &tokens[*idx] {
@@ -1580,26 +1700,75 @@ impl<'a> Parser<'a> {
                     dsn.push('.');
                 }
                 Token::LParen => {
-                    // Member name in parens
-                    dsn.push('(');
+                    // Check if this is a GDG reference like (+1), (0), (-1)
+                    // or a member name like (MEMBER)
+                    let saved_idx = *idx;
                     *idx += 1;
-                    while *idx < tokens.len() {
-                        if matches!(tokens[*idx], Token::RParen) {
-                            dsn.push(')');
-                            *idx += 1;
-                            break;
+
+                    // Look for +N, -N, or just N (all numeric with optional sign)
+                    let mut is_gdg = false;
+
+                    if *idx < tokens.len() {
+                        // Check for + or - followed by number, or just a number
+                        match &tokens[*idx] {
+                            Token::Ident(v) if v == "+" => {
+                                *idx += 1;
+                                if *idx < tokens.len() {
+                                    if let Token::Number(n) = &tokens[*idx] {
+                                        gdg_gen = Some(*n as i32);
+                                        *idx += 1;
+                                        is_gdg = true;
+                                    }
+                                }
+                            }
+                            Token::Ident(v) if v == "-" => {
+                                *idx += 1;
+                                if *idx < tokens.len() {
+                                    if let Token::Number(n) = &tokens[*idx] {
+                                        gdg_gen = Some(-(*n as i32));
+                                        *idx += 1;
+                                        is_gdg = true;
+                                    }
+                                }
+                            }
+                            Token::Number(n) => {
+                                gdg_gen = Some(*n as i32);
+                                *idx += 1;
+                                is_gdg = true;
+                            }
+                            _ => {}
                         }
-                        if let Token::Ident(m) = &tokens[*idx] {
-                            dsn.push_str(m);
-                        }
-                        *idx += 1;
                     }
-                    return dsn;
+
+                    if is_gdg {
+                        // Skip RParen
+                        if *idx < tokens.len() && matches!(tokens[*idx], Token::RParen) {
+                            *idx += 1;
+                        }
+                        return (dsn, gdg_gen);
+                    } else {
+                        // Not a GDG, this is a member name in parens
+                        *idx = saved_idx;
+                        dsn.push('(');
+                        *idx += 1;
+                        while *idx < tokens.len() {
+                            if matches!(tokens[*idx], Token::RParen) {
+                                dsn.push(')');
+                                *idx += 1;
+                                break;
+                            }
+                            if let Token::Ident(m) = &tokens[*idx] {
+                                dsn.push_str(m);
+                            }
+                            *idx += 1;
+                        }
+                        return (dsn, None);
+                    }
                 }
                 Token::String(s) => {
                     dsn = s.clone();
                     *idx += 1;
-                    return dsn;
+                    return (dsn, None);
                 }
                 Token::Ampersand => {
                     // Symbolic parameter
@@ -1610,7 +1779,12 @@ impl<'a> Parser<'a> {
             *idx += 1;
         }
 
-        dsn
+        (dsn, gdg_gen)
+    }
+
+    /// Collect dataset name (may contain qualifiers).
+    fn collect_dsn(&self, tokens: &[Token], idx: &mut usize) -> String {
+        self.collect_dsn_with_gdg(tokens, idx).0
     }
 
     /// Parse DISP parameter.
@@ -3153,5 +3327,159 @@ mod tests {
             "Error should mention ENDIF: {}",
             err
         );
+    }
+
+    // ======================================================================
+    // Epic 106: INCLUDE Statement and DD Concatenation
+    // ======================================================================
+
+    /// Story 106.2: DD concatenation — unnamed DDs form a concatenation.
+    #[test]
+    fn test_parse_dd_concatenation() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=MYPROC
+//INPUT    DD DSN=FIRST.DATA,DISP=SHR
+//         DD DSN=SECOND.DATA,DISP=SHR
+//         DD DSN=THIRD.DATA,DISP=SHR
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        assert_eq!(steps.len(), 1);
+        // Should have 1 DD (concatenated), not 3
+        assert_eq!(steps[0].dd_statements.len(), 1);
+
+        let dd = &steps[0].dd_statements[0];
+        assert_eq!(dd.name, "INPUT");
+        if let DdDefinition::Concatenation(ref datasets) = dd.definition {
+            assert_eq!(datasets.len(), 3);
+            assert_eq!(datasets[0].dsn, "FIRST.DATA");
+            assert_eq!(datasets[1].dsn, "SECOND.DATA");
+            assert_eq!(datasets[2].dsn, "THIRD.DATA");
+        } else {
+            panic!("Expected Concatenation definition, got {:?}", dd.definition);
+        }
+    }
+
+    /// Story 106.2: Mixed DDs — named DD after unnamed (not concatenated).
+    #[test]
+    fn test_parse_dd_concat_then_named() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=MYPROC
+//INPUT    DD DSN=FIRST.DATA,DISP=SHR
+//         DD DSN=SECOND.DATA,DISP=SHR
+//OUTPUT   DD SYSOUT=*
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let steps = job.steps();
+        // 2 DDs: INPUT (concatenated) and OUTPUT
+        assert_eq!(steps[0].dd_statements.len(), 2);
+
+        // INPUT is concatenated
+        let dd = &steps[0].dd_statements[0];
+        assert_eq!(dd.name, "INPUT");
+        if let DdDefinition::Concatenation(ref datasets) = dd.definition {
+            assert_eq!(datasets.len(), 2);
+        } else {
+            panic!("Expected Concatenation");
+        }
+
+        // OUTPUT is a separate DD
+        let dd2 = &steps[0].dd_statements[1];
+        assert_eq!(dd2.name, "OUTPUT");
+    }
+
+    // ======================================================================
+    // Epic 107: GDG Support and OUTPUT Statement
+    // ======================================================================
+
+    /// Story 107.1: GDG relative reference parsing (+1).
+    #[test]
+    fn test_parse_gdg_positive() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=TEST
+//OUT      DD DSN=MY.GDG(+1),DISP=(NEW,CATLG)
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "MY.GDG");
+            assert_eq!(def.gdg_generation, Some(1));
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 107.1: GDG relative reference parsing (0 = current).
+    #[test]
+    fn test_parse_gdg_current() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=TEST
+//IN       DD DSN=MY.GDG(0),DISP=SHR
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "MY.GDG");
+            assert_eq!(def.gdg_generation, Some(0));
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 107.1: Regular member names are not confused with GDG.
+    #[test]
+    fn test_parse_pds_member_not_gdg() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//STEP1    EXEC PGM=TEST
+//IN       DD DSN=MY.PDS(MEMBER),DISP=SHR
+//"#;
+
+        let job = parse(jcl).unwrap();
+        let dd = &job.steps()[0].dd_statements[0];
+        if let DdDefinition::Dataset(ref def) = dd.definition {
+            assert_eq!(def.dsn, "MY.PDS(MEMBER)");
+            assert_eq!(def.gdg_generation, None);
+        } else {
+            panic!("Expected Dataset definition");
+        }
+    }
+
+    /// Story 107.3: OUTPUT statement parsing.
+    #[test]
+    fn test_parse_output_statement() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//OUT1     OUTPUT CLASS=A,DEST=REMOTE1,COPIES=3,FORMS=STD
+//STEP1    EXEC PGM=TEST
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.output_stmts.len(), 1);
+
+        let out = &job.output_stmts[0];
+        assert_eq!(out.name, "OUT1");
+        assert_eq!(out.class, Some('A'));
+        assert_eq!(out.dest, Some("REMOTE1".to_string()));
+        assert_eq!(out.copies, Some(3));
+        assert_eq!(out.forms, Some("STD".to_string()));
+    }
+
+    /// Story 107.3: Multiple OUTPUT statements.
+    #[test]
+    fn test_parse_multiple_output_stmts() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//OUT1     OUTPUT CLASS=A,DEST=LOCAL
+//OUT2     OUTPUT CLASS=B,COPIES=5
+//STEP1    EXEC PGM=TEST
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.output_stmts.len(), 2);
+        assert_eq!(job.output_stmts[0].name, "OUT1");
+        assert_eq!(job.output_stmts[1].name, "OUT2");
+        assert_eq!(job.output_stmts[1].copies, Some(5));
     }
 }

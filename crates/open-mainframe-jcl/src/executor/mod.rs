@@ -323,11 +323,15 @@ impl JobExecutor {
                     PathBuf::from("/dev/null")
                 }
                 DdDefinition::Concatenation(datasets) => {
-                    // For now, just use first dataset
-                    if let Some(first) = datasets.first() {
-                        self.resolve_dataset(&first.dsn, &first.disp)?
+                    // Concatenation: combine all datasets into a single temp file
+                    if datasets.len() == 1 {
+                        self.resolve_dataset(&datasets[0].dsn, &datasets[0].disp)?
                     } else {
-                        PathBuf::from("/dev/null")
+                        let concat_path = self.config.work_dir.join(
+                            format!("{}_{}.concat", dd.name, step_idx),
+                        );
+                        self.concatenate_datasets(datasets, &concat_path)?;
+                        concat_path
                     }
                 }
                 DdDefinition::UssFile(def) => {
@@ -414,6 +418,68 @@ impl JobExecutor {
         }
 
         Ok(path)
+    }
+
+    /// Concatenate multiple datasets into a single output file.
+    fn concatenate_datasets(
+        &mut self,
+        datasets: &[DatasetDef],
+        output_path: &Path,
+    ) -> Result<(), JclError> {
+        let mut out = std::fs::File::create(output_path).map_err(|e| JclError::ExecutionFailed {
+            message: format!("Failed to create concatenation file: {}", e),
+        })?;
+
+        for ds in datasets {
+            let path = self.resolve_dataset(&ds.dsn, &ds.disp)?;
+            if path.exists() {
+                let content = std::fs::read(&path).map_err(|e| JclError::ExecutionFailed {
+                    message: format!("Failed to read dataset {} for concatenation: {}", ds.dsn, e),
+                })?;
+                out.write_all(&content).map_err(|e| JclError::ExecutionFailed {
+                    message: format!("Failed to write concatenated data: {}", e),
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve a GDG relative reference to an absolute dataset name.
+    ///
+    /// Given a base name like "MY.GDG" and generation +1, scans the dataset directory
+    /// for existing generations (G0001V00 pattern) and returns the resolved name.
+    pub fn resolve_gdg(&self, base: &str, generation: i32) -> Result<String, JclError> {
+        // Convert DSN to directory path
+        let mut base_path = self.config.dataset_dir.clone();
+        for part in base.split('.') {
+            base_path.push(part);
+        }
+
+        // Find existing generations by scanning directory
+        let mut max_gen = 0u32;
+        if base_path.exists() && base_path.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&base_path) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    // Match pattern G0001V00
+                    if name.starts_with('G') && name.len() >= 8 && name.contains('V') {
+                        if let Ok(g) = name[1..5].parse::<u32>() {
+                            max_gen = max_gen.max(g);
+                        }
+                    }
+                }
+            }
+        }
+
+        let target_gen = (max_gen as i32 + generation).max(0) as u32;
+        // Special case: generation 0 means current (max_gen)
+        let abs_gen = if generation == 0 {
+            max_gen
+        } else {
+            target_gen
+        };
+
+        Ok(format!("{}.G{:04}V00", base, abs_gen))
     }
 
     /// Write inline data to a file.
@@ -627,6 +693,7 @@ pub fn run_with_config(source: &str, config: ExecutionConfig) -> Result<JobResul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_execution_config_default() {
@@ -887,6 +954,41 @@ mod tests {
 
         // First condition true (RC=0), so OR is true
         assert!(executor.evaluate_condition(&condition, &results));
+    }
+
+    // ======================================================================
+    // Epic 107: GDG Resolution
+    // ======================================================================
+
+    /// Story 107.2: GDG resolution for new generation (+1).
+    #[test]
+    fn test_resolve_gdg_positive() {
+        let temp_dir = std::env::temp_dir().join("jcl_gdg_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        let dataset_dir = temp_dir.join("datasets");
+
+        // Create GDG base directory with existing generations
+        let gdg_dir = dataset_dir.join("MY").join("GDG");
+        fs::create_dir_all(&gdg_dir).unwrap();
+        fs::write(gdg_dir.join("G0001V00"), "gen1").unwrap();
+        fs::write(gdg_dir.join("G0002V00"), "gen2").unwrap();
+        fs::write(gdg_dir.join("G0003V00"), "gen3").unwrap();
+
+        let config = ExecutionConfig {
+            dataset_dir,
+            ..Default::default()
+        };
+        let executor = JobExecutor::with_config(config);
+
+        // +1 should resolve to G0004V00
+        let resolved = executor.resolve_gdg("MY.GDG", 1).unwrap();
+        assert_eq!(resolved, "MY.GDG.G0004V00");
+
+        // 0 should resolve to current = G0003V00
+        let resolved = executor.resolve_gdg("MY.GDG", 0).unwrap();
+        assert_eq!(resolved, "MY.GDG.G0003V00");
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     /// Story 103.3: NOT condition.
