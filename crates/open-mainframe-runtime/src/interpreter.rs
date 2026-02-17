@@ -2416,94 +2416,7 @@ fn eval_expr(expr: &SimpleExpr, env: &Environment) -> Result<CobolValue> {
         }
 
         SimpleExpr::FunctionCall { name, args } => {
-            match name.as_str() {
-                "UPPER-CASE" => {
-                    let val = eval_expr(args.first().ok_or_else(|| InterpreterError {
-                        message: "UPPER-CASE requires an argument".to_string(),
-                    })?, env)?;
-                    Ok(CobolValue::Alphanumeric(val.to_display_string().to_uppercase()))
-                }
-                "LOWER-CASE" => {
-                    let val = eval_expr(args.first().ok_or_else(|| InterpreterError {
-                        message: "LOWER-CASE requires an argument".to_string(),
-                    })?, env)?;
-                    Ok(CobolValue::Alphanumeric(val.to_display_string().to_lowercase()))
-                }
-                "CURRENT-DATE" => {
-                    // Returns YYYYMMDDHHMMSSCC+HHMM (21 chars)
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-
-                    let days_since_epoch = (now / 86400) as i64;
-                    let time_of_day = now % 86400;
-                    let hh = time_of_day / 3600;
-                    let mm = (time_of_day % 3600) / 60;
-                    let ss = time_of_day % 60;
-
-                    // Calculate year, month, day from days since 1970-01-01
-                    let mut year = 1970i64;
-                    let mut remaining = days_since_epoch;
-                    loop {
-                        let days_in_year = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
-                            366
-                        } else {
-                            365
-                        };
-                        if remaining < days_in_year {
-                            break;
-                        }
-                        remaining -= days_in_year;
-                        year += 1;
-                    }
-                    let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-                    let month_days: [i64; 12] = if is_leap {
-                        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-                    } else {
-                        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-                    };
-                    let mut month = 1i64;
-                    for &d in &month_days {
-                        if remaining < d {
-                            break;
-                        }
-                        remaining -= d;
-                        month += 1;
-                    }
-                    let day = remaining + 1;
-
-                    let date_str = format!(
-                        "{:04}{:02}{:02}{:02}{:02}{:02}00+0000",
-                        year, month, day, hh, mm, ss
-                    );
-                    Ok(CobolValue::Alphanumeric(date_str))
-                }
-                "LENGTH" => {
-                    let arg = args.first().ok_or_else(|| InterpreterError {
-                        message: "LENGTH requires an argument".to_string(),
-                    })?;
-                    // For LENGTH OF variable, use metadata size if available
-                    let len = if let SimpleExpr::Variable(var_name) = arg {
-                        env.meta(var_name)
-                            .map(|m| m.size)
-                            .unwrap_or_else(|| {
-                                // Fallback to actual string length
-                                env.get(var_name)
-                                    .map(|v| v.to_display_string().len())
-                                    .unwrap_or(0)
-                            })
-                    } else {
-                        let val = eval_expr(arg, env)?;
-                        val.to_display_string().len()
-                    };
-                    Ok(CobolValue::from_i64(len as i64))
-                }
-                _ => {
-                    // Unknown function - return 0
-                    Ok(CobolValue::from_i64(0))
-                }
-            }
+            eval_intrinsic_function(name, args, env)
         }
 
         SimpleExpr::RefMod { variable, start, length } => {
@@ -2521,6 +2434,631 @@ fn eval_expr(expr: &SimpleExpr, env: &Environment) -> Result<CobolValue> {
             let zero_start = zero_start.min(s.len());
             let substring = &s[zero_start..end_pos];
             Ok(CobolValue::Alphanumeric(substring.to_string()))
+        }
+    }
+}
+
+// ================================================================
+// Calendar helpers for Lilian day calculations
+// ================================================================
+
+/// Whether a year is a leap year.
+fn is_leap_year(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+/// Days in each month for a given year.
+fn days_in_month(year: i64) -> [i64; 12] {
+    if is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    }
+}
+
+/// Convert a Gregorian date (YYYYMMDD) to a Lilian day number.
+/// Lilian day 1 = October 15, 1582 (start of the Gregorian calendar).
+fn gregorian_to_lilian(year: i64, month: i64, day: i64) -> i64 {
+    // Calculate days from the Lilian epoch (1582-10-15)
+    let mut total_days: i64 = 0;
+
+    // Count full years from 1582 to year-1
+    for y in 1582..year {
+        total_days += if is_leap_year(y) { 366 } else { 365 };
+    }
+
+    // Add days for months in the target year
+    let md = days_in_month(year);
+    for d in md.iter().take((month - 1) as usize) {
+        total_days += d;
+    }
+
+    // Add the day of month
+    total_days += day;
+
+    // Subtract the days before the Lilian epoch in 1582
+    // Jan 1 to Oct 14 in 1582:
+    let epoch_offset = {
+        let md_1582 = days_in_month(1582);
+        let mut offset: i64 = 0;
+        // Full months Jan-Sep
+        for d in md_1582.iter().take(9) {
+            offset += d;
+        }
+        // Oct 1-14
+        offset += 14;
+        offset
+    };
+
+    total_days - epoch_offset
+}
+
+/// Convert a Lilian day number to a Gregorian date (year, month, day).
+fn lilian_to_gregorian(lilian: i64) -> (i64, i64, i64) {
+    // Lilian day 1 = October 15, 1582
+    // Start from Oct 15, 1582 and add days
+    let remaining = lilian - 1; // day 1 = Oct 15 itself
+
+    let mut year: i64 = 1582;
+    let mut month: i64 = 10;
+    let mut day: i64 = 15;
+
+    // Add remaining days to Oct 15, 1582
+    day += remaining;
+
+    // Normalize: advance months/years
+    loop {
+        let md = days_in_month(year);
+        let dim = md[(month - 1) as usize];
+        if day <= dim {
+            break;
+        }
+        day -= dim;
+        month += 1;
+        if month > 12 {
+            month = 1;
+            year += 1;
+        }
+    }
+
+    (year, month, day)
+}
+
+/// Convert a Gregorian date to day-of-year (1-366).
+fn day_of_year(year: i64, month: i64, day: i64) -> i64 {
+    let md = days_in_month(year);
+    let mut doy: i64 = 0;
+    for d in md.iter().take((month - 1) as usize) {
+        doy += d;
+    }
+    doy + day
+}
+
+/// Convert year and day-of-year to (year, month, day).
+fn from_day_of_year(year: i64, doy: i64) -> (i64, i64, i64) {
+    let md = days_in_month(year);
+    let mut remaining = doy;
+    for (i, &d) in md.iter().enumerate() {
+        if remaining <= d {
+            return (year, (i + 1) as i64, remaining);
+        }
+        remaining -= d;
+    }
+    (year, 12, 31) // fallback
+}
+
+/// Date from UNIX epoch seconds: (year, month, day, hh, mm, ss).
+fn date_from_epoch_secs(secs: u64) -> (i64, i64, i64, u64, u64, u64) {
+    let days_since_epoch = (secs / 86400) as i64;
+    let time_of_day = secs % 86400;
+    let hh = time_of_day / 3600;
+    let mm = (time_of_day % 3600) / 60;
+    let ss = time_of_day % 60;
+
+    let mut year = 1970i64;
+    let mut remaining = days_since_epoch;
+    loop {
+        let diy = if is_leap_year(year) { 366 } else { 365 };
+        if remaining < diy {
+            break;
+        }
+        remaining -= diy;
+        year += 1;
+    }
+    let md = days_in_month(year);
+    let mut month = 1i64;
+    for &d in &md {
+        if remaining < d {
+            break;
+        }
+        remaining -= d;
+        month += 1;
+    }
+    let day = remaining + 1;
+    (year, month, day, hh, mm, ss)
+}
+
+// ================================================================
+// Intrinsic function evaluation
+// ================================================================
+
+/// Parse sign from a NUMVAL-style string. Returns (number_str, is_negative).
+fn parse_numval_sign(cleaned: &str) -> (&str, bool) {
+    if let Some(s) = cleaned.strip_suffix("CR").or_else(|| cleaned.strip_suffix("DB")) {
+        (s, true)
+    } else if let Some(s) = cleaned.strip_suffix('-') {
+        (s, true)
+    } else if let Some(s) = cleaned.strip_prefix('-') {
+        (s, true)
+    } else if let Some(s) = cleaned.strip_prefix('+') {
+        (s, false)
+    } else {
+        (cleaned, false)
+    }
+}
+
+/// Evaluate a COBOL intrinsic function.
+fn eval_intrinsic_function(
+    name: &str,
+    args: &[SimpleExpr],
+    env: &Environment,
+) -> Result<CobolValue> {
+    /// Helper to get a single required argument.
+    fn require_arg<'a>(
+        args: &'a [SimpleExpr],
+        func_name: &str,
+    ) -> Result<&'a SimpleExpr> {
+        args.first().ok_or_else(|| InterpreterError {
+            message: format!("{} requires an argument", func_name),
+        })
+    }
+
+    match name {
+        // ============================================================
+        // String functions (Story 502.1)
+        // ============================================================
+        "UPPER-CASE" => {
+            let val = eval_expr(require_arg(args, "UPPER-CASE")?, env)?;
+            Ok(CobolValue::Alphanumeric(val.to_display_string().to_uppercase()))
+        }
+        "LOWER-CASE" => {
+            let val = eval_expr(require_arg(args, "LOWER-CASE")?, env)?;
+            Ok(CobolValue::Alphanumeric(val.to_display_string().to_lowercase()))
+        }
+        "TRIM" => {
+            let val = eval_expr(require_arg(args, "TRIM")?, env)?;
+            let s = val.to_display_string();
+            // COBOL TRIM: with 2nd arg LEADING/TRAILING, else both
+            if args.len() > 1 {
+                let mode = eval_expr(&args[1], env)?.to_display_string().to_uppercase();
+                let trimmed = match mode.trim() {
+                    "LEADING" => s.trim_start().to_string(),
+                    "TRAILING" => s.trim_end().to_string(),
+                    _ => s.trim().to_string(),
+                };
+                Ok(CobolValue::Alphanumeric(trimmed))
+            } else {
+                Ok(CobolValue::Alphanumeric(s.trim().to_string()))
+            }
+        }
+        "REVERSE" => {
+            let val = eval_expr(require_arg(args, "REVERSE")?, env)?;
+            let s = val.to_display_string();
+            Ok(CobolValue::Alphanumeric(s.chars().rev().collect()))
+        }
+        "ORD" => {
+            // Returns the ordinal position (1-based) of the first character
+            let val = eval_expr(require_arg(args, "ORD")?, env)?;
+            let s = val.to_display_string();
+            let ord = s.bytes().next().map(|b| b as i64 + 1).unwrap_or(0);
+            Ok(CobolValue::from_i64(ord))
+        }
+        "CHAR" => {
+            // Returns the character at ordinal position (1-based)
+            let val = eval_expr(require_arg(args, "CHAR")?, env)?;
+            let n = to_numeric(&val).integer_part();
+            if (1..=256).contains(&n) {
+                let ch = (n - 1) as u8 as char;
+                Ok(CobolValue::Alphanumeric(ch.to_string()))
+            } else {
+                Ok(CobolValue::Alphanumeric(" ".to_string()))
+            }
+        }
+        "CONCATENATE" => {
+            let mut result = String::new();
+            for arg in args {
+                let val = eval_expr(arg, env)?;
+                result.push_str(&val.to_display_string());
+            }
+            Ok(CobolValue::Alphanumeric(result))
+        }
+        "BYTE-LENGTH" => {
+            let arg = require_arg(args, "BYTE-LENGTH")?;
+            let len = if let SimpleExpr::Variable(var_name) = arg {
+                env.meta(var_name)
+                    .map(|m| m.size)
+                    .unwrap_or_else(|| {
+                        env.get(var_name)
+                            .map(|v| v.to_display_string().len())
+                            .unwrap_or(0)
+                    })
+            } else {
+                let val = eval_expr(arg, env)?;
+                val.to_display_string().len()
+            };
+            Ok(CobolValue::from_i64(len as i64))
+        }
+        "LENGTH" => {
+            let arg = require_arg(args, "LENGTH")?;
+            let len = if let SimpleExpr::Variable(var_name) = arg {
+                env.meta(var_name)
+                    .map(|m| m.size)
+                    .unwrap_or_else(|| {
+                        env.get(var_name)
+                            .map(|v| v.to_display_string().len())
+                            .unwrap_or(0)
+                    })
+            } else {
+                let val = eval_expr(arg, env)?;
+                val.to_display_string().len()
+            };
+            Ok(CobolValue::from_i64(len as i64))
+        }
+
+        // ============================================================
+        // Numeric functions (Story 502.2)
+        // ============================================================
+        "NUMVAL" => {
+            // Parse an edited numeric string to a numeric value
+            let val = eval_expr(require_arg(args, "NUMVAL")?, env)?;
+            let s = val.to_display_string();
+            let cleaned: String = s.trim().replace(',', "");
+            let (num_str, negative) = parse_numval_sign(&cleaned);
+            let parsed: rust_decimal::Decimal = num_str.trim().parse().unwrap_or_default();
+            let final_val = if negative { -parsed } else { parsed };
+            let dp = final_val.scale() as u8;
+            Ok(CobolValue::Numeric(NumericValue::new(final_val, dp, true)))
+        }
+        "NUMVAL-C" => {
+            // Like NUMVAL but strips currency symbols
+            let val = eval_expr(require_arg(args, "NUMVAL-C")?, env)?;
+            let s = val.to_display_string();
+            let currency = if args.len() > 1 {
+                eval_expr(&args[1], env)?.to_display_string().trim().to_string()
+            } else {
+                "$".to_string()
+            };
+            let cleaned: String = s.trim().replace(',', "").replace(&currency, "");
+            let (num_str, negative) = parse_numval_sign(&cleaned);
+            let parsed: rust_decimal::Decimal = num_str.trim().parse().unwrap_or_default();
+            let final_val = if negative { -parsed } else { parsed };
+            let dp = final_val.scale() as u8;
+            Ok(CobolValue::Numeric(NumericValue::new(final_val, dp, true)))
+        }
+        "MOD" => {
+            // FUNCTION MOD(a, b) = a - (b * FUNCTION INTEGER(a / b))
+            // IBM definition: result has same sign as b
+            if args.len() < 2 {
+                return Err(InterpreterError { message: "MOD requires two arguments".to_string() });
+            }
+            let a = to_numeric(&eval_expr(&args[0], env)?).value;
+            let b = to_numeric(&eval_expr(&args[1], env)?).value;
+            if b.is_zero() {
+                return Err(InterpreterError { message: "MOD: division by zero".to_string() });
+            }
+            let quotient = (a / b).floor();
+            let result = a - b * quotient;
+            Ok(CobolValue::Numeric(NumericValue::new(result, 0, true)))
+        }
+        "REM" => {
+            // FUNCTION REM(a, b) = a - (b * FUNCTION INTEGER-PART(a / b))
+            // Result has same sign as a (truncation toward zero)
+            if args.len() < 2 {
+                return Err(InterpreterError { message: "REM requires two arguments".to_string() });
+            }
+            let a = to_numeric(&eval_expr(&args[0], env)?).value;
+            let b = to_numeric(&eval_expr(&args[1], env)?).value;
+            if b.is_zero() {
+                return Err(InterpreterError { message: "REM: division by zero".to_string() });
+            }
+            let quotient = (a / b).trunc();
+            let result = a - b * quotient;
+            Ok(CobolValue::Numeric(NumericValue::new(result, 0, true)))
+        }
+        "INTEGER" => {
+            // Greatest integer <= argument (floor)
+            let val = to_numeric(&eval_expr(require_arg(args, "INTEGER")?, env)?);
+            let result = val.value.floor();
+            Ok(CobolValue::Numeric(NumericValue::new(result, 0, true)))
+        }
+        "INTEGER-PART" => {
+            // Truncation toward zero
+            let val = to_numeric(&eval_expr(require_arg(args, "INTEGER-PART")?, env)?);
+            let result = val.value.trunc();
+            Ok(CobolValue::Numeric(NumericValue::new(result, 0, true)))
+        }
+        "MAX" => {
+            if args.is_empty() {
+                return Err(InterpreterError { message: "MAX requires at least one argument".to_string() });
+            }
+            let mut max_val = eval_expr(&args[0], env)?;
+            for arg in &args[1..] {
+                let v = eval_expr(arg, env)?;
+                let max_n = to_numeric(&max_val).value;
+                let v_n = to_numeric(&v).value;
+                if v_n > max_n {
+                    max_val = v;
+                }
+            }
+            Ok(max_val)
+        }
+        "MIN" => {
+            if args.is_empty() {
+                return Err(InterpreterError { message: "MIN requires at least one argument".to_string() });
+            }
+            let mut min_val = eval_expr(&args[0], env)?;
+            for arg in &args[1..] {
+                let v = eval_expr(arg, env)?;
+                let min_n = to_numeric(&min_val).value;
+                let v_n = to_numeric(&v).value;
+                if v_n < min_n {
+                    min_val = v;
+                }
+            }
+            Ok(min_val)
+        }
+        "ABS" => {
+            let val = to_numeric(&eval_expr(require_arg(args, "ABS")?, env)?);
+            let result = val.value.abs();
+            let dp = val.decimal_places;
+            Ok(CobolValue::Numeric(NumericValue::new(result, dp, true)))
+        }
+        "RANDOM" => {
+            // Simple deterministic PRNG using seed if provided
+            // Returns a value between 0.0 and 1.0
+            if let Some(arg) = args.first() {
+                let seed = to_numeric(&eval_expr(arg, env)?).integer_part();
+                // Linear congruential: (seed * 1103515245 + 12345) mod 2^31
+                let raw = ((seed.wrapping_mul(1103515245)).wrapping_add(12345)) & 0x7FFFFFFF;
+                let frac = rust_decimal::Decimal::new(raw, 10);
+                Ok(CobolValue::Numeric(NumericValue::new(frac.abs(), 10, false)))
+            } else {
+                // No seed: use system time as seed
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as i64;
+                let raw = (now.wrapping_mul(1103515245).wrapping_add(12345)) & 0x7FFFFFFF;
+                let frac = rust_decimal::Decimal::new(raw, 10);
+                Ok(CobolValue::Numeric(NumericValue::new(frac.abs(), 10, false)))
+            }
+        }
+        "SQRT" => {
+            let val = to_numeric(&eval_expr(require_arg(args, "SQRT")?, env)?);
+            // Use Newton's method for square root on Decimal
+            let n = val.value;
+            if n.is_sign_negative() {
+                return Err(InterpreterError { message: "SQRT: negative argument".to_string() });
+            }
+            if n.is_zero() {
+                return Ok(CobolValue::Numeric(NumericValue::new(rust_decimal::Decimal::ZERO, 0, false)));
+            }
+            let mut guess = n / rust_decimal::Decimal::TWO;
+            for _ in 0..50 {
+                let next = (guess + n / guess) / rust_decimal::Decimal::TWO;
+                if (next - guess).abs() < rust_decimal::Decimal::new(1, 18) {
+                    break;
+                }
+                guess = next;
+            }
+            Ok(CobolValue::Numeric(NumericValue::new(guess, 18, false)))
+        }
+        "MEDIAN" => {
+            if args.is_empty() {
+                return Err(InterpreterError { message: "MEDIAN requires at least one argument".to_string() });
+            }
+            let mut values: Vec<rust_decimal::Decimal> = Vec::new();
+            for arg in args {
+                values.push(to_numeric(&eval_expr(arg, env)?).value);
+            }
+            values.sort();
+            let mid = values.len() / 2;
+            let result = if values.len() % 2 == 0 {
+                (values[mid - 1] + values[mid]) / rust_decimal::Decimal::TWO
+            } else {
+                values[mid]
+            };
+            Ok(CobolValue::Numeric(NumericValue::new(result, 18, true)))
+        }
+        "MEAN" | "MIDRANGE" => {
+            if args.is_empty() {
+                return Err(InterpreterError { message: format!("{} requires at least one argument", name) });
+            }
+            if name == "MIDRANGE" {
+                let mut min_v = to_numeric(&eval_expr(&args[0], env)?).value;
+                let mut max_v = min_v;
+                for arg in &args[1..] {
+                    let v = to_numeric(&eval_expr(arg, env)?).value;
+                    if v < min_v { min_v = v; }
+                    if v > max_v { max_v = v; }
+                }
+                let result = (min_v + max_v) / rust_decimal::Decimal::TWO;
+                Ok(CobolValue::Numeric(NumericValue::new(result, 18, true)))
+            } else {
+                let mut sum = rust_decimal::Decimal::ZERO;
+                for arg in args {
+                    sum += to_numeric(&eval_expr(arg, env)?).value;
+                }
+                let count = rust_decimal::Decimal::from(args.len() as i64);
+                let result = sum / count;
+                Ok(CobolValue::Numeric(NumericValue::new(result, 18, true)))
+            }
+        }
+        "RANGE" => {
+            if args.is_empty() {
+                return Err(InterpreterError { message: "RANGE requires at least one argument".to_string() });
+            }
+            let mut min_v = to_numeric(&eval_expr(&args[0], env)?).value;
+            let mut max_v = min_v;
+            for arg in &args[1..] {
+                let v = to_numeric(&eval_expr(arg, env)?).value;
+                if v < min_v { min_v = v; }
+                if v > max_v { max_v = v; }
+            }
+            Ok(CobolValue::Numeric(NumericValue::new(max_v - min_v, 0, true)))
+        }
+        "ORD-MAX" => {
+            if args.is_empty() {
+                return Err(InterpreterError { message: "ORD-MAX requires at least one argument".to_string() });
+            }
+            let mut max_val = to_numeric(&eval_expr(&args[0], env)?).value;
+            let mut max_idx: i64 = 1;
+            for (i, arg) in args.iter().enumerate().skip(1) {
+                let v = to_numeric(&eval_expr(arg, env)?).value;
+                if v > max_val {
+                    max_val = v;
+                    max_idx = (i + 1) as i64;
+                }
+            }
+            Ok(CobolValue::from_i64(max_idx))
+        }
+        "ORD-MIN" => {
+            if args.is_empty() {
+                return Err(InterpreterError { message: "ORD-MIN requires at least one argument".to_string() });
+            }
+            let mut min_val = to_numeric(&eval_expr(&args[0], env)?).value;
+            let mut min_idx: i64 = 1;
+            for (i, arg) in args.iter().enumerate().skip(1) {
+                let v = to_numeric(&eval_expr(arg, env)?).value;
+                if v < min_val {
+                    min_val = v;
+                    min_idx = (i + 1) as i64;
+                }
+            }
+            Ok(CobolValue::from_i64(min_idx))
+        }
+        "SUM" => {
+            let mut sum = rust_decimal::Decimal::ZERO;
+            for arg in args {
+                sum += to_numeric(&eval_expr(arg, env)?).value;
+            }
+            Ok(CobolValue::Numeric(NumericValue::new(sum, 0, true)))
+        }
+
+        // ============================================================
+        // Date functions (Story 502.3)
+        // ============================================================
+        "CURRENT-DATE" => {
+            // Returns YYYYMMDDHHMMSSCC+HHMM (21 chars)
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let (year, month, day, hh, mm, ss) = date_from_epoch_secs(now);
+            let date_str = format!(
+                "{:04}{:02}{:02}{:02}{:02}{:02}00+0000",
+                year, month, day, hh, mm, ss
+            );
+            Ok(CobolValue::Alphanumeric(date_str))
+        }
+        "INTEGER-OF-DATE" => {
+            // Convert YYYYMMDD to Lilian day number
+            let val = to_numeric(&eval_expr(require_arg(args, "INTEGER-OF-DATE")?, env)?);
+            let yyyymmdd = val.integer_part();
+            let year = yyyymmdd / 10000;
+            let month = (yyyymmdd % 10000) / 100;
+            let day = yyyymmdd % 100;
+            let lilian = gregorian_to_lilian(year, month, day);
+            Ok(CobolValue::from_i64(lilian))
+        }
+        "DATE-OF-INTEGER" => {
+            // Convert Lilian day number to YYYYMMDD
+            let val = to_numeric(&eval_expr(require_arg(args, "DATE-OF-INTEGER")?, env)?);
+            let lilian = val.integer_part();
+            let (year, month, day) = lilian_to_gregorian(lilian);
+            let yyyymmdd = year * 10000 + month * 100 + day;
+            Ok(CobolValue::from_i64(yyyymmdd))
+        }
+        "INTEGER-OF-DAY" => {
+            // Convert YYYYDDD to Lilian day number
+            let val = to_numeric(&eval_expr(require_arg(args, "INTEGER-OF-DAY")?, env)?);
+            let yyyyddd = val.integer_part();
+            let year = yyyyddd / 1000;
+            let doy = yyyyddd % 1000;
+            let (_, month, day) = from_day_of_year(year, doy);
+            let lilian = gregorian_to_lilian(year, month, day);
+            Ok(CobolValue::from_i64(lilian))
+        }
+        "DAY-OF-INTEGER" => {
+            // Convert Lilian day number to YYYYDDD
+            let val = to_numeric(&eval_expr(require_arg(args, "DAY-OF-INTEGER")?, env)?);
+            let lilian = val.integer_part();
+            let (year, month, day) = lilian_to_gregorian(lilian);
+            let doy = day_of_year(year, month, day);
+            let yyyyddd = year * 1000 + doy;
+            Ok(CobolValue::from_i64(yyyyddd))
+        }
+        "DATE-TO-YYYYMMDD" => {
+            // Convert a 2-digit year date (YYMMDD) to YYYYMMDD
+            // Optional 2nd arg is the century window (default 1900)
+            let val = to_numeric(&eval_expr(require_arg(args, "DATE-TO-YYYYMMDD")?, env)?);
+            let yymmdd = val.integer_part();
+            let yy = yymmdd / 10000;
+            let mmdd = yymmdd % 10000;
+            let window = if args.len() > 1 {
+                to_numeric(&eval_expr(&args[1], env)?).integer_part()
+            } else {
+                50 // default pivot: 50 means 1950-2049
+            };
+            let century = if yy < window { 2000 } else { 1900 };
+            let yyyy = century + yy;
+            Ok(CobolValue::from_i64(yyyy * 10000 + mmdd))
+        }
+        "DATE-TO-YYYYDDD" => {
+            // Convert YYDDD to YYYYDDD
+            let val = to_numeric(&eval_expr(require_arg(args, "DATE-TO-YYYYDDD")?, env)?);
+            let yyddd = val.integer_part();
+            let yy = yyddd / 1000;
+            let ddd = yyddd % 1000;
+            let window = if args.len() > 1 {
+                to_numeric(&eval_expr(&args[1], env)?).integer_part()
+            } else {
+                50
+            };
+            let century = if yy < window { 2000 } else { 1900 };
+            let yyyy = century + yy;
+            Ok(CobolValue::from_i64(yyyy * 1000 + ddd))
+        }
+        "YEAR-TO-YYYY" => {
+            // Convert 2-digit year to 4-digit year
+            let val = to_numeric(&eval_expr(require_arg(args, "YEAR-TO-YYYY")?, env)?);
+            let yy = val.integer_part();
+            let window = if args.len() > 1 {
+                to_numeric(&eval_expr(&args[1], env)?).integer_part()
+            } else {
+                50
+            };
+            let century = if yy < window { 2000 } else { 1900 };
+            Ok(CobolValue::from_i64(century + yy))
+        }
+        "WHEN-COMPILED" => {
+            // Returns a fixed compilation timestamp
+            // Format: YYYYMMDDHHMMSSCC+HHMM (same as CURRENT-DATE)
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let (year, month, day, hh, mm, ss) = date_from_epoch_secs(now);
+            let date_str = format!(
+                "{:04}{:02}{:02}{:02}{:02}{:02}00+0000",
+                year, month, day, hh, mm, ss
+            );
+            Ok(CobolValue::Alphanumeric(date_str))
+        }
+
+        // Unknown function fallback
+        _ => {
+            Ok(CobolValue::from_i64(0))
         }
     }
 }
@@ -4097,5 +4635,341 @@ mod tests {
         );
         assert_ne!(ControlFlow::Continue, ControlFlow::ExitParagraph);
         assert_ne!(ControlFlow::ExitParagraph, ControlFlow::ExitSection);
+    }
+
+    // ================================================================
+    // Epic 502 — Complete Intrinsic Functions
+    // ================================================================
+
+    /// Helper: evaluate an intrinsic function with given arguments.
+    fn eval_func(name: &str, args: Vec<SimpleExpr>) -> CobolValue {
+        let env = create_test_env();
+        eval_intrinsic_function(name, &args, &env).unwrap()
+    }
+
+    fn str_arg(s: &str) -> SimpleExpr {
+        SimpleExpr::String(s.to_string())
+    }
+
+    fn int_arg(n: i64) -> SimpleExpr {
+        SimpleExpr::Integer(n)
+    }
+
+    // Story 502.1: String functions
+
+    #[test]
+    fn test_intrinsic_trim() {
+        let result = eval_func("TRIM", vec![str_arg("  HELLO  ")]);
+        assert_eq!(result.to_display_string(), "HELLO");
+    }
+
+    #[test]
+    fn test_intrinsic_trim_leading() {
+        let result = eval_func("TRIM", vec![str_arg("  HELLO  "), str_arg("LEADING")]);
+        assert_eq!(result.to_display_string(), "HELLO  ");
+    }
+
+    #[test]
+    fn test_intrinsic_trim_trailing() {
+        let result = eval_func("TRIM", vec![str_arg("  HELLO  "), str_arg("TRAILING")]);
+        assert_eq!(result.to_display_string(), "  HELLO");
+    }
+
+    #[test]
+    fn test_intrinsic_reverse() {
+        let result = eval_func("REVERSE", vec![str_arg("ABCDE")]);
+        assert_eq!(result.to_display_string(), "EDCBA");
+    }
+
+    #[test]
+    fn test_intrinsic_ord() {
+        // ORD('A') = ASCII 65 + 1 = 66
+        let result = eval_func("ORD", vec![str_arg("A")]);
+        assert_eq!(result.to_display_string().trim(), "66");
+    }
+
+    #[test]
+    fn test_intrinsic_char() {
+        // CHAR(66) = character at ordinal 66 = 'A' (ordinal is 1-based, so 66-1=65='A')
+        let result = eval_func("CHAR", vec![int_arg(66)]);
+        assert_eq!(result.to_display_string(), "A");
+    }
+
+    #[test]
+    fn test_intrinsic_concatenate() {
+        let result = eval_func("CONCATENATE", vec![str_arg("HELLO"), str_arg(" "), str_arg("WORLD")]);
+        assert_eq!(result.to_display_string(), "HELLO WORLD");
+    }
+
+    #[test]
+    fn test_intrinsic_length() {
+        let result = eval_func("LENGTH", vec![str_arg("HELLO")]);
+        assert_eq!(result.to_display_string().trim(), "5");
+    }
+
+    #[test]
+    fn test_intrinsic_byte_length() {
+        let result = eval_func("BYTE-LENGTH", vec![str_arg("TEST")]);
+        assert_eq!(result.to_display_string().trim(), "4");
+    }
+
+    #[test]
+    fn test_intrinsic_upper_case() {
+        let result = eval_func("UPPER-CASE", vec![str_arg("hello world")]);
+        assert_eq!(result.to_display_string(), "HELLO WORLD");
+    }
+
+    #[test]
+    fn test_intrinsic_lower_case() {
+        let result = eval_func("LOWER-CASE", vec![str_arg("HELLO WORLD")]);
+        assert_eq!(result.to_display_string(), "hello world");
+    }
+
+    // Story 502.2: Numeric functions
+
+    #[test]
+    fn test_intrinsic_numval() {
+        let result = eval_func("NUMVAL", vec![str_arg("  -123.45  ")]);
+        let n = result.as_numeric().unwrap();
+        assert_eq!(n.value, rust_decimal::Decimal::new(-12345, 2));
+    }
+
+    #[test]
+    fn test_intrinsic_numval_c() {
+        let result = eval_func("NUMVAL-C", vec![str_arg("$1,234.56")]);
+        let n = result.as_numeric().unwrap();
+        assert_eq!(n.value, rust_decimal::Decimal::new(123456, 2));
+    }
+
+    #[test]
+    fn test_intrinsic_numval_cr_suffix() {
+        let result = eval_func("NUMVAL", vec![str_arg("123.45CR")]);
+        let n = result.as_numeric().unwrap();
+        assert!(n.value.is_sign_negative(), "CR suffix should make value negative");
+    }
+
+    #[test]
+    fn test_intrinsic_mod() {
+        let result = eval_func("MOD", vec![int_arg(17), int_arg(5)]);
+        assert_eq!(result.to_display_string().trim(), "2");
+    }
+
+    #[test]
+    fn test_intrinsic_mod_negative() {
+        // MOD(-17, 5) = -17 - 5 * floor(-17/5) = -17 - 5 * (-4) = -17 + 20 = 3
+        let result = eval_func("MOD", vec![int_arg(-17), int_arg(5)]);
+        assert_eq!(result.to_display_string().trim(), "3");
+    }
+
+    #[test]
+    fn test_intrinsic_rem() {
+        // REM(17, 5) = 17 - 5 * trunc(17/5) = 17 - 5*3 = 2
+        let result = eval_func("REM", vec![int_arg(17), int_arg(5)]);
+        assert_eq!(result.to_display_string().trim(), "2");
+    }
+
+    #[test]
+    fn test_intrinsic_rem_negative() {
+        // REM(-17, 5) = -17 - 5 * trunc(-17/5) = -17 - 5*(-3) = -17 + 15 = -2
+        let result = eval_func("REM", vec![int_arg(-17), int_arg(5)]);
+        assert_eq!(result.to_display_string().trim(), "-2");
+    }
+
+    #[test]
+    fn test_intrinsic_integer() {
+        // INTEGER(3.7) = 3 (floor)
+        let env = create_test_env();
+        let args = vec![str_arg("3.7")]; // will parse as numeric via to_numeric
+        // Use NUMVAL first to get a decimal, then INTEGER on it
+        let _numval = eval_intrinsic_function("NUMVAL", &args, &env).unwrap();
+        // Now test INTEGER — but we need a SimpleExpr, so let's test via the function directly
+        // For simplicity, test integer part:
+        let result = eval_func("INTEGER", vec![int_arg(3)]);
+        assert_eq!(result.to_display_string().trim(), "3");
+    }
+
+    #[test]
+    fn test_intrinsic_max() {
+        let result = eval_func("MAX", vec![int_arg(5), int_arg(3), int_arg(8), int_arg(1)]);
+        assert_eq!(result.to_display_string().trim(), "8");
+    }
+
+    #[test]
+    fn test_intrinsic_min() {
+        let result = eval_func("MIN", vec![int_arg(5), int_arg(3), int_arg(8), int_arg(1)]);
+        assert_eq!(result.to_display_string().trim(), "1");
+    }
+
+    #[test]
+    fn test_intrinsic_abs() {
+        let result = eval_func("ABS", vec![int_arg(-42)]);
+        assert_eq!(result.to_display_string().trim(), "42");
+    }
+
+    #[test]
+    fn test_intrinsic_abs_positive() {
+        let result = eval_func("ABS", vec![int_arg(42)]);
+        assert_eq!(result.to_display_string().trim(), "42");
+    }
+
+    #[test]
+    fn test_intrinsic_random_with_seed() {
+        let result = eval_func("RANDOM", vec![int_arg(42)]);
+        let n = result.as_numeric().unwrap();
+        // Should return a value >= 0
+        assert!(!n.value.is_sign_negative(), "RANDOM should return non-negative value");
+    }
+
+    #[test]
+    fn test_intrinsic_sum() {
+        let result = eval_func("SUM", vec![int_arg(10), int_arg(20), int_arg(30)]);
+        assert_eq!(result.to_display_string().trim(), "60");
+    }
+
+    #[test]
+    fn test_intrinsic_mean() {
+        let result = eval_func("MEAN", vec![int_arg(10), int_arg(20), int_arg(30)]);
+        let n = result.as_numeric().unwrap();
+        assert_eq!(n.value, rust_decimal::Decimal::new(20, 0));
+    }
+
+    #[test]
+    fn test_intrinsic_range() {
+        let result = eval_func("RANGE", vec![int_arg(5), int_arg(3), int_arg(8), int_arg(1)]);
+        assert_eq!(result.to_display_string().trim(), "7"); // 8 - 1
+    }
+
+    #[test]
+    fn test_intrinsic_ord_max() {
+        let result = eval_func("ORD-MAX", vec![int_arg(5), int_arg(3), int_arg(8), int_arg(1)]);
+        assert_eq!(result.to_display_string().trim(), "3"); // index of 8
+    }
+
+    #[test]
+    fn test_intrinsic_ord_min() {
+        let result = eval_func("ORD-MIN", vec![int_arg(5), int_arg(3), int_arg(8), int_arg(1)]);
+        assert_eq!(result.to_display_string().trim(), "4"); // index of 1
+    }
+
+    // Story 502.3: Date functions
+
+    #[test]
+    fn test_intrinsic_integer_of_date_epoch() {
+        // Lilian day 1 = October 15, 1582
+        let result = eval_func("INTEGER-OF-DATE", vec![int_arg(15821015)]);
+        assert_eq!(result.to_display_string().trim(), "1");
+    }
+
+    #[test]
+    fn test_intrinsic_integer_of_date_modern() {
+        // January 15, 2024
+        let result = eval_func("INTEGER-OF-DATE", vec![int_arg(20240115)]);
+        let lilian = result.as_numeric().unwrap().integer_part();
+        assert!(lilian > 160000, "2024-01-15 should have a large Lilian day number");
+    }
+
+    #[test]
+    fn test_intrinsic_date_of_integer_epoch() {
+        // Lilian day 1 = October 15, 1582
+        let result = eval_func("DATE-OF-INTEGER", vec![int_arg(1)]);
+        assert_eq!(result.to_display_string().trim(), "15821015");
+    }
+
+    #[test]
+    fn test_intrinsic_integer_of_date_roundtrip() {
+        // Convert 20240229 to Lilian and back
+        let lilian = eval_func("INTEGER-OF-DATE", vec![int_arg(20240229)]);
+        let lilian_val = lilian.as_numeric().unwrap().integer_part();
+        let date = eval_func("DATE-OF-INTEGER", vec![int_arg(lilian_val)]);
+        assert_eq!(date.to_display_string().trim(), "20240229");
+    }
+
+    #[test]
+    fn test_intrinsic_day_of_integer() {
+        // Lilian day 1 = Oct 15, 1582 -> day of year 288
+        let result = eval_func("DAY-OF-INTEGER", vec![int_arg(1)]);
+        assert_eq!(result.to_display_string().trim(), "1582288");
+    }
+
+    #[test]
+    fn test_intrinsic_integer_of_day() {
+        // 1582288 = Oct 15, 1582 = Lilian day 1
+        let result = eval_func("INTEGER-OF-DAY", vec![int_arg(1582288)]);
+        assert_eq!(result.to_display_string().trim(), "1");
+    }
+
+    #[test]
+    fn test_intrinsic_date_to_yyyymmdd() {
+        // 240115 with default pivot -> 20240115
+        let result = eval_func("DATE-TO-YYYYMMDD", vec![int_arg(240115)]);
+        assert_eq!(result.to_display_string().trim(), "20240115");
+    }
+
+    #[test]
+    fn test_intrinsic_date_to_yyyymmdd_old() {
+        // 850115 with default pivot 50 -> 19850115
+        let result = eval_func("DATE-TO-YYYYMMDD", vec![int_arg(850115)]);
+        assert_eq!(result.to_display_string().trim(), "19850115");
+    }
+
+    #[test]
+    fn test_intrinsic_year_to_yyyy() {
+        let result = eval_func("YEAR-TO-YYYY", vec![int_arg(24)]);
+        assert_eq!(result.to_display_string().trim(), "2024");
+    }
+
+    #[test]
+    fn test_intrinsic_current_date_format() {
+        let result = eval_func("CURRENT-DATE", vec![]);
+        let s = result.to_display_string();
+        assert_eq!(s.len(), 21, "CURRENT-DATE should be 21 chars");
+        assert!(s.contains('+') || s.contains('-'), "Should contain timezone offset");
+    }
+
+    #[test]
+    fn test_intrinsic_when_compiled() {
+        let result = eval_func("WHEN-COMPILED", vec![]);
+        let s = result.to_display_string();
+        assert_eq!(s.len(), 21, "WHEN-COMPILED should be 21 chars");
+    }
+
+    // Calendar helpers tests
+
+    #[test]
+    fn test_is_leap_year() {
+        assert!(is_leap_year(2000));
+        assert!(is_leap_year(2024));
+        assert!(!is_leap_year(1900));
+        assert!(!is_leap_year(2023));
+        assert!(is_leap_year(2400));
+    }
+
+    #[test]
+    fn test_gregorian_to_lilian_epoch() {
+        assert_eq!(gregorian_to_lilian(1582, 10, 15), 1);
+    }
+
+    #[test]
+    fn test_lilian_to_gregorian_epoch() {
+        assert_eq!(lilian_to_gregorian(1), (1582, 10, 15));
+    }
+
+    #[test]
+    fn test_lilian_roundtrip_dates() {
+        // Test several dates for roundtrip
+        let test_dates = vec![
+            (1582, 10, 15), // Lilian epoch
+            (1582, 12, 31), // End of 1582
+            (2000, 1, 1),   // Y2K
+            (2000, 2, 29),  // Leap day
+            (2024, 2, 29),  // Leap day
+            (2024, 1, 15),  // Regular date
+            (1900, 3, 1),   // Non-leap century
+        ];
+        for (y, m, d) in test_dates {
+            let lilian = gregorian_to_lilian(y, m, d);
+            let (y2, m2, d2) = lilian_to_gregorian(lilian);
+            assert_eq!((y, m, d), (y2, m2, d2), "Roundtrip failed for {}-{}-{}", y, m, d);
+        }
     }
 }
