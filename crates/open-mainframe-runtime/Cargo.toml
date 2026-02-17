@@ -12,5 +12,6 @@ miette.workspace = true
 thiserror.workspace = true
 rust_decimal.workspace = true
 open-mainframe-encoding.workspace = true
+open-mainframe-sort.workspace = true
 
 [dev-dependencies]

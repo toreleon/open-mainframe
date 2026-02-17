@@ -25,6 +25,7 @@ pub mod file_io;
 pub mod interpreter;
 pub mod io;
 pub mod numeric_editing;
+pub mod sort_verb;
 pub mod storage;
 pub mod string;
 pub mod value;
