@@ -65,3 +65,64 @@ def sample_jcl_file(carddemo_jcl):
 def set_workspace_root(monkeypatch):
     """Set WORKSPACE_ROOT to repo root so path sanitization allows CardDemo files."""
     monkeypatch.setenv("WORKSPACE_ROOT", REPO_ROOT)
+
+
+@pytest.fixture
+def mock_bridge(monkeypatch):
+    """Mock the bridge client so tools route commands through a fake bridge.
+
+    Returns a MockBridgeConnection that records all commands and can be
+    configured with custom responses.
+    """
+    import asyncio
+    from unittest.mock import MagicMock, AsyncMock
+    from src.bridge_client import bridge_manager, BridgeConnection
+
+    class MockBridgeConnection:
+        def __init__(self):
+            self.ws = MagicMock()
+            self.token = "test-token"
+            self.project_path = "/mock/project"
+            self.cli_version = "1.0.0-test"
+            self.connected = True
+            self._commands: list[dict] = []
+            self._responses: dict[str, dict] = {}
+            self._default_response = {
+                "status": "ok",
+                "data": {"stdout": "mock output", "stderr": "", "returncode": 0},
+            }
+
+        def set_response(self, command_prefix: str, response: dict):
+            """Configure a custom response for commands starting with prefix."""
+            self._responses[command_prefix] = response
+
+        async def send_command(self, msg: dict) -> dict:
+            self._commands.append(msg)
+            cmd = msg.get("command", "")
+            for prefix, resp in self._responses.items():
+                if cmd.startswith(prefix):
+                    return {**resp, "id": msg.get("id")}
+            return {**self._default_response, "id": msg.get("id")}
+
+        def handle_response(self, msg: dict):
+            pass
+
+        async def ping(self) -> dict:
+            return {
+                "type": "pong",
+                "project_path": self.project_path,
+                "cli_version": self.cli_version,
+            }
+
+        async def close(self):
+            self.connected = False
+
+        @property
+        def commands(self):
+            """List of all commands sent through the bridge."""
+            return self._commands
+
+    mock_conn = MockBridgeConnection()
+    monkeypatch.setattr(bridge_manager, "_default", mock_conn)
+    monkeypatch.setattr(bridge_manager, "_connections", {"test-token": mock_conn})
+    return mock_conn
