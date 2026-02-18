@@ -7,7 +7,11 @@ and bridge connection detection.
 import json
 import os
 
-from src.bridge_client import bridge_manager
+
+def _get_bridge_manager():
+    """Lazy import to avoid circular-import issues at module load time."""
+    from ..bridge_client import bridge_manager
+    return bridge_manager
 
 MAX_OUTPUT_BYTES = 20_000  # 20KB truncation limit
 WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", os.getcwd())
@@ -15,7 +19,10 @@ WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", os.getcwd())
 
 def is_bridge_connected() -> bool:
     """Return True if a bridge daemon is currently connected."""
-    return bridge_manager.has_connection
+    try:
+        return _get_bridge_manager().has_connection
+    except Exception:
+        return False
 
 
 def sanitize_path(path: str) -> str:

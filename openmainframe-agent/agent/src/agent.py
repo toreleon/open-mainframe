@@ -185,7 +185,7 @@ class AnthropicAgent:
                                 )
 
                     # Stream consumed — get final message
-                    final_message = stream.get_final_message()
+                    final_message = await stream.get_final_message()
 
             except Exception as exc:
                 # Close any open text message before error
@@ -218,7 +218,6 @@ class AnthropicAgent:
 
             # ── No tool calls → done ────────────────────────────────
             if not collected_tool_calls:
-                # Emit state snapshot and finish
                 yield ev.StateSnapshotEvent(
                     type=EventType.STATE_SNAPSHOT,
                     snapshot=agent_state.to_dict(),

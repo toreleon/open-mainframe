@@ -17,18 +17,34 @@ export async function* streamAgui(
   input: RunAgentInput,
   signal?: AbortSignal,
 ): AsyncGenerator<AguiEvent> {
-  const res = await fetch(agentUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-    },
-    body: JSON.stringify(input),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(agentUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify(input),
+      signal,
+    });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    throw new Error(
+      `Cannot reach agent at ${agentUrl} — is it running? (${err instanceof Error ? err.message : err})`,
+    );
+  }
 
   if (!res.ok) {
-    throw new Error(`Agent returned ${res.status}: ${res.statusText}`);
+    let detail = "";
+    try {
+      detail = await res.text();
+    } catch {
+      /* ignore */
+    }
+    throw new Error(
+      `Agent returned ${res.status}: ${res.statusText}${detail ? `\n${detail.slice(0, 200)}` : ""}`,
+    );
   }
 
   const reader = res.body?.getReader();
@@ -37,29 +53,34 @@ export async function* streamAgui(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
+      buffer += decoder.decode(value, { stream: true });
 
-    // SSE format: "data: {json}\n\n"
-    const parts = buffer.split("\n\n");
-    // Keep the last (possibly incomplete) chunk in the buffer
-    buffer = parts.pop() ?? "";
+      // SSE format: "data: {json}\n\n"
+      const parts = buffer.split("\n\n");
+      // Keep the last (possibly incomplete) chunk in the buffer
+      buffer = parts.pop() ?? "";
 
-    for (const part of parts) {
-      for (const line of part.split("\n")) {
-        if (line.startsWith("data: ")) {
-          const json_str = line.slice(6);
-          if (json_str === "[DONE]") return;
-          try {
-            yield JSON.parse(json_str) as AguiEvent;
-          } catch {
-            // Skip malformed JSON
+      for (const part of parts) {
+        for (const line of part.split("\n")) {
+          if (line.startsWith("data: ")) {
+            const jsonStr = line.slice(6).trim();
+            if (jsonStr === "[DONE]") return;
+            if (!jsonStr) continue;
+            try {
+              yield JSON.parse(jsonStr) as AguiEvent;
+            } catch {
+              // Skip malformed JSON
+            }
           }
         }
       }
     }
+  } finally {
+    reader.releaseLock();
   }
 }

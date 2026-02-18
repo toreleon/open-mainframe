@@ -56,5 +56,6 @@ COPY openmainframe-agent/deploy/bridge-entrypoint.sh /usr/local/bin/bridge-entry
 RUN chmod +x /usr/local/bin/bridge-entrypoint.sh
 
 ENV BRIDGE_SERVER_URL=ws://host.docker.internal:8123/ws/bridge
+ENV PYTHONUNBUFFERED=1
 
 ENTRYPOINT ["bridge-entrypoint.sh"]

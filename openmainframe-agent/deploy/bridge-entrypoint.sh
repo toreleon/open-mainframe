@@ -17,4 +17,5 @@ echo ""
 exec python /bridge/bridge.py \
     --server "${BRIDGE_SERVER_URL}" \
     --project /workspace/aws-mainframe-modernization-carddemo \
-    --cli /usr/local/bin/open-mainframe
+    --cli /usr/local/bin/open-mainframe \
+    --mode "${BRIDGE_MODE:-general}"

@@ -59,28 +59,48 @@ async def health():
 @app.websocket("/ws/bridge")
 async def bridge_websocket(ws: WebSocket, token: str = ""):
     """WebSocket endpoint for local bridge daemon connections."""
+    import asyncio
+    import json as _json
+
     await ws.accept()
-    print(f"Bridge connected (token: {token[:8]}...)")
+    key = token or "default"
+    print(f"Bridge connected (token: {key[:8]}...)")
 
-    conn = await bridge_manager.register(ws, token or "default")
-    print(f"  Project: {conn.project_path}")
-    print(f"  CLI:     {conn.cli_version}")
+    conn = await bridge_manager.register(ws, key)
 
+    # Background reader — routes all incoming messages to pending futures
+    async def _reader():
+        try:
+            while True:
+                raw = await ws.receive_text()
+                try:
+                    msg = _json.loads(raw)
+                    conn.handle_response(msg)
+                except Exception as e:
+                    print(f"  Bridge message error: {e}")
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            print(f"  Bridge reader error: {e}")
+
+    read_task = asyncio.create_task(_reader())
+
+    # Now that the reader is active, ping to get project info
     try:
-        while True:
-            raw = await ws.receive_text()
-            try:
-                import json
-                msg = json.loads(raw)
-                conn.handle_response(msg)
-            except Exception as e:
-                print(f"  Bridge message error: {e}")
-    except WebSocketDisconnect:
-        print(f"Bridge disconnected (token: {token[:8]}...)")
+        await conn.ping()
+        print(f"  Project: {conn.project_path}")
+        print(f"  CLI:     {conn.cli_version}")
     except Exception as e:
-        print(f"Bridge error: {e}")
+        print(f"  Bridge ping failed: {e}")
+
+    # Wait for the reader to finish (bridge disconnect)
+    try:
+        await read_task
+    except Exception:
+        pass
     finally:
-        bridge_manager.unregister(token or "default")
+        print(f"Bridge disconnected (token: {key[:8]}...)")
+        bridge_manager.unregister(key)
 
 
 @app.post("/")

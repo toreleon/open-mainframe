@@ -120,14 +120,15 @@ class BridgeManager:
         return self._default
 
     async def register(self, ws: WebSocket, token: str) -> BridgeConnection:
-        """Register a new bridge connection."""
+        """Register a new bridge connection.
+
+        NOTE: Does NOT ping here. The caller must start a message-reading
+        loop first, then call conn.ping() so the pong can actually be received.
+        """
         conn = BridgeConnection(ws, token)
         self._connections[token] = conn
         if self._default is None:
             self._default = conn
-
-        # Ping to get project info
-        await conn.ping()
         return conn
 
     def unregister(self, token: str):
