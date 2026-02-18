@@ -253,10 +253,6 @@ class AnthropicAgent:
 
                 if tc["name"] in HITL_TOOLS:
                     needs_hitl = True
-                elif tc["name"] == "idcams_command":
-                    cmd = tc["input"].get("command", "")
-                    if cmd.strip().upper().startswith("DELETE"):
-                        needs_hitl = True
 
                 if needs_hitl:
                     # Add assistant message to history before saving
@@ -273,9 +269,9 @@ class AnthropicAgent:
                     )
 
                     file_arg = (
-                        tc["input"].get("jcl_file")
-                        or tc["input"].get("source_file")
+                        tc["input"].get("file_path")
                         or tc["input"].get("command")
+                        or tc["input"].get("path")
                         or "unknown"
                     )
 
@@ -313,16 +309,7 @@ class AnthropicAgent:
                 tool_input = tc["input"]
                 tool_call_id = tc["id"]
 
-                # Determine current operation from tool name
-                op_map = {
-                    "assess_scan": "assess", "assess_file": "assess",
-                    "compile_cobol": "compile", "check_cobol": "compile",
-                    "run_jcl": "execute", "interpret_cobol": "execute",
-                    "parse_jcl": "execute",
-                    "lex_cobol": "explain",
-                    "list_catalog": "dataset", "idcams_command": "dataset",
-                }
-                agent_state.current_operation = op_map.get(tool_name)
+                agent_state.current_operation = tool_name
 
                 # Execute
                 if tool_name in TOOL_REGISTRY:

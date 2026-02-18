@@ -21,9 +21,9 @@ from src.agent import agent
 from src.bridge_client import bridge_manager
 
 app = FastAPI(
-    title="OpenMainframe Agent",
-    description="AI-powered mainframe modernization assistant",
-    version="1.0.0",
+    title="Coding Agent",
+    description="General-purpose AI coding agent",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -44,8 +44,8 @@ async def health():
     return JSONResponse(
         content={
             "status": "ok",
-            "agent": "modernization_agent",
-            "version": "1.0.0",
+            "agent": "coding_agent",
+            "version": "2.0.0",
             **bridge_status,
         }
     )

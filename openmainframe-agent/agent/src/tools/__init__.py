@@ -1,222 +1,205 @@
 """
-OpenMainframe CLI tool wrappers.
+General-purpose CLI coding agent tools.
 Provides TOOL_REGISTRY (name → function), TOOL_SCHEMAS (Anthropic format),
 and HITL_TOOLS (tools requiring human approval before execution).
 """
 
-from .assess_tools import assess_scan, assess_file
-from .compile_tools import compile_cobol, check_cobol
-from .execute_tools import run_jcl, interpret_cobol
-from .parse_tools import parse_jcl, lex_cobol
-from .dataset_tools import list_catalog, idcams_command
+from .bash_tool import bash
+from .file_tools import read_file, write_file, edit_file, list_directory
+from .search_tools import grep, glob
 
 # name → async callable
 TOOL_REGISTRY: dict = {
-    "assess_scan": assess_scan,
-    "assess_file": assess_file,
-    "compile_cobol": compile_cobol,
-    "check_cobol": check_cobol,
-    "run_jcl": run_jcl,
-    "interpret_cobol": interpret_cobol,
-    "parse_jcl": parse_jcl,
-    "lex_cobol": lex_cobol,
-    "list_catalog": list_catalog,
-    "idcams_command": idcams_command,
+    "bash": bash,
+    "read_file": read_file,
+    "write_file": write_file,
+    "edit_file": edit_file,
+    "list_directory": list_directory,
+    "grep": grep,
+    "glob": glob,
 }
 
 # Anthropic tool format: {name, description, input_schema}
 TOOL_SCHEMAS: list[dict] = [
     {
-        "name": "assess_scan",
+        "name": "bash",
         "description": (
-            "Scan a directory of COBOL source files and return assessment metrics "
-            "including complexity scores, feature inventory, and compatibility issues."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "directory": {
-                    "type": "string",
-                    "description": "Path to directory containing COBOL source files.",
-                },
-            },
-            "required": ["directory"],
-        },
-    },
-    {
-        "name": "assess_file",
-        "description": (
-            "Assess a single COBOL source file for metrics and compatibility. "
-            "Returns complexity, maintainability, feature usage, and issues."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to a COBOL source file (.cbl, .cob).",
-                },
-            },
-            "required": ["file_path"],
-        },
-    },
-    {
-        "name": "compile_cobol",
-        "description": (
-            "Compile a COBOL source file to a native executable. "
-            "Returns success/failure with compiler output and error messages."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_file": {
-                    "type": "string",
-                    "description": "Path to a COBOL source file (.cbl, .cob).",
-                },
-            },
-            "required": ["source_file"],
-        },
-    },
-    {
-        "name": "check_cobol",
-        "description": (
-            "Syntax check a COBOL source file without full compilation. "
-            "Faster than compile — useful for quick validation."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_file": {
-                    "type": "string",
-                    "description": "Path to a COBOL source file (.cbl, .cob).",
-                },
-            },
-            "required": ["source_file"],
-        },
-    },
-    {
-        "name": "run_jcl",
-        "description": (
-            "Execute a JCL job file. Returns step-by-step execution results "
-            "including per-step return codes and SYSOUT content. "
-            "WARNING: This tool executes code — requires human approval."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "jcl_file": {
-                    "type": "string",
-                    "description": "Path to a JCL file (.jcl).",
-                },
-            },
-            "required": ["jcl_file"],
-        },
-    },
-    {
-        "name": "interpret_cobol",
-        "description": (
-            "Run a COBOL program through the tree-walking interpreter. "
-            "Captures DISPLAY output and final return code. "
-            "WARNING: This tool executes code — requires human approval."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_file": {
-                    "type": "string",
-                    "description": "Path to a COBOL source file (.cbl, .cob).",
-                },
-            },
-            "required": ["source_file"],
-        },
-    },
-    {
-        "name": "parse_jcl",
-        "description": (
-            "Parse a JCL file and return its AST structure. "
-            "Useful for understanding job structure before execution."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "jcl_file": {
-                    "type": "string",
-                    "description": "Path to a JCL file (.jcl).",
-                },
-            },
-            "required": ["jcl_file"],
-        },
-    },
-    {
-        "name": "lex_cobol",
-        "description": (
-            "Tokenize a COBOL source file and return the token stream. "
-            "Useful for structural code analysis and explanation grounding."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_file": {
-                    "type": "string",
-                    "description": "Path to a COBOL source file (.cbl, .cob).",
-                },
-            },
-            "required": ["source_file"],
-        },
-    },
-    {
-        "name": "list_catalog",
-        "description": (
-            "List datasets in the catalog matching the given pattern. "
-            "Returns dataset names, types, record formats, and record lengths."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": 'Catalog entry pattern to match (default: "*" for all).',
-                    "default": "*",
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "idcams_command",
-        "description": (
-            "Execute an IDCAMS command for dataset management. "
-            "Supported verbs: DEFINE, DELETE, REPRO, LISTCAT, PRINT. "
-            'WARNING: DELETE operations require human approval.'
+            "Execute a shell command and return stdout, stderr, and return code. "
+            "Use this for running builds, tests, git operations, installing packages, "
+            "and any other terminal commands."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": 'The IDCAMS command string (e.g., "DEFINE CLUSTER(NAME(MY.DS))").',
+                    "description": "The shell command to execute.",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Max execution time in seconds (default: 120).",
+                    "default": 120,
                 },
             },
             "required": ["command"],
         },
     },
+    {
+        "name": "read_file",
+        "description": (
+            "Read a file and return its contents with line numbers. "
+            "Use offset and limit to read specific line ranges in large files."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the file to read.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Line offset to start reading from (0-based, default: 0).",
+                    "default": 0,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read (default: 2000).",
+                    "default": 2000,
+                },
+            },
+            "required": ["file_path"],
+        },
+    },
+    {
+        "name": "write_file",
+        "description": (
+            "Create or overwrite a file with the given content. "
+            "Parent directories are created automatically."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the file to write.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The full content to write to the file.",
+                },
+            },
+            "required": ["file_path", "content"],
+        },
+    },
+    {
+        "name": "edit_file",
+        "description": (
+            "Find and replace an exact string in a file. "
+            "The old_string must appear exactly once in the file. "
+            "Provide enough surrounding context to make the match unique."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the file to edit.",
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "The exact string to find (must be unique in the file).",
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "The replacement string.",
+                },
+            },
+            "required": ["file_path", "old_string", "new_string"],
+        },
+    },
+    {
+        "name": "list_directory",
+        "description": (
+            "List the contents of a directory. "
+            "Returns file names, types (file/dir), and sizes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": 'Directory path to list (default: ".").',
+                    "default": ".",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "grep",
+        "description": (
+            "Search file contents by regex pattern. "
+            "Returns matching lines with file paths and line numbers."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Regular expression pattern to search for.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": 'File or directory to search in (default: ".").',
+                    "default": ".",
+                },
+                "include": {
+                    "type": "string",
+                    "description": 'Glob pattern to filter files (e.g., "*.py", "*.ts").',
+                    "default": "",
+                },
+            },
+            "required": ["pattern"],
+        },
+    },
+    {
+        "name": "glob",
+        "description": (
+            "Find files by glob pattern. "
+            "Returns matching file paths. Use '**/' for recursive matching."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": 'Glob pattern to match (e.g., "**/*.py", "src/**/*.ts").',
+                },
+                "path": {
+                    "type": "string",
+                    "description": 'Base directory for the search (default: ".").',
+                    "default": ".",
+                },
+            },
+            "required": ["pattern"],
+        },
+    },
 ]
 
-# Tools requiring human-in-the-loop approval before execution
-HITL_TOOLS: set[str] = {"run_jcl", "interpret_cobol"}
+# Tools requiring human-in-the-loop approval before execution.
+# General-purpose tools run freely (like Claude Code).
+HITL_TOOLS: set[str] = set()
 
 __all__ = [
     "TOOL_REGISTRY",
     "TOOL_SCHEMAS",
     "HITL_TOOLS",
-    "assess_scan",
-    "assess_file",
-    "compile_cobol",
-    "check_cobol",
-    "run_jcl",
-    "interpret_cobol",
-    "parse_jcl",
-    "lex_cobol",
-    "list_catalog",
-    "idcams_command",
+    "bash",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_directory",
+    "grep",
+    "glob",
 ]
