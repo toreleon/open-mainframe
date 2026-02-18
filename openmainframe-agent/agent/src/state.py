@@ -26,11 +26,18 @@ class AssessmentReport(TypedDict):
     feature_support: dict[str, float]
 
 
+class CompilerError(TypedDict):
+    line: int
+    column: int
+    message: str
+    severity: str
+
+
 class CompilationResult(TypedDict):
     file_path: str
     success: bool
-    output: str
-    errors: str
+    errors: list[CompilerError]
+    warnings: list[CompilerError]
     timestamp: str
 
 

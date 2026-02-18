@@ -170,7 +170,7 @@ class BridgeDaemon:
 
             print(f"  EXEC [{msg_id[:8]}]: {' '.join(parts)}")
 
-            result = await asyncio.get_event_loop().run_in_executor(
+            result = await asyncio.get_running_loop().run_in_executor(
                 None,
                 lambda: subprocess.run(
                     parts,
@@ -241,7 +241,11 @@ class BridgeDaemon:
                     rel = fp.relative_to(self.project_root)
                     try:
                         size = fp.stat().st_size
-                        line_count = sum(1 for _ in open(fp, "rb")) if size < 5_000_000 else 0
+                        if size < 5_000_000:
+                            with open(fp, "rb") as fh:
+                                line_count = sum(1 for _ in fh)
+                        else:
+                            line_count = 0
                     except Exception:
                         size = 0
                         line_count = 0

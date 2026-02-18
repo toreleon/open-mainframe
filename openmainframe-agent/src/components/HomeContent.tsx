@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { CopilotChat } from "@copilotkit/react-ui";
 import { useRenderToolCall } from "@copilotkit/react-core";
 import { useAgentState } from "@/hooks/useAgentState";
@@ -10,10 +11,19 @@ import { AssessmentCard } from "@/components/chat/AssessmentCard";
 import { CompilerOutputCard } from "@/components/chat/CompilerOutputCard";
 import { ProgressCard } from "@/components/chat/ProgressCard";
 import { ExplanationCard } from "@/components/chat/ExplanationCard";
+import { JobResultCard } from "@/components/chat/JobResultCard";
+import { AssessmentDrawer } from "@/components/drawers/AssessmentDrawer";
+import { JobTimelineDrawer } from "@/components/drawers/JobTimelineDrawer";
+import type { ExecutionResult } from "@/lib/types";
 
 export default function HomeContent() {
   const { state } = useAgentState();
   const connectionStatus = useConnectionStatus();
+
+  // Drawer state
+  const [assessmentDrawerOpen, setAssessmentDrawerOpen] = useState(false);
+  const [jobDrawerOpen, setJobDrawerOpen] = useState(false);
+  const [jobDrawerResult, setJobDrawerResult] = useState<ExecutionResult | null>(null);
 
   // Dynamic initial message based on connection status
   const initialMessage = connectionStatus.connected
@@ -23,12 +33,19 @@ export default function HomeContent() {
   // HITL — render LangGraph interrupt() approvals inline in chat
   useInterruptHandler();
 
-  // Generative UI — render tool calls inline in chat
+  // ── Generative UI — render tool calls inline in chat ──
+
+  // Assessment tools
   useRenderToolCall({
     name: "assess_scan",
     render: ({ status }) => {
       if (status === "inProgress") return <ProgressCard label="Scanning codebase..." />;
-      return <AssessmentCard report={state.assessment_results} />;
+      return (
+        <AssessmentCard
+          report={state.assessment_results}
+          onViewFullReport={() => setAssessmentDrawerOpen(true)}
+        />
+      );
     },
   });
 
@@ -37,10 +54,16 @@ export default function HomeContent() {
     render: ({ status, args }) => {
       if (status === "inProgress")
         return <ProgressCard label={`Assessing ${args?.path || "file"}...`} />;
-      return <AssessmentCard report={state.assessment_results} />;
+      return (
+        <AssessmentCard
+          report={state.assessment_results}
+          onViewFullReport={() => setAssessmentDrawerOpen(true)}
+        />
+      );
     },
   });
 
+  // Compilation tools
   useRenderToolCall({
     name: "compile_cobol",
     render: ({ status, args }) => {
@@ -79,12 +102,13 @@ export default function HomeContent() {
     },
   });
 
+  // Explanation/parse tools
   useRenderToolCall({
     name: "lex_cobol",
     render: ({ status, args }) => {
       if (status === "inProgress")
         return <ProgressCard label={`Analyzing ${args?.source_file || ""}...`} />;
-      return <ExplanationCard filePath={args?.source_file} />;
+      return <ExplanationCard filePath={args?.source_file} language="cobol" />;
     },
   });
 
@@ -93,16 +117,25 @@ export default function HomeContent() {
     render: ({ status, args }) => {
       if (status === "inProgress")
         return <ProgressCard label={`Parsing ${args?.jcl_file || ""}...`} />;
-      return <ExplanationCard filePath={args?.jcl_file} />;
+      return <ExplanationCard filePath={args?.jcl_file} language="jcl" />;
     },
   });
 
+  // Execution tools — show actual results
   useRenderToolCall({
     name: "run_jcl",
     render: ({ status, args }) => {
       if (status === "inProgress")
         return <ProgressCard label={`Running ${args?.jcl_file || ""}...`} />;
-      return <ProgressCard label="Job complete" />;
+      const latest = state.execution_results.length > 0
+        ? state.execution_results[state.execution_results.length - 1]
+        : null;
+      return (
+        <JobResultCard
+          result={latest}
+          jclFile={args?.jcl_file}
+        />
+      );
     },
   });
 
@@ -111,7 +144,34 @@ export default function HomeContent() {
     render: ({ status, args }) => {
       if (status === "inProgress")
         return <ProgressCard label={`Interpreting ${args?.source_file || ""}...`} />;
-      return <ProgressCard label="Interpretation complete" />;
+      const latest = state.execution_results.length > 0
+        ? state.execution_results[state.execution_results.length - 1]
+        : null;
+      return (
+        <JobResultCard
+          result={latest}
+          jclFile={args?.source_file}
+        />
+      );
+    },
+  });
+
+  // Dataset tools
+  useRenderToolCall({
+    name: "list_catalog",
+    render: ({ status, args }) => {
+      if (status === "inProgress")
+        return <ProgressCard label={`Listing catalog ${args?.pattern || "*"}...`} />;
+      return <ProgressCard label={`Catalog listing complete (${args?.pattern || "*"})`} />;
+    },
+  });
+
+  useRenderToolCall({
+    name: "idcams_command",
+    render: ({ status, args }) => {
+      if (status === "inProgress")
+        return <ProgressCard label="Executing IDCAMS command..." />;
+      return <ProgressCard label="IDCAMS command complete" />;
     },
   });
 
@@ -145,6 +205,25 @@ export default function HomeContent() {
           }}
         />
       </div>
+
+      {/* Drawers (progressive disclosure) */}
+      {state.assessment_results && (
+        <AssessmentDrawer
+          open={assessmentDrawerOpen}
+          onClose={() => setAssessmentDrawerOpen(false)}
+          report={state.assessment_results}
+        />
+      )}
+      {jobDrawerResult && (
+        <JobTimelineDrawer
+          open={jobDrawerOpen}
+          onClose={() => {
+            setJobDrawerOpen(false);
+            setJobDrawerResult(null);
+          }}
+          result={jobDrawerResult}
+        />
+      )}
     </main>
   );
 }

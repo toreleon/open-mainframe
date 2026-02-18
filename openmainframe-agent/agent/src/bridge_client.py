@@ -33,7 +33,7 @@ class BridgeConnection:
         msg_id = msg.get("id", str(uuid.uuid4()))
         msg["id"] = msg_id
 
-        future = asyncio.get_event_loop().create_future()
+        future = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = future
 
         try:
@@ -51,7 +51,20 @@ class BridgeConnection:
             return {"status": "error", "error": str(e)}
 
     def handle_response(self, msg: dict):
-        """Route an incoming response to the waiting future."""
+        """Route an incoming response to the waiting future.
+
+        Handles both ID-matched responses (exec, list_files, read_file)
+        and non-ID messages (pong).
+        """
+        msg_type = msg.get("type")
+
+        # Pong messages have no ID — route to the dedicated future
+        if msg_type == "pong" and "_pong" in self._pending:
+            future = self._pending.pop("_pong")
+            if not future.done():
+                future.set_result(msg)
+            return
+
         msg_id = msg.get("id")
         if msg_id and msg_id in self._pending:
             future = self._pending.pop(msg_id)
@@ -59,12 +72,27 @@ class BridgeConnection:
                 future.set_result(msg)
 
     async def ping(self) -> dict:
-        """Ping the bridge and get info."""
-        result = await self.send_command({"type": "ping"})
-        if result.get("type") == "pong":
-            self.project_path = result.get("project_path")
-            self.cli_version = result.get("cli_version")
-        return result
+        """Ping the bridge and get info.
+
+        Pong messages have no ID, so we use a special '_pong' key
+        instead of the normal send_command ID-matching flow.
+        """
+        future = asyncio.get_running_loop().create_future()
+        self._pending["_pong"] = future
+
+        try:
+            await self.ws.send_json({"type": "ping"})
+            result = await asyncio.wait_for(future, timeout=10)
+            if result.get("type") == "pong":
+                self.project_path = result.get("project_path")
+                self.cli_version = result.get("cli_version")
+            return result
+        except asyncio.TimeoutError:
+            self._pending.pop("_pong", None)
+            return {"status": "error", "error": "Ping timed out"}
+        except Exception as e:
+            self._pending.pop("_pong", None)
+            return {"status": "error", "error": str(e)}
 
     async def close(self):
         """Close the connection."""

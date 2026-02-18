@@ -5,6 +5,7 @@ import type { AssessmentReport } from "@/lib/types";
 
 interface AssessmentCardProps {
   report: AssessmentReport | null;
+  onViewFullReport?: () => void;
 }
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -21,7 +22,7 @@ const SEVERITY_DOTS: Record<string, string> = {
   info: "bg-om-info",
 };
 
-export function AssessmentCard({ report }: AssessmentCardProps) {
+export function AssessmentCard({ report, onViewFullReport }: AssessmentCardProps) {
   const [expanded, setExpanded] = useState(false);
 
   if (!report) {
@@ -42,12 +43,22 @@ export function AssessmentCard({ report }: AssessmentCardProps) {
       <div className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div className="text-xs font-semibold text-om-accent">Assessment Complete</div>
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="text-[10px] text-om-muted hover:text-om-accent transition-colors"
-          >
-            {expanded ? "Collapse" : "View Details"}
-          </button>
+          <div className="flex items-center gap-2">
+            {onViewFullReport && (
+              <button
+                onClick={onViewFullReport}
+                className="text-[10px] text-om-accent hover:text-om-text transition-colors"
+              >
+                Full Report
+              </button>
+            )}
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="text-[10px] text-om-muted hover:text-om-accent transition-colors"
+            >
+              {expanded ? "Collapse" : "View Details"}
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-3 gap-3 text-center">
           <div>
