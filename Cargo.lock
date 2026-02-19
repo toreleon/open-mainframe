@@ -1365,6 +1365,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-pli"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "serde",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "open-mainframe-racf"
 version = "0.1.0"
 dependencies = [
@@ -1394,6 +1404,16 @@ dependencies = [
  "open-mainframe-sort",
  "rust_decimal",
  "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-smf"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "serde",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
