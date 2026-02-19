@@ -16,8 +16,12 @@
 //! - **Skeleton** — ISPF file tailoring: skeleton processing with &var substitution
 //! - FTOPEN/FTINCL/FTCLOSE services
 //! - )SEL/)ENDSEL conditional, )DOT/)ENDDOT table iteration, )IM imbed
+//! - **Editor** — ISPF line editor with line/primary commands, profiles, undo/redo
+//! - Line commands: I, D, C, M, R, CC/DD/MM blocks, >, <, X, S, UC, LC
+//! - Primary commands: FIND, CHANGE, SORT, SUBMIT, RESET, PROFILE, BOUNDS
 
 pub mod dialog;
+pub mod editor;
 pub mod panel;
 pub mod skeleton;
 pub mod table;
@@ -28,5 +32,6 @@ pub use panel::{
     Justification, Panel, PanelCond, PanelError, PanelExpr, PanelField, PanelStmt,
     VarPool, VerCheck,
 };
+pub use editor::{EditProfile, Editor, EditorLine, FindResult, VisibleLine};
 pub use skeleton::FileTailor;
 pub use table::{IspfTable, SearchCond, TableManager, TableStats};
