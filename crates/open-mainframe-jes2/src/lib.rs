@@ -26,6 +26,7 @@ pub mod commands;
 pub mod config;
 pub mod error;
 pub mod initiator;
+pub mod jecl;
 pub mod job;
 pub mod output;
 pub mod queue;
@@ -40,6 +41,7 @@ pub use output::{
     OutputGroup, OutputProcessor,
 };
 pub use initiator::{InitiatorManager, InitiatorState, ManagedInitiator};
+pub use jecl::{parse_jecl, JeclStmt, JobparmParams, OutputParams, SetupParams};
 pub use job::{Job, JobClass, JobId, JobState};
 pub use queue::Jes2;
 pub use spool::SpoolManager;
