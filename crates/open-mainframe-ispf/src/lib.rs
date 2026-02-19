@@ -13,9 +13,13 @@
 //! - TBCREATE/TBOPEN/TBCLOSE/TBEND/TBSAVE lifecycle
 //! - TBADD/TBPUT/TBMOD/TBDELETE/TBTOP/TBBOT/TBSKIP row operations
 //! - TBSCAN/TBSARG/TBSORT search and sort
+//! - **Skeleton** — ISPF file tailoring: skeleton processing with &var substitution
+//! - FTOPEN/FTINCL/FTCLOSE services
+//! - )SEL/)ENDSEL conditional, )DOT/)ENDDOT table iteration, )IM imbed
 
 pub mod dialog;
 pub mod panel;
+pub mod skeleton;
 pub mod table;
 
 pub use dialog::{DialogManager, DisplayEvent, IspfVarPools, MessageDef, VarType};
@@ -24,4 +28,5 @@ pub use panel::{
     Justification, Panel, PanelCond, PanelError, PanelExpr, PanelField, PanelStmt,
     VarPool, VerCheck,
 };
+pub use skeleton::FileTailor;
 pub use table::{IspfTable, SearchCond, TableManager, TableStats};

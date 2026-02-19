@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use crate::panel::{Panel, PanelStmt, PanelExpr, PanelCond, CmpOp, VerCheck, VarPool as PanelVarPool};
+use crate::skeleton::FileTailor;
 use crate::table::TableManager;
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,8 @@ pub struct DialogManager {
     pub vars: IspfVarPools,
     /// Table manager.
     pub tables: TableManager,
+    /// File tailoring engine.
+    pub file_tailor: FileTailor,
     /// Message library: id → message definition.
     messages: HashMap<String, MessageDef>,
     /// Pending message (set by SETMSG, displayed on next DISPLAY).
@@ -103,7 +106,7 @@ impl VarType {
 }
 
 /// The four-pool ISPF variable model.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct IspfVarPools {
     /// Function pool stack (one per SELECT level).
     function_stack: Vec<HashMap<String, String>>,
@@ -325,6 +328,7 @@ impl DialogManager {
             panels: HashMap::new(),
             vars: IspfVarPools::new(),
             tables: TableManager::new(),
+            file_tailor: FileTailor::new(),
             messages: HashMap::new(),
             pending_msg: None,
             errors_return: false,
@@ -380,6 +384,9 @@ impl DialogManager {
             Some("TBSORT") => self.exec_tbsort(&upper),
             Some("TBSCAN") => self.exec_tbscan(&upper),
             Some("TBSARG") => self.exec_tbsarg(&upper),
+            Some("FTOPEN") => self.exec_ftopen(),
+            Some("FTINCL") => self.exec_ftincl(&upper),
+            Some("FTCLOSE") => self.exec_ftclose(&upper),
             _ => {
                 self.last_rc = 12;
                 12
@@ -772,6 +779,32 @@ impl DialogManager {
     }
 
     // -----------------------------------------------------------------------
+    //  File tailoring services
+    // -----------------------------------------------------------------------
+
+    fn exec_ftopen(&mut self) -> i32 {
+        let rc = self.file_tailor.ftopen();
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_ftincl(&mut self, cmd: &str) -> i32 {
+        let skel_name = cmd.split_whitespace().nth(1).unwrap_or("");
+        let rc = self.file_tailor.ftincl(skel_name, &self.vars, &mut self.tables);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_ftclose(&mut self, cmd: &str) -> i32 {
+        let _out_dd = extract_paren(cmd, "NAME");
+        let (rc, output) = self.file_tailor.ftclose();
+        // Store the output in the ZFTOUT variable for retrieval.
+        self.vars.set("ZFTOUT", output.join("\n"));
+        self.last_rc = rc;
+        rc
+    }
+
+    // -----------------------------------------------------------------------
     //  Panel statement execution
     // -----------------------------------------------------------------------
 
@@ -870,6 +903,12 @@ impl DialogManager {
 }
 
 impl Default for DialogManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for IspfVarPools {
     fn default() -> Self {
         Self::new()
     }
