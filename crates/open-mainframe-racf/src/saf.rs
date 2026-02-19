@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use crate::database::RacfDatabase;
+use crate::resource::{AuthReason, ResourceManager};
 use crate::types::AccessLevel;
 
 // ─────────────────────── Return Codes ───────────────────────
@@ -94,7 +95,8 @@ impl SafRouter {
     /// RACROUTE REQUEST=AUTH — authorization check.
     ///
     /// Check if `userid` has `access` to `entity` in the given `class`.
-    /// Currently supports class "DATASET" (dispatched to dataset profile checking).
+    /// Supports class "DATASET" (dispatched to dataset profile checking) and
+    /// all general resource classes via the `ResourceManager`.
     pub fn auth(
         &self,
         db: &RacfDatabase,
@@ -117,14 +119,50 @@ impl SafRouter {
         match class.as_str() {
             "DATASET" => self.auth_dataset(db, entity, userid, access),
             _ => {
-                // General resource classes — check if we have a resource framework.
-                // For now, return "no profile" for unsupported classes.
-                debug!("SAF AUTH: unsupported class '{}', returning no-profile", class);
+                // General resource classes — dispatch to ResourceManager if available.
+                debug!("SAF AUTH: general resource class '{}', returning no-profile (use auth_resource for general resources)", class);
                 RacrouteResult {
                     saf_rc: SafRc::Failed,
                     racf_rc: RacfRc::NoProfile,
                 }
             }
+        }
+    }
+
+    /// RACROUTE REQUEST=AUTH for general resource classes.
+    ///
+    /// Check if `userid` has `access` to `entity` in the given general resource
+    /// `class` using the ResourceManager.
+    pub fn auth_resource(
+        &self,
+        resource_mgr: &ResourceManager,
+        class: &str,
+        entity: &str,
+        userid: &str,
+        access: AccessLevel,
+    ) -> RacrouteResult {
+        if !self.active {
+            return RacrouteResult {
+                saf_rc: SafRc::NotActive,
+                racf_rc: RacfRc::Authorized,
+            };
+        }
+
+        let result = resource_mgr.check_access(class, entity, userid, access);
+
+        match result.reason {
+            AuthReason::Authorized => RacrouteResult {
+                saf_rc: SafRc::Success,
+                racf_rc: RacfRc::Authorized,
+            },
+            AuthReason::InsufficientAccess | AuthReason::ClassNotActive => RacrouteResult {
+                saf_rc: SafRc::Failed,
+                racf_rc: RacfRc::NotAuthorized,
+            },
+            AuthReason::NoProfile => RacrouteResult {
+                saf_rc: SafRc::Failed,
+                racf_rc: RacfRc::NoProfile,
+            },
         }
     }
 
@@ -432,6 +470,52 @@ mod tests {
         let result = saf.auth(&db, "CICSTRN", "TRXN01", "JSMITH", AccessLevel::Read);
         assert_eq!(result.saf_rc, SafRc::Failed);
         assert_eq!(result.racf_rc, RacfRc::NoProfile);
+    }
+
+    // ─────── S102: SAF + General Resources integration ───────
+
+    #[test]
+    fn test_auth_resource_granted() {
+        let saf = SafRouter::new();
+        let mut rm = crate::resource::ResourceManager::new();
+        rm.activate_class("FACILITY");
+        rm.rdefine("FACILITY", "IRR.RADMIN", AccessLevel::None, "SYS1").unwrap();
+        rm.permit("FACILITY", "IRR.RADMIN", "JSMITH", AccessLevel::Read).unwrap();
+
+        let result = saf.auth_resource(&rm, "FACILITY", "IRR.RADMIN", "JSMITH", AccessLevel::Read);
+        assert!(result.is_authorized());
+    }
+
+    #[test]
+    fn test_auth_resource_denied() {
+        let saf = SafRouter::new();
+        let mut rm = crate::resource::ResourceManager::new();
+        rm.activate_class("FACILITY");
+        rm.rdefine("FACILITY", "IRR.RADMIN", AccessLevel::None, "SYS1").unwrap();
+
+        let result = saf.auth_resource(&rm, "FACILITY", "IRR.RADMIN", "JSMITH", AccessLevel::Read);
+        assert!(!result.is_authorized());
+        assert_eq!(result.racf_rc, RacfRc::NotAuthorized);
+    }
+
+    #[test]
+    fn test_auth_resource_no_profile() {
+        let saf = SafRouter::new();
+        let mut rm = crate::resource::ResourceManager::new();
+        rm.activate_class("FACILITY");
+
+        let result = saf.auth_resource(&rm, "FACILITY", "NOEXIST", "JSMITH", AccessLevel::Read);
+        assert_eq!(result.racf_rc, RacfRc::NoProfile);
+    }
+
+    #[test]
+    fn test_auth_resource_not_active() {
+        let mut saf = SafRouter::new();
+        saf.set_active(false);
+        let rm = crate::resource::ResourceManager::new();
+
+        let result = saf.auth_resource(&rm, "FACILITY", "ANYTHING", "JSMITH", AccessLevel::Read);
+        assert_eq!(result.saf_rc, SafRc::NotActive);
     }
 
     #[test]

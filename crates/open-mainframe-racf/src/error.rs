@@ -126,4 +126,32 @@ pub enum RacfError {
         /// The dataset name with no covering profile.
         dataset: String,
     },
+
+    /// Resource class not found (not in CDT).
+    #[error("resource class '{class}' is not defined")]
+    #[diagnostic(code(racf::resource_class_not_found))]
+    ResourceClassNotFound {
+        /// The class name.
+        class: String,
+    },
+
+    /// General resource profile already exists.
+    #[error("resource profile '{name}' already defined in class '{class}'")]
+    #[diagnostic(code(racf::resource_profile_exists))]
+    ResourceProfileExists {
+        /// The class name.
+        class: String,
+        /// The profile name.
+        name: String,
+    },
+
+    /// General resource profile not found.
+    #[error("resource profile '{name}' is not defined in class '{class}'")]
+    #[diagnostic(code(racf::resource_profile_not_found))]
+    ResourceProfileNotFound {
+        /// The class name.
+        class: String,
+        /// The profile name.
+        name: String,
+    },
 }

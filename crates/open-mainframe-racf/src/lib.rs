@@ -42,6 +42,7 @@ pub mod database;
 pub mod dataset;
 pub mod error;
 pub mod profile;
+pub mod resource;
 pub mod saf;
 pub mod types;
 
@@ -50,6 +51,10 @@ pub use database::{AuthCheckResult, ListDatasetResult, ListGroupResult, ListUser
 pub use dataset::DatasetProfile;
 pub use error::RacfError;
 pub use profile::{GroupProfile, UserProfile};
+pub use resource::{
+    AuthReason, ClassDescriptor, ConditionalAccess, IbmClasses, ListResourceResult,
+    ResourceAuthResult, ResourceManager, ResourceProfile, WhenCondition,
+};
 pub use saf::{SafRouter, SafRc, RacfRc, RacrouteResult, ExtractResult};
 
 /// Convenience result type for RACF operations.
