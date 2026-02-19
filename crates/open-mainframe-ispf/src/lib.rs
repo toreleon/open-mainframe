@@ -27,6 +27,7 @@ pub mod library;
 pub mod panel;
 pub mod skeleton;
 pub mod table;
+pub mod utilities;
 
 pub use dialog::{DialogManager, DisplayEvent, IspfVarPools, MessageDef, VarType};
 pub use panel::{
@@ -41,3 +42,9 @@ pub use library::{
 };
 pub use skeleton::FileTailor;
 pub use table::{IspfTable, SearchCond, TableManager, TableStats};
+pub use utilities::{
+    dslist, library_list, library_member_action, move_copy_members, parse_dslist_cmd,
+    parse_member_cmd, search_for, superc_compare, superc_listing, AllocParams, DatasetAction,
+    DatasetInfo, DiffEntry, DiffKind, DslistCmd, DslistEntry, MemberCmd, MemberListEntry,
+    SearchHit, TransferMode, UtilRc,
+};

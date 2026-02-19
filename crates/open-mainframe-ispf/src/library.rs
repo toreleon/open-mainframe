@@ -538,6 +538,16 @@ impl LibraryManager {
     //  Query helpers
     // -------------------------------------------------------------------
 
+    /// Find an existing data ID by dataset name. Returns the first matching
+    /// (non-open) handle, or `None` if no handle exists for `dsname`.
+    pub fn find_data_id(&self, dsname: &str) -> Option<String> {
+        let upper = dsname.to_uppercase();
+        self.handles
+            .iter()
+            .find(|(_, h)| h.dsname == upper)
+            .map(|(id, _)| id.clone())
+    }
+
     /// Get the dataset name for a data ID.
     pub fn dataset_name(&self, data_id: &str) -> Option<&str> {
         self.handles.get(data_id).map(|h| h.dsname.as_str())
