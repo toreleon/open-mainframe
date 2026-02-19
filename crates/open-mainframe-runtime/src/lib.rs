@@ -28,6 +28,7 @@ pub mod heap;
 pub mod file_io;
 pub mod interpreter;
 pub mod io;
+pub mod math;
 pub mod numeric_editing;
 pub mod sort_verb;
 pub mod storage;
@@ -52,5 +53,10 @@ pub use string::{
 pub use string::{
     InspectMode, ReplacingClause, StringDelimiter, StringSource, TallyingClause, UnstringDelimiter,
     UnstringFieldResult, UnstringTarget,
+};
+pub use math::{
+    call_le_math, cees_abs, cees_acs, cees_asn, cees_at2, cees_ath, cees_atn, cees_cos,
+    cees_csh, cees_ctn, cees_exp, cees_lg1, cees_log, cees_mod, cees_nin, cees_nwn, cees_sgn,
+    cees_sin, cees_snh, cees_sqt, cees_tan, cees_tnh, cees_xpx, Precision, RandomState,
 };
 pub use value::{CobolValue, NumericValue};
