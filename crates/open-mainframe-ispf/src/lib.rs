@@ -22,6 +22,7 @@
 
 pub mod dialog;
 pub mod editor;
+pub mod library;
 pub mod panel;
 pub mod skeleton;
 pub mod table;
@@ -33,5 +34,8 @@ pub use panel::{
     VarPool, VerCheck,
 };
 pub use editor::{EditProfile, Editor, EditorLine, FindResult, VisibleLine};
+pub use library::{
+    LibdefEntry, LibdefType, LibraryManager, LmRc, MemberStats, OpenMode, PdsMember,
+};
 pub use skeleton::FileTailor;
 pub use table::{IspfTable, SearchCond, TableManager, TableStats};
