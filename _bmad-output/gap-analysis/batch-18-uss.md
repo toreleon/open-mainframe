@@ -2,609 +2,737 @@
 
 ## Official Specification Summary
 
-z/OS UNIX System Services (USS, also known as z/OS UNIX or OMVS) is a base element of z/OS that provides a POSIX-compliant UNIX environment on IBM mainframes. First introduced as OpenEdition MVS in MVS/ESA SP 4.3, USS was certified as XPG4 UNIX 95 — the first UNIX 95 implementation not derived from AT&T source code. USS enables UNIX applications (Java, Python, Perl, Node.js, Go) to run on z/OS alongside traditional MVS workloads.
+z/OS UNIX System Services (z/OS UNIX, informally USS) is a base element of z/OS that provides a POSIX-compliant UNIX operating environment within the z/OS operating system. First introduced as OpenEdition MVS in MVS/ESA SP 4.3, USS is the first UNIX 95-certified operating system not derived from AT&T source code. It enables UNIX applications from other platforms to run on IBM System z mainframes, often requiring only a recompile.
 
-USS is classified as **Core** — virtually every modern z/OS installation relies on USS:
-- **POSIX compliance**: Certified UNIX 95 (XPG4); supports POSIX.1 (system interface), POSIX.2 (shell & utilities), Single UNIX Specification
-- **Process model**: fork(), exec(), spawn() (BPX1SPN), wait(), kill(), signal handling, process groups, sessions
-- **File system**: zFS (z/OS File System, strategic) and HFS (Hierarchical File System, deprecated); mounted into a single UNIX hierarchy with /, /usr, /bin, /etc, /tmp, /var, /dev
-- **Shell**: /bin/sh (z/OS shell), tcsh, bash (via Rocket Software), BPXBATCH (JCL-to-USS bridge)
-- **Pthreads**: Full POSIX threads — pthread_create, mutexes, condition variables, read-write locks, thread-specific data, pthread_atfork
-- **Sockets**: AF_INET (IPv4), AF_INET6 (IPv6), AF_UNIX (local), socket/bind/listen/accept/connect/send/recv, select/poll, getaddrinfo
-- **BPX callable services**: 200+ assembler-callable services (BPX1xxx for 31-bit, BPX4xxx for 64-bit AMODE) covering open/read/write/close/stat/fork/exec/spawn/wait/kill/socket/etc.
-- **BPXWDYN**: Dynamic MVS dataset allocation from USS programs
-- **Security**: RACF OMVS segment (UID/GID), UNIXPRIV class (granular superuser privileges), BPX.SUPERUSER, BPX.DAEMON, file permission bits, ACLs, setuid/setgid
-- **IPC**: System V shared memory (shmget/shmat/shmdt/shmctl), semaphores (semget/semop/semctl), message queues (msgget/msgsnd/msgrcv/msgctl), pipes, named pipes (FIFO)
-- **Memory-mapped files**: mmap/munmap/mprotect/msync
-- **USS-MVS integration**: //'dataset.name' syntax, FILEDATA tags (TEXT/BINARY), chtag/iconv for code page conversion, enhanced ASCII support
-- **Daemons**: inetd, cron, syslogd, _BPX_JOBNAME, _BPX_SHAREAS environment variables
+USS is classified as **Core Infrastructure** on z/OS:
+- Required by z/OS Management Facility (z/OSMF), OpenSSH, IBM HTTP Server, z/OS SDK for Java, XML services, z/OS PKI services
+- Provides a hierarchical file system (zFS), POSIX process model, pthreads, sockets, IPC, and a full shell environment
+- Integrates with RACF for security (OMVS segment, UNIXPRIV class)
+- Bridges MVS and UNIX worlds via BPXWDYN, BPXBATCH, and `//'dataset.name'` syntax
+- Assembler callable services use BPX1xxx (31-bit AMODE 31) and BPX4xxx (64-bit AMODE 64) naming conventions
+- Enhanced ASCII support with automatic codepage conversion (_BPXK_AUTOCVT, chtag, iconv)
+- Daemon infrastructure (inetd, cron, syslogd) managed through /etc/rc and BPX.DAEMON FACILITY class
 
 Key documentation:
-- **z/OS UNIX System Services Planning** (GA32-0884) — architecture, configuration, BPXPRMxx
-- **z/OS UNIX System Services User's Guide** (SA23-2279) — shell, utilities, file system
-- **z/OS UNIX System Services Programming: Assembler Callable Services Reference** (SA23-2281) — BPX1xxx/BPX4xxx services
-- **z/OS UNIX System Services Command Reference** (SA23-2280) — shell commands and utilities
+- **z/OS UNIX System Services Planning (GA32-0884)** -- system setup, BPXPRMxx, file system configuration
+- **z/OS UNIX System Services User's Guide (SA23-2279)** -- shell usage, file operations, tcsh
+- **z/OS UNIX System Services Command Reference (SA23-2280)** -- all USS commands
+- **z/OS UNIX System Services Programming: Assembler Callable Services Reference (SA23-2281)** -- BPX1xxx/BPX4xxx services
+- **z/OS XL C/C++ Runtime Library Reference (SA22-7821)** -- POSIX C functions on z/OS
+- **z/OS Communications Server: IP Sockets Application Programming Interface Guide (SC27-3660)** -- sockets
+- **z/OS Security Server RACF Security Administrator's Guide (SA23-2289)** -- OMVS segment, UNIXPRIV
 
 ## Key Features & Capabilities
 
-### 1. POSIX Compliance & Standards
+### 1. POSIX Compliance & Standards Certification
 
-| Standard | Status | Description |
-|----------|--------|-------------|
-| POSIX.1 (IEEE 1003.1) | Certified | System interfaces — process control, signals, file operations, IPC |
-| POSIX.2 (IEEE 1003.2) | Certified | Shell and utilities — sh, awk, sed, grep, make |
-| XPG4 | Certified | X/Open Portability Guide 4 |
-| UNIX 95 | Certified | The Open Group UNIX 95 brand (first non-AT&T certified) |
-| Single UNIX Specification | Supported | Extended APIs beyond POSIX base |
-| ANSI C | Supported | C runtime via LE (Language Environment) |
+| Standard | Status | Notes |
+|----------|--------|-------|
+| POSIX.1 (IEEE 1003.1) | Supported | System interfaces -- process, file, signal, I/O |
+| POSIX.2 (IEEE 1003.2) | Supported | Shell and utilities specification |
+| XPG4 (X/Open Portability Guide 4) | Certified | OS/390 OpenEdition certified by X/Open; IBM conformance document available |
+| XPG4.2 | Certified | Extended XPG4; basis for UNIX 95 brand |
+| UNIX 95 (SUS v1) | Certified | z/OS 1.2+ is registered as UNIX 95 compliant with The Open Group |
+| UNIX 98 (SUS v2) | Not certified | z/OS has not been formally certified at this level |
+| UNIX 03 (SUS v3, POSIX.1-2001) | Aligned (partial) | z/OS 1.9+ progressively adds UNIX 03 features; not formally certified |
+
+Key points:
+- z/OS is the **first UNIX 95 operating system not derived from AT&T source code**
+- The Open Group certifies z/OS as a compliant UNIX operating system
+- IBM published the **OS/390 OpenEdition XPG4 Conformance Document** covering XPG4 Internationalized System Calls and Libraries Extended, and XPG4 Commands and Utilities
+- Progressive UNIX 03 alignment began with z/OS 1.9 (September 2007) and continues through current releases
 
 ### 2. Process Model
 
-| Feature | Description |
+#### Process Lifecycle Callable Services
+
+| Function | BPX1 (31-bit) | BPX4 (64-bit) | Description |
+|----------|---------------|---------------|-------------|
+| fork | BPX1FRK | BPX4FRK | Create a new process (duplicate calling process) |
+| exec | BPX1EXC | BPX4EXC | Run a program (replace process image) |
+| execmvs | BPX1EXM | BPX4EXM | Run an MVS program specifically |
+| spawn | BPX1SPN | BPX4SPN | Spawn a process (combined fork+exec) |
+| wait | BPX1WAT | BPX4WAT | Wait for a child process to end |
+| waitpid | BPX1WTE | BPX4WTE | Wait for a specific child process |
+| kill | BPX1KIL | BPX4KIL | Send a signal to a process |
+| getpid | BPX1GPI | BPX4GPI | Get the process ID |
+| getppid | BPX1GPP | BPX4GPP | Get the parent process ID |
+| getpgrp | BPX1GPG | BPX4GPG | Get process group ID |
+| setpgid | BPX1SPG | BPX4SPG | Set process group ID for job control |
+| setsid | BPX1SSI | BPX4SSI | Create session and set process group ID |
+| attach_exec | BPX1ATX | BPX4ATX | Attach a z/OS UNIX program |
+| attach_execmvs | BPX1ATM | BPX4ATM | Attach an MVS program |
+
+#### Process Model Architecture
+
+| Concept | Description |
 |---------|-------------|
-| fork() / BPX1FRK | Create child process (copy-on-write semantics) |
-| exec() / BPX1EXC | Replace process image with new program |
-| spawn() / BPX1SPN | Create child and exec in one call (preferred on z/OS — avoids fork overhead) |
-| wait() / BPX1WAT | Wait for child process termination |
-| waitpid() | Wait for specific child with options (WNOHANG, WUNTRACED) |
-| kill() / BPX1KIL | Send signal to process or process group |
-| getpid() / BPX1GPI | Get process ID |
-| getppid() / BPX1GPP | Get parent process ID |
-| setpgid() / BPX1SPG | Set process group ID |
-| setsid() / BPX1SSD | Create new session |
-| Signal handling | sigaction(), sigprocmask(), sigsuspend(), sigwait() — full POSIX signals |
-| Process limits | MAXPROCSYS, MAXPROCUSER (BPXPRMxx tunables) |
-| BPXAS | WLM-managed auxiliary address spaces for fork processing |
-| Zombie handling | Parent must wait()/waitpid() or child becomes zombie |
-| _BPX_SHAREAS | Control whether spawn child shares parent's address space |
+| Address space | Each fork()/spawn() creates a new MVS address space via BPXAS initiator |
+| BPXAS | Started task PROC in SYS1.PROCLIB; manages address spaces for forked/spawned processes |
+| _BPX_SHAREAS | When set to YES, spawn() reuses parent address space (lightweight, TCB-based) |
+| Process ID (PID) | Every UNIX process has a unique PID; tracked by the kernel |
+| Process group | Set of related processes for job control; managed via setpgid()/getpgrp() |
+| Session | Collection of process groups; created via setsid(); session leader has no controlling terminal |
+| Dubbing | First UNIX syscall from an MVS task "dubs" it as a USS process, creating UNIX identity |
+
+#### Signal Handling
+
+| Structure/Macro | Purpose |
+|-----------------|---------|
+| BPXYPPSD | Maps signal delivery data |
+| BPXYSINF | Maps the SIGINFO_T structure |
+| BPXYINHE | Maps the spawn inheritance structure (signal disposition for spawned children) |
+| sigaction | Set signal handler (BPX1SA/BPX4SA) |
+| sigprocmask | Block/unblock signals (BPX1SPM/BPX4SPM) |
+| sigsuspend | Wait for a signal (BPX1SSU/BPX4SSU) |
+
+Standard POSIX signals are supported: SIGHUP, SIGINT, SIGQUIT, SIGILL, SIGABRT, SIGFPE, SIGKILL, SIGSEGV, SIGPIPE, SIGALRM, SIGTERM, SIGUSR1, SIGUSR2, SIGCHLD, SIGSTOP, SIGTSTP, SIGCONT, SIGTTIN, SIGTTOU.
 
 ### 3. File System
 
-| Feature | Description |
-|---------|-------------|
-| zFS (z/OS File System) | Strategic file system — log-structured, journaled, VSAM linear dataset |
-| HFS (Hierarchical File System) | Legacy file system (deprecated, migration to zFS recommended) |
-| TFS (Temporary File System) | In-memory file system for /tmp |
-| AUTOMNT | Automatic mount file system type |
-| NFS client | Network File System client for remote file access |
-| Root file system (/) | Version root (OMVS.ROOT or similar) |
-| Standard directories | /bin, /usr, /etc, /tmp, /var, /dev, /opt, /home |
-| Mount/unmount | MOUNT/UNMOUNT commands and BPX1MNT/BPX1UMN services |
-| Symbolic links | symlink() / BPX1SYM |
-| Hard links | link() / BPX1LNK |
-| FIFO (named pipes) | mkfifo() / BPX1MKN |
-| Character special files | /dev/null, /dev/random, /dev/urandom, /dev/console |
-| chmod/chown | Change file permissions and ownership |
-| File permission bits | rwx for user/group/other (standard UNIX 9-bit model) |
-| ACLs (Access Control Lists) | Extended ACLs beyond basic permission bits |
-| stat/fstat/lstat | BPX1STA/BPX1FST/BPX1LST — file metadata |
-| Sysplex-aware file sharing | zFS shared file system support across sysplex |
-| File tagging | chtag — associate code page with file (USS-specific) |
-| FILEDATA | TEXT (auto-convert EBCDIC↔ASCII) or BINARY (no conversion) |
+#### File System Types
 
-### 4. Shell & Utilities
+| Type | Status | Description |
+|------|--------|-------------|
+| zFS (z/OS File System) | Current/Primary | POSIX-conforming hierarchical file system stored in zFS data sets (linear VSAM); supports multi-file-system aggregates |
+| HFS (Hierarchical File System) | Deprecated | Legacy file system type; migration to zFS via BPXWMIGF command |
+| TFS (Temporary File System) | Available | Memory-based file system for /tmp; high performance, non-persistent |
 
-| Feature | Description |
-|---------|-------------|
-| /bin/sh | z/OS UNIX shell (Bourne-compatible) |
-| tcsh | Available as optional shell |
-| bash | Available via Rocket Software port |
-| BPXBATCH | JCL utility to run USS programs from batch JCL |
-| BPX_BATCH_SPAWN | Env var: causes BPXBATCH to use spawn instead of fork/exec |
-| TSO OMVS command | Enter USS shell from TSO |
-| ISHELL | ISPF interface to USS shell |
-| Core utilities | ls, cp, mv, rm, mkdir, cat, grep, awk, sed, find, make, tar, pax |
-| Text processing | sort, uniq, wc, cut, paste, join, tr, head, tail |
-| Shell scripting | Variables, loops, functions, here-docs, pipes, redirections |
-| /etc/profile | System-wide shell profile |
-| Environment variables | PATH, HOME, _BPX_JOBNAME, _BPX_SHAREAS, _CEE_RUNOPTS, etc. |
+#### Standard Directory Structure
+
+| Directory | Purpose | Sharing |
+|-----------|---------|---------|
+| / (root) | Root of the hierarchical file system; sysplex root in shared FS | Sysplex-wide |
+| /bin | System binaries and utilities (sh, ls, cat, etc.) | Shared (version FS) |
+| /dev | Character special files for terminal devices; created dynamically at IPL | System-specific |
+| /etc | System configuration data (/etc/profile, /etc/resolv.conf, etc.) | System-specific |
+| /tmp | Temporary data for products and applications; optionally TFS-backed | System-specific |
+| /var | Variable runtime data (logs, spool, caches) | System-specific |
+| /usr | Shared read-only binaries, libraries, documentation | Shared (version FS) |
+| /u or /home | User home directories | Shared or per-system |
+
+System-specific directories (/etc, /dev, /tmp, /var) cannot be shared across systems in a sysplex; they are mount points in the system-specific file system data set.
+
+#### File System Operations
+
+| Operation | Command / Callable Service | Description |
+|-----------|---------------------------|-------------|
+| Mount | `mount` / TSO MOUNT / BPXPRMxx MOUNT | Mount a zFS data set at a mount point |
+| Unmount | `unmount` / TSO UNMOUNT | Unmount a file system |
+| chmod | `chmod` / BPX1CHM/BPX4CHM | Change file permission bits (symbolic or octal) |
+| chown | `chown` / BPX1CHO/BPX4CHO | Change file owner and group |
+| chattr | BPX1CHR/BPX4CHR | Change file attributes (extended) |
+| stat | `ls -l` / BPX1STA/BPX4STA | Get file status information |
+| Symbolic link | `ln -s` / BPX1SYM/BPX4SYM | Create a symbolic link |
+| Hard link | `ln` / BPX1LNK/BPX4LNK | Create a hard link |
+| mkfifo | `mkfifo` / BPX1MKD | Create a FIFO (named pipe) special file |
+| mknod | `mknod` | Create a FIFO or character special file |
+| Migrate HFS->zFS | `BPXWMIGF` | Migrate legacy HFS to zFS |
+
+#### File Types Supported
+
+| Type | ls indicator | Description |
+|------|-------------|-------------|
+| Regular file | `-` | Ordinary data files |
+| Directory | `d` | Container for other files |
+| Symbolic link | `l` | Pointer to another path name |
+| Hard link | (none) | Additional directory entry for existing inode |
+| FIFO (named pipe) | `p` | IPC named pipe, created via mkfifo |
+| Character special | `c` | Device files in /dev (terminals, pseudo-TTYs) |
+| Socket | `s` | AF_UNIX domain sockets |
+
+### 4. Shell & Command Environment
+
+#### Available Shells
+
+| Shell | Path | Provider | Notes |
+|-------|------|----------|-------|
+| z/OS shell (sh) | /bin/sh | IBM (shipped) | Default POSIX shell; Korn shell-compatible |
+| tcsh (C shell) | /bin/tcsh | IBM (shipped) | Enhanced C shell; shipped with z/OS |
+| bash | /bin/bash (typical) | Rocket Software (free download) | GNU Bash port for z/OS; also shipped with IzODA |
+
+#### Shell Access Methods
+
+| Method | Description |
+|--------|-------------|
+| TSO OMVS | Interactive shell from TSO; runs /bin/sh or configured shell |
+| BPXBATCH | JCL program to run shell commands, scripts, or executables in batch |
+| OSHELL | Invokes BPXBATCH from TSO/E |
+| rlogin/telnet | Remote login to USS shell via network |
+| SSH (OpenSSH) | Secure shell access; preferred method for remote USS access |
+
+#### BPXBATCH (JCL-to-USS Bridge)
+
+BPXBATCH enables running USS programs and shell commands from JCL:
+
+```
+//STEP1  EXEC PGM=BPXBATCH,PARM='SH /path/to/script.sh'
+//STDIN  DD PATH='/dev/null'
+//STDOUT DD PATH='/tmp/out.txt',
+//          PATHOPTS=(OWRONLY,OCREAT,OTRUNC),
+//          PATHMODE=(SIRUSR,SIWUSR)
+//STDERR DD PATH='/tmp/err.txt',
+//          PATHOPTS=(OWRONLY,OCREAT,OTRUNC),
+//          PATHMODE=(SIRUSR,SIWUSR)
+```
+
+BPXBATCH modes:
+| Mode | PARM syntax | Description |
+|------|-------------|-------------|
+| SH | `PARM='SH command'` | Run command under /bin/sh |
+| PGM | `PARM='PGM /path/to/program args'` | Run an executable directly (no shell) |
+
+Related: COZBATCH is an alternative batch program similar to BPXBATCH.
+
+#### REXX-USS Bridge: bpxwunix()
+
+The `bpxwunix()` function is a REXX wrapper for fork()/exec() that lets REXX programs invoke USS commands and capture output.
 
 ### 5. Pthreads (POSIX Threads)
 
-| Feature | Description |
-|---------|-------------|
-| pthread_create | Create a new thread |
-| pthread_join | Wait for thread termination |
-| pthread_detach | Detach a thread |
-| pthread_exit | Terminate calling thread |
-| pthread_self | Get thread ID |
-| pthread_mutex_init/lock/unlock/destroy | Mutex (mutual exclusion) locks |
-| pthread_cond_init/wait/signal/broadcast/destroy | Condition variables |
-| pthread_rwlock_init/rdlock/wrlock/unlock/destroy | Read-write locks |
-| pthread_key_create/setspecific/getspecific | Thread-specific data |
-| pthread_atfork | Register fork handlers |
-| pthread_once | One-time initialization |
-| Thread limits | MAXTHREADS, MAXTHREADTASKS (BPXPRMxx tunables) |
-| Thread safety | LE provides thread-safe runtime |
+#### Thread Management Callable Services
+
+| Function | BPX1 (31-bit) | BPX4 (64-bit) | Description |
+|----------|---------------|---------------|-------------|
+| pthread_create | BPX1PTC | BPX4PTC | Create a new thread |
+| pthread_exit_and_get | BPX1PTX | BPX4PTX | Exit thread and get a new one |
+| pthread_detach | BPX1PTD | BPX4PTD | Detach a thread (no join needed) |
+| pthread_join | BPX1PTJ | BPX4PTJ | Wait for a thread to terminate |
+| pthread_kill | BPX1PTK | BPX4PTK | Send a signal to a specific thread |
+| pthread_cancel | BPX1PTB | BPX4PTB | Cancel (request termination of) a thread |
+| pthread_self | BPX1PTS | BPX4PTS | Query the current thread ID |
+| pthread_quiesce | BPX1PTQ | BPX4PTQ | Quiesce threads in a process |
+| pthread_setintr | BPX1PSI | BPX4PSI | Examine and change interrupt state |
+| pthread_setintrtype | BPX1PST | BPX4PST | Examine and change interrupt type |
+| pthread_tag_np | BPX1PTT | BPX4PTT | Tag thread with user data (z/OS extension) |
+| pthread_security_np | BPX1TLS | BPX4TLS | Create/delete thread-level security (z/OS extension) |
+
+#### Synchronization Primitives
+
+| Primitive | C Functions | Description |
+|-----------|-------------|-------------|
+| Mutex | pthread_mutex_init, pthread_mutex_lock, pthread_mutex_trylock, pthread_mutex_unlock, pthread_mutex_destroy | Mutual exclusion lock; only one thread can hold at a time |
+| Condition variable | pthread_cond_init, pthread_cond_wait, pthread_cond_timedwait, pthread_cond_signal, pthread_cond_broadcast, pthread_cond_destroy | Allow threads to wait for events/conditions; must be used with a mutex |
+| Read-write lock | pthread_rwlock_init, pthread_rwlock_rdlock, pthread_rwlock_wrlock, pthread_rwlock_tryrdlock, pthread_rwlock_trywrlock, pthread_rwlock_unlock, pthread_rwlock_destroy | Multiple readers OR one exclusive writer; higher parallelism than mutex |
+
+#### Thread-Specific Data
+
+| Function | Description |
+|----------|-------------|
+| pthread_key_create | Create a thread-specific data key with optional destructor |
+| pthread_getspecific | Get the thread-specific value for a key |
+| pthread_setspecific | Set the thread-specific value for a key |
+| pthread_key_delete | Delete a thread-specific data key |
+
+z/OS-specific extensions:
+- **pthread_security_np** (BPX1TLS/BPX4TLS) -- create or delete thread-level security; allows individual threads to run under different RACF identities
+- **pthread_tag_np** (BPX1PTT/BPX4PTT) -- tag a thread with application-specific data
 
 ### 6. Sockets API
 
-| Feature | Description |
-|---------|-------------|
-| AF_INET (IPv4) | Internet Protocol version 4 sockets |
-| AF_INET6 (IPv6) | Internet Protocol version 6 sockets |
-| AF_UNIX | Local (UNIX domain) sockets |
-| socket() | Create a socket |
-| bind() | Bind socket to address |
-| listen() | Mark socket as passive (server) |
-| accept() | Accept incoming connection |
-| connect() | Establish connection to server |
-| send()/recv() | Send and receive data |
-| sendto()/recvfrom() | Datagram (UDP) operations |
-| select() | Synchronous I/O multiplexing |
-| poll() | Another I/O multiplexing mechanism |
-| getaddrinfo() | Address resolution (name → address) |
-| gethostbyname() | DNS lookup (legacy) |
-| getsockopt()/setsockopt() | Socket options |
-| SOCK_STREAM | TCP (reliable, connection-oriented) |
-| SOCK_DGRAM | UDP (unreliable, connectionless) |
-| AT-TLS | Application Transparent TLS (z/OS Communications Server provides TLS without application changes) |
+#### Address Families
 
-### 7. BPX Callable Services
+| Family | Constant | Description |
+|--------|----------|-------------|
+| IPv4 | AF_INET | TCP/UDP over IPv4; SOCK_STREAM (TCP), SOCK_DGRAM (UDP), SOCK_RAW |
+| IPv6 | AF_INET6 | TCP/UDP over IPv6; basic and subset of advanced features |
+| UNIX domain | AF_UNIX | Local IPC via filesystem-based socket paths; no network protocol |
 
-Over 200 assembler-callable services organized by category:
+#### Socket Callable Services
 
-| Category | Key Services |
-|----------|-------------|
-| File I/O | BPX1OPN (open), BPX1RED (read), BPX1WRT (write), BPX1CLO (close), BPX1WRV (writev), BPX1RDV (readv) |
-| File metadata | BPX1STA (stat), BPX1FST (fstat), BPX1LST (lstat), BPX1CHR (chattr), BPX1CHM (chmod), BPX1CHO (chown) |
-| Directory | BPX1OPD (opendir), BPX1RDD (readdir), BPX1CLD (closedir), BPX1MKD (mkdir), BPX1RMD (rmdir) |
-| File system | BPX1MNT (mount), BPX1UMN (unmount), BPX1STV (statvfs) |
-| Symbolic links | BPX1SYM (symlink), BPX1RDL (readlink), BPX1LNK (link), BPX1UNL (unlink) |
-| Process | BPX1FRK (fork), BPX1EXC (exec), BPX1SPN (spawn), BPX1WAT (wait), BPX1KIL (kill), BPX1GPI (getpid), BPX1GPP (getppid) |
-| Signals | BPX1SA (sigaction), BPX1SPM (sigprocmask), BPX1SSU (sigsuspend), BPX1SWT (sigwait) |
-| Sockets | BPX1SOC (socket), BPX1BND (bind), BPX1LSN (listen), BPX1ACP (accept), BPX1CON (connect), BPX1SND (send), BPX1RCV (recv), BPX1SEL (select) |
-| IPC | BPX1MGT (msgget), BPX1MRC (msgrcv), BPX1MSN (msgsnd), BPX1MCT (msgctl), BPX1SGT (shmget), BPX1SAT (shmat), BPX1SDT (shmdt), BPX1SCT (shmctl), BPX1SMG (semget), BPX1SMO (semop), BPX1SMC (semctl) |
-| Memory | BPX1MMP (mmap), BPX1MUN (munmap), BPX1MPR (mprotect), BPX1MSY (msync) |
-| Dynamic allocation | BPXWDYN — allocate/free MVS datasets from USS |
+| Function | BPX1 (31-bit) | BPX4 (64-bit) | Description |
+|----------|---------------|---------------|-------------|
+| socket | BPX1SOC | BPX4SOC | Create a socket or socket pair |
+| bind | BPX1BND | BPX4BND | Bind a local name/address to a socket |
+| listen | BPX1LSN | BPX4LSN | Prepare server socket to queue connections |
+| accept | BPX1ACP | BPX4ACP | Accept incoming connection request |
+| connect | BPX1CON | BPX4CON | Establish connection to remote socket |
+| send | BPX1SND | BPX4SND | Send data on a connected socket |
+| sendto | BPX1STO | BPX4STO | Send data to a specific destination |
+| sendmsg | BPX1SMS | BPX4SMS | Send message with ancillary data |
+| recv | BPX1RCV | BPX4RCV | Receive data from a socket |
+| recvfrom | BPX1RFM | BPX4RFM | Receive data with sender address |
+| recvmsg | BPX1RMS | BPX4RMS | Receive message with ancillary data |
+| select | BPX1SEL | BPX4SEL | Monitor activity on multiple file descriptors |
+| poll | BPX1POL | BPX4POL | Monitor activity on multiple file descriptors and message queues |
+| getaddrinfo | (C library) | (C library) | Resolve hostname/service to socket addresses (IPv4/IPv6) |
+| getsockopt | BPX1OPT | BPX4OPT | Get socket options |
+| setsockopt | BPX1OPT | BPX4OPT | Set socket options |
+| shutdown | BPX1SHT | BPX4SHT | Shut down socket send/receive |
+| close | BPX1CLO | BPX4CLO | Close a socket descriptor |
+
+Socket APIs are provided via two interfaces:
+1. **z/OS UNIX Assembler Callable Services** -- BPX1xxx/BPX4xxx generalized call-based interface
+2. **z/OS C sockets** -- POSIX/XPG4-compliant C library functions for application development
+
+### 7. BPX Callable Services (BPX1xxx / BPX4xxx)
+
+#### Naming Convention
+
+| Prefix | AMODE | Description |
+|--------|-------|-------------|
+| BPX1xxx | 31-bit (AMODE 31) | 31-bit interface for assembler, COBOL, PL/I callers |
+| BPX4xxx | 64-bit (AMODE 64) | 64-bit interface for programs using 64-bit addressing |
+
+#### Core File I/O Services
+
+| Function | BPX1 | BPX4 | Description |
+|----------|------|------|-------------|
+| open | BPX1OPN | BPX4OPN | Open a file |
+| openat | BPX1OAT | BPX4OAT | Open file relative to directory FD |
+| close | BPX1CLO | BPX4CLO | Close a file descriptor |
+| read | BPX1RED | BPX4RED | Read from a file or socket |
+| write | BPX1WRT | BPX4WRT | Write to a file or socket |
+| readv | BPX1RDV | BPX4RDV | Read into scatter buffer |
+| writev | BPX1WRV | BPX4WRV | Write from gather buffer |
+| lseek | BPX1LSK | BPX4LSK | Reposition read/write offset |
+| stat | BPX1STA | BPX4STA | Get file status by path name |
+| fstat | BPX1FST | BPX4FST | Get file status by file descriptor |
+| lstat | BPX1LST | BPX4LST | Get file status (no symlink follow) |
+| statvfs | BPX1STV | BPX4STV | Get file system status |
+| chattr | BPX1CHR | BPX4CHR | Change file attributes |
+| chmod | BPX1CHM | BPX4CHM | Change file mode (permissions) |
+| chown | BPX1CHO | BPX4CHO | Change file owner/group |
+| access | BPX1ACC | BPX4ACC | Check file accessibility |
+| rename | BPX1REN | BPX4REN | Rename a file or directory |
+| unlink | BPX1UNL | BPX4UNL | Remove a directory entry |
+| link | BPX1LNK | BPX4LNK | Create a hard link |
+| symlink | BPX1SYM | BPX4SYM | Create a symbolic link |
+| readlink | BPX1RDL | BPX4RDL | Read a symbolic link value |
+| mkdir | BPX1MKD | BPX4MKD | Create a directory |
+| rmdir | BPX1RMD | BPX4RMD | Remove a directory |
+| opendir | BPX1OPD | BPX4OPD | Open a directory for reading |
+| readdir | BPX1RDD | BPX4RDD | Read an entry from a directory |
+| closedir | BPX1CLD | BPX4CLD | Close a directory stream |
+| fcntl | BPX1FCT | BPX4FCT | File control (locks, flags, etc.) |
+| ioctl | BPX1IOC | BPX4IOC | Device control |
+| dup/dup2 | BPX1DUP | BPX4DUP | Duplicate a file descriptor |
+| pipe | BPX1PIP | BPX4PIP | Create an unnamed pipe |
+| umask | BPX1UMK | BPX4UMK | Set file mode creation mask |
+
+#### BPXWDYN -- Dynamic Allocation from USS
+
+BPXWDYN is a text interface to a subset of SVC 99 (dynamic allocation) and SVC 109 (dynamic output) services, designed for invocation from REXX and high-level languages:
+
+| Operation | Description |
+|-----------|-------------|
+| ALLOC | Dynamic allocation of a dataset or file |
+| FREE | Dynamic unallocation (deallocation) |
+| CONCAT | Dynamic concatenation of datasets |
+| INFO | Retrieve allocation information |
+| DYNOUT | Dynamic output (SVC 109) |
+
+Enhanced entry point **BPXWDY2** preserves the invoker program mask and simplifies HLL invocation.
+
+Example (REXX):
+```rexx
+address syscall
+"bpxwdyn alloc dd(MYFILE) dsn('USER.DATA.SET') shr"
+```
+
+Example (COBOL):
+```
+CALL 'BPXWDYN' USING 'ALLOC DD(MYFILE) PATH(/u/user/file.txt)
+  PATHOPTS(ORDWR,OCREAT) PATHMODE(SIRWXU) FILEDATA(TEXT)'
+```
 
 ### 8. /etc Configuration Files
 
-| File | Purpose |
-|------|---------|
-| /etc/profile | System-wide login profile |
-| /etc/resolv.conf | DNS resolver configuration |
-| /etc/hosts | Static hostname-to-IP mappings |
-| /etc/services | Service name-to-port mappings |
-| /etc/inetd.conf | Internet daemon (inetd) service definitions |
-| /etc/syslog.conf | System logging configuration |
-| /etc/rc | System initialization script |
-| /etc/init.options | Initialization options |
-| /etc/auto.master | Automount master map |
-| /etc/group | UNIX group definitions (optional, RACF primary) |
-| /etc/passwd | UNIX password file (optional, RACF primary) |
+| File | Purpose | Key Contents |
+|------|---------|-------------|
+| /etc/profile | System-wide shell initialization | PATH, LIBPATH, locale settings, STEPLIB, _BPXK_AUTOCVT, umask |
+| /etc/resolv.conf | DNS resolver configuration | Nameserver addresses; equivalent to TCPIP.DATA for USS programs |
+| /etc/hosts | Static hostname-to-IP mappings | Local name resolution supplement |
+| /etc/services | Service name-to-port mappings | Maps service names (ftp, ssh, telnet) to port numbers and protocols |
+| /etc/inetd.conf | inetd super-server configuration | Service name, socket type, protocol, wait/nowait, user, server path |
+| /etc/syslog.conf | syslogd configuration | Log routing rules: facility.priority -> destination |
+| /etc/rc | System initialization script | Starts daemons (syslogd, inetd, cron) at USS initialization |
+| $HOME/.profile | Per-user shell initialization | User-specific environment variables, PATH customizations |
+
+#### Resolver Search Order (for USS callable sockets programs)
+
+1. GLOBALTCPIPDATA
+2. /etc/resolv.conf
+3. //SYSTCPD DD statement
+4. userid.TCPIP.DATA
+5. SYS1.TCPPARMS(TCPDATA)
+6. DEFAULTTCPIPDATA
+7. TCPIP.TCPIP.DATA
+
+#### BPXPRMxx Parmlib Member
+
+The BPXPRMxx member in SYS1.PARMLIB controls USS system-wide configuration:
+
+| Parameter | Description |
+|-----------|-------------|
+| ROOT | Defines and mounts the root file system |
+| MOUNT | Specifies additional file systems to mount |
+| MAXPROCSYS | Maximum number of processes system-wide |
+| MAXPROCUSER | Maximum number of processes per user |
+| MAXFILEPROC | Maximum open files per process |
+| MAXTHREADS | Maximum threads per process |
+| MAXTHREADTASKS | Maximum thread tasks per address space |
+| RESOLVER_PROC | Specifies the resolver started procedure |
+| AUTOCVT | System-wide automatic codepage conversion setting |
+| SUPERUSER | Default superuser settings |
 
 ### 9. Security (RACF Integration)
 
-| Feature | Description |
-|---------|-------------|
-| OMVS segment | RACF user profile section: UID, HOME, PROGRAM, ASSIZEMAX, THREADS, etc. |
-| Group OMVS segment | GID for RACF groups |
-| UID 0 (superuser) | Full system access — equivalent to root |
-| BPX.SUPERUSER | FACILITY class profile — switchable superuser via su command |
-| UNIXPRIV class | Granular superuser privileges (e.g., SUPERUSER.FILESYS.MOUNT) |
-| BPX.DAEMON | Controls daemon authority for superusers |
-| BPX.MAINCHECK | Controls MVS-to-USS access checking |
-| BPX.SERVER | Server authority for identity switching |
-| setuid/setgid bits | Program executes with file owner's UID/GID |
-| File permission bits | Standard UNIX rwx for user/group/other |
-| ACLs | Extended access control lists (getfacl/setfacl) |
-| FSSEC class | zFS/TFS file system security profiles |
-| DFTUSER / DFTGROUP | Default UID/GID for users without OMVS segment |
-| Program control | BPX.DAEMON requires programs in RACF program-control list |
+#### OMVS Segment
 
-### 10. IPC (Interprocess Communication)
+Every USS user requires an OMVS segment in their RACF user profile, and every group requires an OMVS segment in its RACF group profile:
 
-| Feature | Description |
-|---------|-------------|
-| Shared memory — shmget | Create/access shared memory segment |
-| Shared memory — shmat | Attach shared memory to address space |
-| Shared memory — shmdt | Detach shared memory |
-| Shared memory — shmctl | Control (stat, remove) shared memory |
-| Semaphores — semget | Create/access semaphore set |
-| Semaphores — semop | Perform semaphore operations |
-| Semaphores — semctl | Control (stat, remove) semaphore set |
-| Message queues — msgget | Create/access message queue |
-| Message queues — msgsnd | Send message to queue |
-| Message queues — msgrcv | Receive message from queue |
-| Message queues — msgctl | Control (stat, remove) message queue |
-| Pipes | pipe() — anonymous pipes between parent/child |
-| Named pipes (FIFO) | mkfifo() — named pipes in file system |
-| BPXPRMxx IPC limits | IPCMSGNIDS, IPCSEMNIDS, IPCSHMNIDS, IPCSHMMPAGES, etc. |
-| ipcs/ipcrm commands | List and remove IPC resources |
+| RACF Object | OMVS Field | Description |
+|-------------|-----------|-------------|
+| User profile | UID | Unique UNIX user identifier (0 = superuser) |
+| User profile | HOME | Home directory path (e.g., /u/userid) |
+| User profile | PROGRAM | Initial program/shell (e.g., /bin/sh) |
+| Group profile | GID | Unique UNIX group identifier |
+
+RACF commands:
+```
+ALTUSER userid OMVS(UID(AUTOUID) HOME(/u/userid) PROGRAM(/bin/sh))
+ALTGROUP groupname OMVS(GID(AUTOGID))
+LU userid OMVS    /* Display OMVS segment */
+LG groupname OMVS /* Display group OMVS segment */
+```
+
+#### UNIXPRIV Class Profiles
+
+The UNIXPRIV class provides granular superuser privilege delegation without requiring UID 0:
+
+| Resource Profile | Access | Purpose |
+|-----------------|--------|---------|
+| SUPERUSER.FILESYS | READ | Read any local file, read/search any local directory |
+| SUPERUSER.FILESYS | UPDATE | Write to any local file |
+| SUPERUSER.FILESYS.CHANGEPERMS | READ | Use chmod/setfacl on any file |
+| SUPERUSER.FILESYS.CHOWN | READ | Use chown to change ownership of any file |
+| SUPERUSER.FILESYS.DIRSRCH | READ | Read and search any local directory |
+| SUPERUSER.FILESYS.MOUNT | READ | Mount/unmount file systems (nosetuid) |
+| SUPERUSER.FILESYS.MOUNT | UPDATE | Mount/unmount file systems (setuid allowed) |
+| SUPERUSER.FILESYS.QUIESCE | READ | Quiesce/unquiesce file systems |
+| SUPERUSER.FILESYS.PFSCTL | READ | Use pfsctl() callable service |
+| SUPERUSER.FILESYS.ACLOVERRIDE | READ | ACL contents override SUPERUSER.FILESYS access |
+| SUPERUSER.FILESYS.USERMOUNT | READ | Allow non-superuser file system mounting |
+| SUPERUSER.FILESYS.VREGISTER | READ | Use vregister callable service |
+| SUPERUSER.IPC.RMID | READ | Remove IPC resources owned by others |
+| SUPERUSER.PROCESS.GETPSENT | READ | Query process information of any process |
+| SUPERUSER.PROCESS.KILL | READ | Send signals to any process |
+| SUPERUSER.PROCESS.PTRACE | READ | Trace any process |
+| SUPERUSER.SETPRIORITY | READ | Change priority of any process |
+| SUPERUSER.SHMMCV.LIMIT | READ | Override shared memory/mutex/condvar limits |
+| CHOWN.UNRESTRICTED | READ | Change file ownership to any UID/GID |
+| FILE.GROUPOWNER.SETGID | READ | Control group ownership inheritance |
+| RESTRICTED.FILESYS.ACCESS | READ | Restricted access mode |
+| SHARED.IDS | READ | Allow shared UID/GID usage |
+
+UNIXPRIV activation:
+```
+SETROPTS CLASSACT(UNIXPRIV)
+SETROPTS RACLIST(UNIXPRIV)
+RDEFINE UNIXPRIV SUPERUSER.FILESYS.CHOWN UACC(NONE)
+PERMIT SUPERUSER.FILESYS.CHOWN CLASS(UNIXPRIV) ACCESS(READ) ID(ADMIN1)
+SETROPTS RACLIST(UNIXPRIV) REFRESH
+```
+
+#### Superuser Authority
+
+| Method | Description |
+|--------|-------------|
+| UID 0 | Direct superuser; full access to all UNIX functions |
+| BPX.SUPERUSER | FACILITY class profile; READ access grants ability to `su` to superuser mode |
+| UNIXPRIV class | Granular delegation of individual superuser functions |
+
+Best practice: Use two user IDs -- one with UID 0 for maintenance, one with non-zero UID for normal work.
+
+#### BPX FACILITY Class Resources
+
+| Resource | Purpose |
+|----------|---------|
+| BPX.DAEMON | Controls who can use setuid/seteuid/setreuid and daemon-mode spawn |
+| BPX.SUPERUSER | Controls who can switch to superuser mode (su) |
+| BPX.SERVER | Controls server-level security functions |
+| BPX.SAFFASTPATH | Controls SAF fast path for file access checking |
+| BPX.JOBNAME | Controls who can set _BPX_JOBNAME (assign MVS job names) |
+| BPX.FILEATTR.APF | Controls APF-authorization of USS executables |
+| BPX.FILEATTR.PROGCTL | Controls program-controlled attribute on USS executables |
+
+#### File Permission Bits & ACLs
+
+Standard UNIX permission model:
+| Permission | Octal | Applies to |
+|-----------|-------|------------|
+| Read (r) | 4 | Owner / Group / Other |
+| Write (w) | 2 | Owner / Group / Other |
+| Execute (x) | 1 | Owner / Group / Other |
+| Setuid (s) | 4000 | Execute with file owner's UID |
+| Setgid (s) | 2000 | Execute with file group's GID; new files inherit parent GID |
+| Sticky (t) | 1000 | Only owner can delete files in directory |
+
+Access Control Lists (ACLs):
+- Provide fine-grained access beyond standard owner/group/other bits
+- Administered via `setfacl` (set) and `getfacl` (query) UNIX commands
+- Checked by RACF; requires FSSEC class to be active
+- ACL checking enabled by HFSACL option in RACF
+- ACLs work in conjunction with permission bits (not replacement)
+
+### 10. Interprocess Communication (IPC)
+
+#### System V IPC Callable Services
+
+**Shared Memory:**
+
+| Function | BPX1 (31-bit) | BPX4 (64-bit) | Description |
+|----------|---------------|---------------|-------------|
+| shmget | BPX1MGT | BPX4MGT | Create or find a shared memory segment |
+| shmat | BPX1MAT | BPX4MAT | Attach a shared memory segment |
+| shmdt | BPX1MDT | BPX4MDT | Detach a shared memory segment |
+| shmctl | BPX1MCT | BPX4MCT | Control shared memory segment (stat/remove/set) |
+
+**Semaphores:**
+
+| Function | BPX1 (31-bit) | BPX4 (64-bit) | Description |
+|----------|---------------|---------------|-------------|
+| semget | BPX1SGT | BPX4SGT | Create or find a set of semaphores |
+| semop | BPX1SOP | BPX4SOP | Perform semaphore operations (wait/post) |
+| semctl | BPX1SCT | BPX4SCT | Control semaphores (stat/remove/set/getval/setval) |
+
+**Message Queues:**
+
+| Function | BPX1 (31-bit) | BPX4 (64-bit) | Description |
+|----------|---------------|---------------|-------------|
+| msgget | BPX1QGT | BPX4QGT | Create or find a message queue |
+| msgsnd | BPX1QSN | BPX4QSN | Send a message to a queue |
+| msgrcv | BPX1QRC | BPX4QRC | Receive a message from a queue |
+| msgctl | BPX1QCT | BPX4QCT | Control message queue (stat/remove/set) |
+
+**IPC Query Service:**
+
+| Function | BPX1 (31-bit) | BPX4 (64-bit) | Description |
+|----------|---------------|---------------|-------------|
+| w_getipc | BPX1GET | BPX4GET | Query interprocess communications |
+
+**IPC Mapping Macros (Assembler):**
+
+| Macro | Purpose |
+|-------|---------|
+| BPXYIPCP | Maps interprocess communication permissions structure |
+| BPXYIPCQ | Maps the w_getipc query structure |
+| BPXYMSG | Maps IPC message queue structures |
+| BPXYSEM | Maps IPC semaphore structures |
+| BPXYSHM | Maps IPC shared memory segment structures |
+
+#### Pipes and Named Pipes
+
+| Mechanism | Command/Service | Description |
+|-----------|----------------|-------------|
+| Unnamed pipe | `pipe()` / BPX1PIP/BPX4PIP | Anonymous unidirectional channel between related processes |
+| Shell pipe | `cmd1 \| cmd2` | Shell-level pipe connecting stdout to stdin |
+| Named pipe (FIFO) | `mkfifo` / `mknod` | Persistent filesystem entry; unrelated processes can communicate |
+
+Named pipes (FIFOs):
+- Created with `mkfifo pathname` or `mknod pathname p`
+- Identified by `p` in `ls -l` file type indicator
+- Must be opened at both ends (reader and writer) before I/O proceeds
+- Used by FTP and other z/OS services for inter-process data transfer
 
 ### 11. Memory-Mapped Files
 
-| Feature | Description |
-|---------|-------------|
-| mmap / BPX1MMP | Map file into process address space |
-| munmap / BPX1MUN | Unmap file from address space |
-| mprotect / BPX1MPR | Change memory protection (read/write/exec) |
-| msync / BPX1MSY | Synchronize mapped memory with file |
-| MAP_SHARED | Shared mapping (visible to other processes) |
-| MAP_PRIVATE | Private copy-on-write mapping |
-| MAP_FIXED | Map at specific address |
+| Function | BPX1 (31-bit) | BPX4 (64-bit) | Description |
+|----------|---------------|---------------|-------------|
+| mmap | BPX1MMP | BPX4MMP | Map pages of memory (file or anonymous) |
+| munmap | BPX1MUN | BPX4MUN | Unmap previously mapped addresses |
+| mprotect | BPX1MPR | BPX4MPR | Set protection of memory mapping (read/write/execute) |
+| msync | BPX1MSY | BPX4MSY | Synchronize memory with physical storage |
+
+Key mapping flags:
+| Flag | Description |
+|------|-------------|
+| MAP_SHARED | Writes visible to other processes mapping the same file; changes written to file |
+| MAP_PRIVATE | Copy-on-write; changes not visible to others, not written to file |
+| MAP_ANONYMOUS | Not backed by a file; used for shared memory between related processes |
+
+z/OS-specific enhancements (APAR OA60306):
+- Support for **above-the-bar storage** (64-bit virtual addresses) for memory maps
+- Allows map lengths **greater than 2 GB**, alleviating below-the-bar memory constraints
+- Page size alignment: offset must be a multiple of the system page size (4096 bytes)
+- Applications must be modified (recompiled with BPX4MMP) to use enhanced support
 
 ### 12. USS-MVS Integration
 
-| Feature | Description |
+#### Accessing MVS Datasets from USS
+
+| Syntax | Description |
+|--------|-------------|
+| `//'FULLY.QUALIFIED.DSN'` | Access MVS dataset by fully qualified name from USS programs |
+| `//DD:ddname` | Access by DD name (after allocation) |
+| `//DSN:dataset.name(member)` | Access PDS member |
+
+MVS dataset I/O is done via z/OS C library `fopen()` in record mode:
+```c
+FILE *fp = fopen("//'USER.DATA.SET'", "r");
+FILE *fp = fopen("//DD:MYFILE", "rb,type=record");
+```
+
+#### BPXWDYN Dynamic Allocation
+
+BPXWDYN provides SVC 99 dynamic allocation from USS/REXX/HLLs:
+
+| Keyword | Description |
 |---------|-------------|
-| //'dataset.name' | Access MVS datasets from USS using // prefix syntax |
-| BPXWDYN | Dynamic allocation of MVS datasets from USS programs |
-| FILEDATA=TEXT | Automatic EBCDIC↔ASCII conversion for text files |
-| FILEDATA=BINARY | No conversion — binary pass-through |
-| chtag command | Tag files with code page information |
+| DD(name) | Specify DD name |
+| DSN('dataset.name') | Specify dataset name |
+| PATH(/path/to/file) | USS file path |
+| PATHOPTS(flags) | File open options (ORDWR, OCREAT, etc.) |
+| PATHMODE(perms) | File permissions (SIRWXU, etc.) |
+| PATHDISP(normal,abnormal) | Disposition handling |
+| FILEDATA(TEXT\|BINARY\|RECORD) | Data type specification |
+| SHR / OLD / MOD / NEW | Dataset disposition |
+| RTDDN | Return allocated DD name (REXX only) |
+| RTDSN | Return dataset name (REXX only) |
+
+#### Codepage Tagging and Conversion
+
+| Tool/Variable | Description |
+|---------------|-------------|
+| chtag | Tag a file with its character encoding (e.g., `chtag -tc ISO8859-1 file`) |
 | ls -T | Display file tag information |
-| iconv | Convert between character encodings (EBCDIC, ASCII, UTF-8, etc.) |
-| Enhanced ASCII | z/OS 1.9+ supports ASCII as default code set for USS processes |
-| _BPXK_AUTOCVT | Automatic conversion between tagged files |
-| TSO OMVS | Enter USS shell from TSO |
-| BPXBATCH | Run USS programs from JCL (JOB/EXEC/DD) |
-| STDENV DD | Pass environment variables to BPXBATCH programs |
-| STDOUT/STDERR DD | Map USS standard output/error to MVS datasets |
+| ls -ETl | Display extended attributes including file tags |
+| iconv | Convert file encoding between codepages (e.g., ISO8859-1 <-> IBM-1047) |
+| iconv -l | List all supported character encoding schemes on z/OS |
+| tag command | Query and set file codepage tags |
+| _BPXK_AUTOCVT | Environment variable: ON enables automatic codepage conversion on I/O |
+| _CEE_RUNOPTS | FILETAG(AUTOCVT,AUTOTAG) -- LE runtime option for automatic tagging |
+| _TAG_REDIR_ERR | Tag redirected stderr as text |
+| _TAG_REDIR_IN | Tag redirected stdin as text |
+| _TAG_REDIR_OUT | Tag redirected stdout as text |
+| AUTOCVT (BPXPRMxx) | System-wide automatic conversion setting |
 
-### 13. Daemon Support & System Services
+#### Enhanced ASCII Support
 
-| Feature | Description |
-|---------|-------------|
-| inetd | Internet super-daemon — listens on ports, starts services on demand |
-| cron | Scheduled task execution |
-| syslogd | System logging daemon |
-| _BPX_JOBNAME | Assign MVS job name to USS process |
-| _BPX_SHAREAS | Control address-space sharing for spawned processes |
-| _BPX_BATCH_UMASK | Set umask for BPXBATCH programs |
-| BPXOINIT | USS initialization — starts /etc/rc |
-| OMVS address space | Kernel address space for USS |
-| WLM OMVS classification | Work classified under OMVS subsystem type |
+z/OS UNIX defaults to EBCDIC (IBM-1047) but supports full ASCII/UTF-8 operation:
 
-## Current OpenMainframe Status
+| Encoding | CCSID | Description |
+|----------|-------|-------------|
+| IBM-1047 | 1047 | z/OS default EBCDIC |
+| ISO8859-1 | 819 | Latin-1 ASCII |
+| UTF-8 | 1208 | Unicode UTF-8 |
+| ASCII | 367 | US-ASCII |
 
-### Codebase Search Results
-
-A comprehensive search of the OpenMainframe codebase found **zero USS/POSIX implementation**. All 11 search categories returned no matches in Rust source files:
-
-| Search Pattern | Matches in `.rs` Files |
-|---------------|----------------------|
-| USS / UNIX / OMVS | 0 |
-| POSIX | 0 |
-| fork / exec / spawn / BPX | 0 |
-| zFS / HFS (file system context) | 0 |
-| pthread | 0 |
-| socket / AF_INET / AF_UNIX | 0 |
-| BPXWDYN | 0 |
-| BPXBATCH / /bin/sh | 0 |
-| shmget / semget / msgget | 0 |
-| mmap / memory-mapped | 0 |
-| iconv / chtag / codepage | 0 |
-
-### Adjacent Infrastructure
-
-While no USS-specific code exists, the following adjacent implementations could be leveraged:
-
-#### 1. Standard Rust File I/O (Dataset Crate)
-**File:** `crates/open-mainframe-dataset/src/qsam.rs:6-49`
-```rust
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+Recommended environment setup for ASCII applications:
+```shell
+export _BPXK_AUTOCVT="ON"
+export _CEE_RUNOPTS="FILETAG(AUTOCVT,AUTOTAG) POSIX(ON)"
+export _TAG_REDIR_ERR="txt"
+export _TAG_REDIR_IN="txt"
+export _TAG_REDIR_OUT="txt"
 ```
-Uses Rust standard `std::fs` for QSAM sequential file access — not USS POSIX file I/O but conceptually similar. Could be extended with a USS file-system layer.
 
-#### 2. Tokio Async Runtime (Deploy Crate)
-**File:** `crates/open-mainframe-deploy/src/server.rs`
-Uses `tokio::net::TcpListener`, `tokio::io::AsyncReadExt/AsyncWriteExt` — TCP socket functionality exists but via cloud-native async, not POSIX sockets.
+Conversion flow:
+1. File is tagged with its encoding via `chtag`
+2. `_BPXK_AUTOCVT=ON` enables kernel-level automatic conversion on read/write
+3. Programs read/write in their native encoding; kernel converts in-flight
+4. z/OS Unicode Conversion Service provides hardware-assisted codepage conversion
+5. Fallback: `iconv` command for manual conversion
 
-#### 3. Rust Threading (Dataset/CICS Crates)
-**File:** `crates/open-mainframe-dataset/src/locking.rs`
-```rust
-std::thread::sleep(Duration::from_millis(10));
-```
-**File:** `crates/open-mainframe-cics/src/interval/mod.rs`
-Uses Rust `std::thread` — not POSIX pthreads but equivalent concurrency primitives.
+**Caution:** Java programs should NOT use _BPXK_AUTOCVT=ON as Java performs its own encoding handling.
 
-#### 4. EBCDIC/Encoding Infrastructure
-**Crate:** `open-mainframe-encoding`
-21 code pages, packed/zoned decimal, DBCS — foundational for USS iconv/chtag character conversion requirements.
+#### FILEDATA Keyword (Dynamic Allocation)
 
-#### 5. Cross-Batch References
-USS is referenced in existing gap analyses:
-- **Batch 8 (RACF):** UNIXPRIV and FSSEC resource classes identified as missing
-- **Batch 12 (LE):** POSIX(ON) runtime option and pthread support documented as missing
-- **Batch 14 (SMF):** Type 92 USS file system activity records documented as missing
-- **Batch 17 (WLM):** OMVS subsystem classification type documented as missing
-
-## Gap Details
-
-### Process Model
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| fork() / BPX1FRK | Full copy-on-write process creation | None | **Missing** |
-| exec() / BPX1EXC | Replace process image | None | **Missing** |
-| spawn() / BPX1SPN | Combined fork+exec (preferred on z/OS) | None | **Missing** |
-| wait() / waitpid() / BPX1WAT | Wait for child termination | None | **Missing** |
-| kill() / BPX1KIL | Send signals to processes | None | **Missing** |
-| getpid() / getppid() | Process identification | None | **Missing** |
-| Process groups / sessions | setpgid(), setsid() | None | **Missing** |
-| Signal handling | sigaction, sigprocmask, sigsuspend, sigwait | None | **Missing** |
-| BPXAS auxiliary address spaces | WLM-managed fork processing | None | **Missing** |
-| Process limits (BPXPRMxx) | MAXPROCSYS, MAXPROCUSER | None | **Missing** |
-| _BPX_SHAREAS | Address-space sharing control | None | **Missing** |
-
-### File System
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| zFS (strategic file system) | Journaled, VSAM LDS-based | None | **Missing** |
-| HFS (legacy file system) | Deprecated but supported | None | **Missing** |
-| TFS (temporary file system) | In-memory for /tmp | None | **Missing** |
-| Mount/unmount | BPX1MNT/BPX1UMN | None | **Missing** |
-| Standard directory hierarchy | /, /bin, /usr, /etc, /tmp, /var, /dev | None | **Missing** |
-| Symbolic links | symlink() / BPX1SYM | None | **Missing** |
-| Hard links | link() / BPX1LNK | None | **Missing** |
-| FIFO (named pipes) | mkfifo() / BPX1MKN | None | **Missing** |
-| Character special files | /dev/null, /dev/random, etc. | None | **Missing** |
-| chmod / chown | File permission and ownership changes | None | **Missing** |
-| File permission bits (rwx) | Standard UNIX 9-bit model | None | **Missing** |
-| ACLs | Extended access control lists | None | **Missing** |
-| stat / fstat / lstat | File metadata retrieval | None | **Missing** |
-| File tagging (chtag) | Code page association | None | **Missing** |
-| FILEDATA TEXT/BINARY | Auto EBCDIC↔ASCII conversion | None | **Missing** |
-| Sysplex file sharing | zFS shared across sysplex | None | **Missing** |
-| NFS client | Remote file access | None | **Missing** |
-| AUTOMNT | Automatic mount | None | **Missing** |
-
-### Shell & Utilities
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| /bin/sh (z/OS shell) | Bourne-compatible shell | None | **Missing** |
-| bash / tcsh | Optional shells (Rocket port) | None | **Missing** |
-| BPXBATCH | JCL→USS bridge utility | None | **Missing** |
-| Core utilities | ls, cp, mv, rm, mkdir, cat, grep, awk, sed, find | None | **Missing** |
-| Shell scripting | Variables, loops, functions, pipes, redirections | None | **Missing** |
-| /etc/profile | System-wide profile | None | **Missing** |
-| TSO OMVS command | Enter USS from TSO | None | **Missing** |
-| ISHELL | ISPF interface to USS | None | **Missing** |
-| Environment variables | PATH, HOME, _BPX_*, _CEE_* | None | **Missing** |
-
-### Pthreads
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| pthread_create | Create thread | Rust std::thread (different API) | **Missing** |
-| pthread_join | Wait for thread | Rust std::thread::join (different API) | **Missing** |
-| pthread_mutex_* | Mutex locks | Rust std::sync::Mutex (different API) | **Missing** |
-| pthread_cond_* | Condition variables | Rust std::sync::Condvar (different API) | **Missing** |
-| pthread_rwlock_* | Read-write locks | Rust std::sync::RwLock (different API) | **Missing** |
-| pthread_key_* | Thread-specific data | Rust thread_local! (different API) | **Missing** |
-| pthread_atfork | Fork handlers | None | **Missing** |
-| Thread limits (BPXPRMxx) | MAXTHREADS, MAXTHREADTASKS | None | **Missing** |
-
-### Sockets
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| AF_INET (IPv4) | Full TCP/UDP over IPv4 | tokio::net (cloud-native async, not POSIX API) | **Partial** |
-| AF_INET6 (IPv6) | Full TCP/UDP over IPv6 | None | **Missing** |
-| AF_UNIX | Local domain sockets | None | **Missing** |
-| socket/bind/listen/accept | POSIX socket API | tokio equivalents exist (different API) | **Partial** |
-| select() / poll() | I/O multiplexing | tokio (epoll-based, different API) | **Partial** |
-| getaddrinfo() | Address resolution | None | **Missing** |
-| AT-TLS | Application Transparent TLS | None | **Missing** |
-
-### BPX Callable Services
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| File I/O services (BPX1OPN/RED/WRT/CLO) | 200+ callable services | None | **Missing** |
-| Process services (BPX1FRK/EXC/SPN/WAT) | Fork, exec, spawn, wait | None | **Missing** |
-| Signal services (BPX1SA/SPM/SSU) | Signal handling | None | **Missing** |
-| Socket services (BPX1SOC/BND/LSN/ACP) | Socket programming | None | **Missing** |
-| IPC services (BPX1MGT/SGT/SMG) | Shared memory, semaphores, message queues | None | **Missing** |
-| Memory services (BPX1MMP/MUN/MPR) | Memory-mapped files | None | **Missing** |
-| BPXWDYN | Dynamic MVS dataset allocation | None | **Missing** |
-
-### Security
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| RACF OMVS segment (UID/GID) | UID, HOME, PROGRAM, ASSIZEMAX per user | None | **Missing** |
-| Group OMVS segment (GID) | GID per RACF group | None | **Missing** |
-| BPX.SUPERUSER | Switchable superuser authority | None | **Missing** |
-| UNIXPRIV class | Granular superuser privilege control | None | **Missing** |
-| BPX.DAEMON | Daemon authority control | None | **Missing** |
-| BPX.SERVER | Server identity switching | None | **Missing** |
-| setuid / setgid | Execute with file owner's identity | None | **Missing** |
-| File ACLs | Extended access control (getfacl/setfacl) | None | **Missing** |
-| DFTUSER / DFTGROUP | Default USS identity for undubbed users | None | **Missing** |
-
-### IPC
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| Shared memory (shmget/shmat/shmdt/shmctl) | System V shared memory | None | **Missing** |
-| Semaphores (semget/semop/semctl) | System V semaphores | None | **Missing** |
-| Message queues (msgget/msgsnd/msgrcv/msgctl) | System V message queues | None | **Missing** |
-| Pipes (pipe()) | Anonymous pipes | None | **Missing** |
-| Named pipes / FIFO (mkfifo()) | Named pipes in file system | None | **Missing** |
-| IPC limits (BPXPRMxx) | IPCMSGNIDS, IPCSEMNIDS, IPCSHMNIDS, IPCSHMMPAGES | None | **Missing** |
-
-### Memory-Mapped Files
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| mmap / BPX1MMP | Map file into memory | None | **Missing** |
-| munmap / BPX1MUN | Unmap file from memory | None | **Missing** |
-| mprotect / BPX1MPR | Change memory protections | None | **Missing** |
-| msync / BPX1MSY | Sync mapped memory to file | None | **Missing** |
-| MAP_SHARED / MAP_PRIVATE | Shared vs private mappings | None | **Missing** |
-
-### USS-MVS Integration
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| //'dataset.name' syntax | Access MVS datasets from USS | None | **Missing** |
-| BPXWDYN | Dynamic MVS allocation from USS | None | **Missing** |
-| FILEDATA TEXT/BINARY | Auto code-page conversion | EBCDIC encoding exists (different layer) | **Partial** |
-| chtag / iconv | Character set tagging and conversion | Encoding crate (21 code pages) | **Partial** |
-| _BPXK_AUTOCVT | Automatic file conversion | None | **Missing** |
-| Enhanced ASCII | ASCII as default USS code set | None | **Missing** |
-| BPXBATCH | JCL-to-USS bridge | None | **Missing** |
-| STDENV/STDOUT/STDERR DD | DD-to-USS stream mapping | None | **Missing** |
-
-### Daemon Support
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| inetd | Internet super-daemon | None | **Missing** |
-| cron | Scheduled execution | None | **Missing** |
-| syslogd | System logging | None | **Missing** |
-| _BPX_JOBNAME | MVS job name for USS processes | None | **Missing** |
-| BPXOINIT | USS initialization | None | **Missing** |
-| OMVS address space | USS kernel | None | **Missing** |
-
-### BPXPRMxx Configuration
-
-| Feature | Official z/OS | OpenMainframe | Gap |
-|---------|--------------|---------------|-----|
-| MAXPROCSYS | System-wide process limit | None | **Missing** |
-| MAXPROCUSER | Per-user process limit | None | **Missing** |
-| MAXFILEPROC | Per-process file descriptor limit | None | **Missing** |
-| MAXTHREADS | Thread limit per process | None | **Missing** |
-| MAXTHREADTASKS | Thread-tasks limit | None | **Missing** |
-| IPCMSGNIDS / IPCSEMNIDS / IPCSHMNIDS | IPC resource limits | None | **Missing** |
-| FILESYSTYPE | File system type definitions | None | **Missing** |
-| ROOT | Root file system specification | None | **Missing** |
-| FORKCOPY | Fork copy semantics | None | **Missing** |
-
-## Proposed Epic Structure
-
-### USS-100: POSIX Process Model
-**Scope:** Implement the core USS process model — fork (as OS-level process or container spawn), exec (replace process image), spawn (combined fork+exec), wait/waitpid, kill/signal, getpid, process groups, sessions. Map to Linux/container process semantics while preserving z/OS API names and behavior.
-**Complexity:** XL
-**Rationale:** Foundational subsystem. Process model underpins everything else — shell, daemons, BPXBATCH. Fork semantics (address-space duplication, copy-on-write) and signal handling are complex.
-
-### USS-101: zFS/HFS File System Layer
-**Scope:** Implement USS file system abstraction — zFS (journaled, strategic), HFS (legacy), TFS (in-memory). Standard directory hierarchy (/, /bin, /usr, /etc, /tmp, /var, /dev). Mount/unmount, symbolic/hard links, FIFO, character specials, permission bits, stat/fstat/lstat. Map to host OS file system or virtual file system.
-**Complexity:** XL
-**Rationale:** Large surface area (20+ file operations), multiple FS types, permission model. Must bridge USS path semantics with existing dataset access model.
-
-### USS-102: Shell & Utilities
-**Scope:** Implement /bin/sh (Bourne shell) interpreter with shell scripting support (variables, loops, functions, pipes, redirections, here-docs). Core utilities (ls, cp, mv, rm, mkdir, cat, grep, find, etc.). /etc/profile processing. BPXBATCH JCL bridge.
-**Complexity:** XL
-**Rationale:** Full shell interpreter is a large effort. 30+ utilities required. Integration with JCL via BPXBATCH adds cross-subsystem complexity.
-
-### USS-103: POSIX Threads (pthreads)
-**Scope:** Implement POSIX thread API — pthread_create/join/detach/exit, mutexes, condition variables, read-write locks, thread-specific data, pthread_atfork. Map to Rust async/tokio or native threads while preserving POSIX API semantics.
-**Complexity:** L
-**Rationale:** Rust already has equivalent concurrency primitives. Main work is the POSIX API wrapper layer and thread-limit enforcement (BPXPRMxx MAXTHREADS).
-
-### USS-104: Sockets API
-**Scope:** Implement POSIX sockets — AF_INET, AF_INET6, AF_UNIX, socket/bind/listen/accept/connect/send/recv, select/poll, getaddrinfo, getsockopt/setsockopt. Map to Rust std::net or tokio::net while exposing POSIX API. AT-TLS (Application Transparent TLS) integration.
-**Complexity:** L
-**Rationale:** Rust/tokio already has TCP/UDP. Main work is AF_UNIX domain sockets, POSIX API compatibility layer, and AT-TLS policy integration.
-
-### USS-105: BPX Callable Services Framework
-**Scope:** Implement the BPX1xxx/BPX4xxx callable service framework — the assembler-level API surface that z/OS programs use. Organize 200+ services into categories (file I/O, process, signal, socket, IPC, memory). Each service delegates to USS-100 through USS-108 implementations.
-**Complexity:** L
-**Rationale:** API facade over the functional layers. Large number of services but most are thin wrappers. Need parameter-list marshaling for assembler-style calling convention.
-
-### USS-106: System V IPC
-**Scope:** Implement shared memory (shmget/shmat/shmdt/shmctl), semaphores (semget/semop/semctl), message queues (msgget/msgsnd/msgrcv/msgctl), pipes, and named pipes (FIFO). BPXPRMxx IPC limits enforcement. ipcs/ipcrm commands.
-**Complexity:** M
-**Rationale:** Standard System V IPC has well-defined semantics. Can map to host OS IPC or implement in-process for cloud-native mode.
-
-### USS-107: Memory-Mapped Files
-**Scope:** Implement mmap/munmap/mprotect/msync with MAP_SHARED, MAP_PRIVATE, MAP_FIXED options. Integrate with zFS file system layer for file-backed mappings.
-**Complexity:** M
-**Rationale:** Can delegate to host OS mmap. Main complexity is integration with USS file system layer and permission model.
-
-### USS-108: Security Integration (RACF OMVS)
-**Scope:** Implement RACF OMVS segment processing — UID/GID assignment, home directory, default shell. BPX.SUPERUSER, BPX.DAEMON, BPX.SERVER facility-class profiles. UNIXPRIV class for granular privilege control. File permission bits and ACL enforcement. setuid/setgid. DFTUSER/DFTGROUP.
-**Complexity:** L
-**Rationale:** Deep integration with RACF (Batch 8). Permission checking on every file operation and process creation. Must support the full UNIX security model.
-
-### USS-109: USS-MVS Integration Bridge
-**Scope:** Implement //'dataset.name' syntax for accessing MVS datasets from USS. BPXWDYN dynamic allocation. FILEDATA TEXT/BINARY auto-conversion. chtag/iconv for code page tagging. Enhanced ASCII support. _BPXK_AUTOCVT auto-conversion.
-**Complexity:** L
-**Rationale:** Bridges two fundamentally different I/O models (USS hierarchical files vs. MVS record-oriented datasets). Code-page conversion leverages existing encoding crate but needs USS-specific layers.
-
-### USS-110: BPXPRMxx Configuration & Initialization
-**Scope:** Implement BPXPRMxx parmlib member parsing and configuration — process limits (MAXPROCSYS, MAXPROCUSER), file limits (MAXFILEPROC), thread limits (MAXTHREADS), IPC limits, FILESYSTYPE definitions, ROOT file system, FORKCOPY. BPXOINIT initialization. D OMVS operator commands.
-**Complexity:** M
-**Rationale:** Configuration parsing is straightforward. Enforcement of limits across process, file, thread, and IPC subsystems requires integration with multiple epics.
-
-### USS-111: Daemon Infrastructure
-**Scope:** Implement inetd (internet super-daemon), cron (scheduled execution), syslogd (logging). _BPX_JOBNAME job-name assignment. WLM OMVS classification integration. Daemon lifecycle management.
-**Complexity:** M
-**Rationale:** Each daemon is relatively self-contained. inetd needs socket layer (USS-104), cron needs process model (USS-100), syslogd needs file system (USS-101).
-
-## Dependencies
-
-| Epic | Depends On |
-|------|-----------|
-| USS-100 | None (foundational process model) |
-| USS-101 | USS-100 (file operations need process context) |
-| USS-102 | USS-100 (shell needs fork/exec), USS-101 (shell needs file system) |
-| USS-103 | USS-100 (pthreads run within process) |
-| USS-104 | USS-100 (sockets need process context) |
-| USS-105 | USS-100 through USS-109 (facade over all functional layers) |
-| USS-106 | USS-100 (IPC between processes) |
-| USS-107 | USS-101 (mmap maps files) |
-| USS-108 | Batch 8 RACF (OMVS segment, UNIXPRIV, FACILITY class) |
-| USS-109 | USS-101 (file system), `open-mainframe-dataset` (MVS dataset access), `open-mainframe-encoding` (code pages) |
-| USS-110 | USS-100, USS-101, USS-103, USS-106 (enforces limits on all subsystems) |
-| USS-111 | USS-100 (daemon processes), USS-104 (inetd sockets), USS-101 (syslogd files) |
-
-### Cross-Batch Dependencies
-
-| Batch | Relationship |
+| Value | Description |
 |-------|-------------|
-| Batch 1 — REXX | REXX on USS (TSO/E REXX under OMVS) |
-| Batch 5 — CLIST | CLIST in TSO, limited USS interaction |
-| Batch 8 — RACF | OMVS segment, UNIXPRIV, BPX.SUPERUSER, BPX.DAEMON |
-| Batch 9 — TSO/ISPF | TSO OMVS command, ISHELL |
-| Batch 11 — JES2 | BPXBATCH submitted as JES job |
-| Batch 12 — LE | POSIX(ON), pthread support within LE |
-| Batch 14 — SMF | SMF type 92 (USS file system activity) |
-| Batch 17 — WLM | OMVS subsystem classification, BPXAS auxiliary address spaces |
-| Batch 20 — Networking | AT-TLS, TCP/IP stack under USS |
+| TEXT | File contains text data; subject to codepage conversion and newline handling |
+| BINARY | File contains binary data; no conversion |
+| RECORD | File uses record-oriented I/O (typical for MVS datasets) |
 
-## Complexity Estimate
+### 13. Daemon Support
 
-| Epic | Complexity | Rationale |
-|------|-----------|-----------|
-| USS-100 | XL | Process model (fork/exec/spawn/signals) is foundational and complex |
-| USS-101 | XL | Multiple FS types, 20+ operations, permission model, sysplex sharing |
-| USS-102 | XL | Full shell interpreter + 30+ utilities + BPXBATCH bridge |
-| USS-103 | L | POSIX API wrapper over Rust native threads |
-| USS-104 | L | POSIX API wrapper over existing network stack |
-| USS-105 | L | 200+ callable service facades over functional layers |
-| USS-106 | M | Standard System V IPC — well-defined, can map to host OS |
-| USS-107 | M | mmap delegation to host OS with USS file integration |
-| USS-108 | L | RACF integration for every file and process operation |
-| USS-109 | L | Bridges MVS datasets and USS files — two distinct I/O models |
-| USS-110 | M | Configuration parsing + cross-subsystem limit enforcement |
-| USS-111 | M | Three standalone daemons with clear interfaces |
+#### Core USS Daemons
 
-**Overall Complexity: XL** — 12 proposed epics (4×M, 5×L, 3×XL). USS is a full UNIX operating system environment within z/OS. Implementing even the core layer (process model + file system + shell) is a substantial effort comparable to building a small OS emulation layer.
+| Daemon | Purpose | Configuration |
+|--------|---------|---------------|
+| inetd | Internet super-server; listens on configured ports and spawns service handlers | /etc/inetd.conf |
+| cron | Scheduled task execution at specified dates/times | crontab files; crond |
+| syslogd | System log daemon; collects and routes log messages from applications | /etc/syslog.conf |
+| sshd | Secure Shell daemon (OpenSSH); provides encrypted remote access | /etc/ssh/sshd_config |
 
-## Feature Count Summary
+#### Daemon Startup (/etc/rc)
 
-- **Total features analyzed:** 130+
-- **Present:** 0
-- **Partial:** 5 (tokio TCP sockets, Rust threading primitives, encoding crate for iconv/chtag foundation, std::fs for file I/O pattern)
-- **Missing:** 125+
+USS daemons are started by the /etc/rc script, which executes during USS initialization:
 
-## Reference Documentation
+```shell
+# Typical /etc/rc contents
+_BPX_JOBNAME='SYSLOGD' /usr/sbin/syslogd -i &
+_BPX_JOBNAME='INETD'   /usr/sbin/inetd /etc/inetd.conf &
+_BPX_JOBNAME='CRON'    /usr/sbin/cron &
+```
 
-- [z/OS UNIX System Services Planning (GA32-0884)](https://www.ibm.com/docs/en/zos/2.5.0?topic=zos-unix-system-services-planning)
-- [z/OS UNIX System Services User's Guide (SA23-2279)](https://www.ibm.com/docs/en/zos/2.5.0?topic=zos-unix-system-services-users-guide)
-- [z/OS UNIX System Services Programming: Assembler Callable Services Reference (SA23-2281)](https://www.ibm.com/docs/en/zos/2.5.0?topic=reference-callable-services-descriptions)
-- [z/OS UNIX System Services Command Reference (SA23-2280)](https://www.ibm.com/docs/en/zos/2.5.0?topic=zos-unix-system-services-command-reference)
-- [z/OS 2.5 Assembler Callable Services Reference (PDF)](https://www.ibm.com/docs/en/SSLTBW_2.5.0/pdf/bpxb100_v2r5.pdf)
-- [z/OS BPXPRMxx Parmlib Member](https://www.ibm.com/docs/en/zos/3.1.0?topic=sys1parmlib-bpxprmxx-zos-unix-system-services-parameters)
-- [z/OS UNIX Security Fundamentals (IBM Redpaper REDP4193)](https://www.redbooks.ibm.com/redpapers/pdfs/redp4193.pdf)
-- [z/OS Distributed File Service zSeries File System Implementation (IBM Redbook)](https://www.redbooks.ibm.com/abstracts/sg246580.html)
-- [UNIX System Services — Wikipedia](https://en.wikipedia.org/wiki/UNIX_System_Services)
-- [IBM Community — What is USS?](https://community.ibm.com/community/user/ibmz-and-linuxone/blogs/dan-perkins/2024/03/13/what-is-uss)
+The ETCRC and ETCINIT procedures execute /etc/rc and log to syslog or /etc/log.
+
+#### z/OS-Specific Daemon Environment Variables
+
+| Variable | Values | Description |
+|----------|--------|-------------|
+| _BPX_JOBNAME | jobname string | Assigns a distinct MVS job name to the USS process; visible in SDSF and WLM |
+| _BPX_SHAREAS | YES / NO / REUSE / MUST | Controls whether spawned processes share the parent address space |
+| _BPX_BATCH_SPAWN | YES | Enables spawn optimization for batch environments |
+| _BPX_USERID | userid | Set the user identity for the process |
+
+_BPX_JOBNAME details:
+- Requires READ access to BPX.JOBNAME in the FACILITY class
+- Allows MVS operator commands (D OMVS,PID=) to identify the daemon
+- Enables WLM classification for prioritizing daemon traffic
+- Example RACF setup:
+  ```
+  RDEFINE FACILITY BPX.JOBNAME UACC(NONE)
+  PERMIT BPX.JOBNAME CLASS(FACILITY) ACCESS(READ) ID(daemonuser)
+  SETROPTS RACLIST(FACILITY) REFRESH
+  ```
+
+_BPX_SHAREAS details:
+| Value | Behavior |
+|-------|----------|
+| YES | Spawned process shares parent address space (lightweight TCBs) |
+| NO | Spawned process gets its own BPXAS address space (default) |
+| REUSE | Reuse current address space if possible |
+| MUST | Must share; fail if not possible |
+
+#### BPX.DAEMON Security
+
+| Requirement | Description |
+|-------------|-------------|
+| BPX.DAEMON (FACILITY) | Must be defined; controls access to setuid/seteuid/setreuid/spawn with identity change |
+| UID 0 | Daemons must run as superuser (UID 0) |
+| BPXROOT user | Default superuser identity (UID 0) recommended by IBM documentation |
+| RACF STARTED class | Maps daemon started task names to RACF identities |
+
+Access restrictions:
+- BPX.DAEMON must be restricted to: z/OS UNIX kernel userid, system daemons (inetd, syslogd, ftpd, sshd), and authorized system software
+
+#### syslogd Configuration
+
+| Item | Description |
+|------|-------------|
+| Config file | /etc/syslog.conf |
+| Socket path | /dev/log (AF_UNIX datagram socket) |
+| Local mode | `syslogd -i` (disable network logging, local only) |
+| Log rotation | Cron job to signal syslogd at midnight with date-stamped directories; or use automatic archive |
+| Users | IBM FTPD, TELNETD, IDS, OpenSSH all log to syslogd |
+
+**Important:** OpenSSH sshd does NOT log to the z/OS console if syslogd is not running. Always run syslogd in local mode (-i) for SSH log availability.
+
+## IBM Documentation References
+
+| Document | Publication Number | Description |
+|----------|-------------------|-------------|
+| z/OS UNIX System Services Planning | GA32-0884 | System setup, BPXPRMxx, file system, security |
+| z/OS UNIX System Services User's Guide | SA23-2279 | Shell usage, tcsh, file operations |
+| z/OS UNIX System Services Command Reference | SA23-2280 | All USS commands (chmod, mount, chtag, etc.) |
+| z/OS UNIX System Services Programming: Assembler Callable Services Reference | SA23-2281 | BPX1xxx/BPX4xxx callable services |
+| z/OS XL C/C++ Runtime Library Reference | SA22-7821 | POSIX C functions, pthreads, sockets |
+| z/OS Communications Server: IP Sockets Application Programming | SC27-3660 | Socket programming, AF_INET/AF_INET6/AF_UNIX |
+| z/OS Security Server RACF Security Administrator's Guide | SA23-2289 | OMVS segment, UNIXPRIV, BPX FACILITY class |
+| z/OS Using REXX and z/OS UNIX System Services | SA23-2283 | REXX syscall interface, BPXWDYN |
+| OS/390 OpenEdition XPG4 Conformance Document | (public.dhe.ibm.com) | XPG4 conformance details |
+| IBM Redpaper: z/OS UNIX Security Fundamentals | REDP-4193 | Comprehensive security reference |
+| IBM Redbook: ABCs of z/OS System Programming Vol. 9 | SG24-6989 | USS concepts, fork, spawn, IPC |
