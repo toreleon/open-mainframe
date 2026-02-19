@@ -2,12 +2,148 @@
 //!
 //! Provides an extensible registry mapping program names to handler functions,
 //! so that `EXEC PGM=IEBGENER` and similar utilities execute without external binaries.
+//!
+//! ## Standard Return Codes
+//!
+//! IBM utilities follow a common return code convention:
+//! - **0** — Success
+//! - **4** — Warning (e.g. member not found but processing continued)
+//! - **8** — Error (e.g. comparison found differences)
+//! - **12** — Severe error (e.g. unrecoverable I/O)
+//! - **16** — Control statement error
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::JclError;
 use super::StepResult;
+
+// =========================================================================
+// Standard return codes
+// =========================================================================
+
+/// Successful completion.
+pub const RC_SUCCESS: u32 = 0;
+/// Warning — processing completed with minor issues.
+pub const RC_WARNING: u32 = 4;
+/// Error — processing completed but with errors.
+pub const RC_ERROR: u32 = 8;
+/// Severe error — processing could not complete.
+pub const RC_SEVERE: u32 = 12;
+/// Control statement error.
+pub const RC_CTRL_ERROR: u32 = 16;
+
+// =========================================================================
+// SYSIN helpers
+// =========================================================================
+
+/// Read SYSIN DD as a string. Returns `Err` if the DD is missing or unreadable.
+pub fn read_sysin(dd_files: &HashMap<String, PathBuf>) -> Result<String, JclError> {
+    let sysin = dd_files
+        .get("SYSIN")
+        .ok_or_else(|| JclError::ExecutionFailed {
+            message: "SYSIN DD not allocated".to_string(),
+        })?;
+    std::fs::read_to_string(sysin).map_err(|e| JclError::ExecutionFailed {
+        message: format!("Failed to read SYSIN: {e}"),
+    })
+}
+
+/// Read SYSIN DD and return non-blank, non-comment lines (uppercase).
+/// Lines starting with `/*` are treated as end-of-data.
+/// Continuation lines ending with `-` are joined.
+pub fn read_sysin_statements(dd_files: &HashMap<String, PathBuf>) -> Result<Vec<String>, JclError> {
+    let content = read_sysin(dd_files)?;
+    let mut stmts = Vec::new();
+    let mut current = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("/*") {
+            break;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(continued) = trimmed.strip_suffix('-') {
+            current.push_str(continued);
+            current.push(' ');
+        } else {
+            current.push_str(trimmed);
+            stmts.push(current.to_ascii_uppercase());
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        stmts.push(current.to_ascii_uppercase());
+    }
+    Ok(stmts)
+}
+
+// =========================================================================
+// Utility output builder
+// =========================================================================
+
+/// Builder for utility SYSPRINT output with consistent formatting.
+pub struct UtilityOutput {
+    program: String,
+    lines: Vec<String>,
+    rc: u32,
+}
+
+impl UtilityOutput {
+    /// Create a new output builder for the named program.
+    pub fn new(program: &str) -> Self {
+        Self {
+            program: program.to_string(),
+            lines: Vec::new(),
+            rc: RC_SUCCESS,
+        }
+    }
+
+    /// Add an informational message.
+    pub fn info(&mut self, msg: &str) {
+        self.lines.push(format!("{}: {msg}", self.program));
+    }
+
+    /// Add a warning message and raise RC to at least 4.
+    pub fn warn(&mut self, msg: &str) {
+        self.lines.push(format!("{}: WARNING - {msg}", self.program));
+        self.rc = self.rc.max(RC_WARNING);
+    }
+
+    /// Add an error message and raise RC to at least 8.
+    pub fn error(&mut self, msg: &str) {
+        self.lines.push(format!("{}: ERROR - {msg}", self.program));
+        self.rc = self.rc.max(RC_ERROR);
+    }
+
+    /// Set the return code to a specific value (only raises, never lowers).
+    pub fn set_rc(&mut self, rc: u32) {
+        self.rc = self.rc.max(rc);
+    }
+
+    /// Build the final `StepResult`.
+    pub fn into_step_result(self, step_name: Option<&str>) -> StepResult {
+        let stdout = if self.lines.is_empty() {
+            String::new()
+        } else {
+            self.lines.join("\n") + "\n"
+        };
+        StepResult {
+            name: step_name.map(|s| s.to_string()),
+            return_code: self.rc,
+            stdout,
+            stderr: String::new(),
+            success: self.rc <= RC_WARNING,
+        }
+    }
+
+    /// Current return code.
+    pub fn rc(&self) -> u32 {
+        self.rc
+    }
+}
 
 /// Trait for a utility program handler.
 pub trait UtilityProgram: Send + Sync {
@@ -44,6 +180,7 @@ impl UtilityRegistry {
         registry.register(Box::new(Iefbr14));
         registry.register(Box::new(Iebgener));
         registry.register(Box::new(Idcams));
+        registry.register(Box::new(Iebcompr));
         registry
     }
 
@@ -252,6 +389,76 @@ impl UtilityProgram for Idcams {
     }
 }
 
+/// IEBCOMPR — Dataset comparison utility.
+///
+/// Compares SYSUT1 and SYSUT2 record-by-record. Reports differences via
+/// SYSPRINT. Processing halts after 10 mismatches.
+pub struct Iebcompr;
+
+impl UtilityProgram for Iebcompr {
+    fn execute(
+        &self,
+        step_name: Option<&str>,
+        dd_files: &HashMap<String, PathBuf>,
+        _parm: Option<&str>,
+    ) -> Result<StepResult, JclError> {
+        let sysut1 = dd_files.get("SYSUT1").ok_or_else(|| JclError::ExecutionFailed {
+            message: "IEBCOMPR requires SYSUT1 DD (first input)".to_string(),
+        })?;
+        let sysut2 = dd_files.get("SYSUT2").ok_or_else(|| JclError::ExecutionFailed {
+            message: "IEBCOMPR requires SYSUT2 DD (second input)".to_string(),
+        })?;
+
+        let data1 = std::fs::read(sysut1).map_err(|e| JclError::ExecutionFailed {
+            message: format!("Failed to read SYSUT1: {e}"),
+        })?;
+        let data2 = std::fs::read(sysut2).map_err(|e| JclError::ExecutionFailed {
+            message: format!("Failed to read SYSUT2: {e}"),
+        })?;
+
+        let mut out = UtilityOutput::new("IEBCOMPR");
+
+        // Compare line-by-line (treating as text records)
+        let lines1: Vec<&str> = std::str::from_utf8(&data1)
+            .unwrap_or("")
+            .lines()
+            .collect();
+        let lines2: Vec<&str> = std::str::from_utf8(&data2)
+            .unwrap_or("")
+            .lines()
+            .collect();
+
+        let max_len = lines1.len().max(lines2.len());
+        let mut mismatches = 0u32;
+        const MAX_MISMATCHES: u32 = 10;
+
+        for i in 0..max_len {
+            if mismatches >= MAX_MISMATCHES {
+                out.error(&format!("PROCESSING HALTED AFTER {MAX_MISMATCHES} UNEQUAL COMPARISONS"));
+                break;
+            }
+            let l1 = lines1.get(i).copied().unwrap_or("");
+            let l2 = lines2.get(i).copied().unwrap_or("");
+            if l1 != l2 {
+                mismatches += 1;
+                out.error(&format!("RECORD {}: SYSUT1 AND SYSUT2 DO NOT COMPARE", i + 1));
+            }
+        }
+
+        if mismatches == 0 {
+            out.info("DATA SETS COMPARE EQUALLY");
+        } else {
+            out.set_rc(RC_ERROR);
+        }
+
+        Ok(out.into_step_result(step_name))
+    }
+
+    fn name(&self) -> &str {
+        "IEBCOMPR"
+    }
+}
+
 /// Extract a parameter value from a control statement.
 /// For `DEFINE CLUSTER (NAME(MY.KSDS) ...)`, extracts "MY.KSDS".
 /// For `DELETE dsname`, extracts "dsname" if param_name is empty.
@@ -443,5 +650,111 @@ mod tests {
         assert!(names.contains(&"IEFBR14"));
         assert!(names.contains(&"IEBGENER"));
         assert!(names.contains(&"IDCAMS"));
+        assert!(names.contains(&"IEBCOMPR"));
+    }
+
+    #[test]
+    fn test_iebcompr_equal() {
+        let temp_dir = std::env::temp_dir().join("jcl_iebcompr_eq");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let f1 = temp_dir.join("sysut1.dat");
+        let f2 = temp_dir.join("sysut2.dat");
+        fs::write(&f1, "LINE 1\nLINE 2\nLINE 3\n").unwrap();
+        fs::write(&f2, "LINE 1\nLINE 2\nLINE 3\n").unwrap();
+
+        let mut dd_files = HashMap::new();
+        dd_files.insert("SYSUT1".to_string(), f1);
+        dd_files.insert("SYSUT2".to_string(), f2);
+
+        let util = Iebcompr;
+        let result = util.execute(Some("CMP"), &dd_files, None).unwrap();
+        assert_eq!(result.return_code, RC_SUCCESS);
+        assert!(result.stdout.contains("COMPARE EQUALLY"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_iebcompr_unequal() {
+        let temp_dir = std::env::temp_dir().join("jcl_iebcompr_ne");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let f1 = temp_dir.join("sysut1.dat");
+        let f2 = temp_dir.join("sysut2.dat");
+        fs::write(&f1, "LINE 1\nLINE 2\n").unwrap();
+        fs::write(&f2, "LINE 1\nDIFFERENT\n").unwrap();
+
+        let mut dd_files = HashMap::new();
+        dd_files.insert("SYSUT1".to_string(), f1);
+        dd_files.insert("SYSUT2".to_string(), f2);
+
+        let util = Iebcompr;
+        let result = util.execute(Some("CMP"), &dd_files, None).unwrap();
+        assert_eq!(result.return_code, RC_ERROR);
+        assert!(result.stdout.contains("DO NOT COMPARE"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_utility_output_builder() {
+        let mut out = UtilityOutput::new("TESTPGM");
+        out.info("STARTED");
+        out.warn("MEMBER NOT FOUND");
+        assert_eq!(out.rc(), RC_WARNING);
+
+        let result = out.into_step_result(Some("S1"));
+        assert_eq!(result.return_code, RC_WARNING);
+        assert!(result.success); // RC_WARNING is still success
+        assert!(result.stdout.contains("TESTPGM: STARTED"));
+        assert!(result.stdout.contains("TESTPGM: WARNING"));
+    }
+
+    #[test]
+    fn test_utility_output_error_raises_rc() {
+        let mut out = UtilityOutput::new("TESTPGM");
+        out.info("OK");
+        out.error("SOMETHING FAILED");
+        assert_eq!(out.rc(), RC_ERROR);
+
+        let result = out.into_step_result(None);
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_read_sysin_statements() {
+        let temp_dir = std::env::temp_dir().join("jcl_sysin_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let sysin_path = temp_dir.join("SYSIN");
+        fs::write(
+            &sysin_path,
+            "  COPY OUTDD=OUT,-\n    INDD=IN\n  SELECT MEMBER=A\n/*\n  IGNORED\n",
+        )
+        .unwrap();
+
+        let mut dd_files = HashMap::new();
+        dd_files.insert("SYSIN".to_string(), sysin_path);
+
+        let stmts = read_sysin_statements(&dd_files).unwrap();
+        assert_eq!(stmts.len(), 2);
+        assert!(stmts[0].contains("COPY OUTDD=OUT,"));
+        assert!(stmts[0].contains("INDD=IN"));
+        assert!(stmts[1].contains("SELECT MEMBER=A"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_return_code_constants() {
+        assert_eq!(RC_SUCCESS, 0);
+        assert_eq!(RC_WARNING, 4);
+        assert_eq!(RC_ERROR, 8);
+        assert_eq!(RC_SEVERE, 12);
+        assert_eq!(RC_CTRL_ERROR, 16);
     }
 }
