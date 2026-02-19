@@ -41,12 +41,14 @@ pub mod database;
 pub mod dataset;
 pub mod error;
 pub mod profile;
+pub mod saf;
 pub mod types;
 
 pub use database::{AuthCheckResult, ListDatasetResult, ListGroupResult, ListUserResult, RacfDatabase, SearchResult};
 pub use dataset::DatasetProfile;
 pub use error::RacfError;
 pub use profile::{GroupProfile, UserProfile};
+pub use saf::{SafRouter, SafRc, RacfRc, RacrouteResult, ExtractResult};
 
 /// Convenience result type for RACF operations.
 pub type Result<T> = std::result::Result<T, RacfError>;
