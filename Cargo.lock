@@ -1299,6 +1299,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-hlasm"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "serde",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "open-mainframe-ims"
 version = "0.1.0"
 dependencies = [

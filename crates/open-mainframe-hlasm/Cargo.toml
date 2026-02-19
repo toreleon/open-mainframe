@@ -1,0 +1,14 @@
+[package]
+name = "open-mainframe-hlasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HLASM — High Level Assembler lexer, parser, macro engine, and object code generator"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true
