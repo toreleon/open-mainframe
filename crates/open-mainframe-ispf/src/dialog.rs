@@ -70,6 +70,35 @@ pub struct MessageDef {
 //  ISPF variable pools
 // ---------------------------------------------------------------------------
 
+/// Variable type hint for VDEFINE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VarType {
+    Char,
+    Fixed,
+    Bit,
+    Hex,
+}
+
+impl VarType {
+    fn as_str(self) -> &'static str {
+        match self {
+            VarType::Char => "CHAR",
+            VarType::Fixed => "FIXED",
+            VarType::Bit => "BIT",
+            VarType::Hex => "HEX",
+        }
+    }
+
+    fn from_str(s: &str) -> Self {
+        match s.to_uppercase().as_str() {
+            "FIXED" => VarType::Fixed,
+            "BIT" => VarType::Bit,
+            "HEX" => VarType::Hex,
+            _ => VarType::Char,
+        }
+    }
+}
+
 /// The four-pool ISPF variable model.
 #[derive(Debug, Default)]
 pub struct IspfVarPools {
@@ -86,13 +115,38 @@ pub struct IspfVarPools {
 impl IspfVarPools {
     fn new() -> Self {
         let mut sys = HashMap::new();
+        // User / session variables.
         sys.insert("ZUSER".to_string(), "USER01".to_string());
         sys.insert("ZPREFIX".to_string(), "USER01".to_string());
+        sys.insert("ZLOGON".to_string(), "TSO".to_string());
+        sys.insert("ZAPPLID".to_string(), "ISR".to_string());
+        // Date / time variables.
         sys.insert("ZDATE".to_string(), "2025/01/01".to_string());
+        sys.insert("ZJDATE".to_string(), "25.001".to_string());
         sys.insert("ZTIME".to_string(), "12:00".to_string());
+        sys.insert("ZDAY".to_string(), "01".to_string());
+        sys.insert("ZMONTH".to_string(), "01".to_string());
+        sys.insert("ZYEAR".to_string(), "2025".to_string());
+        sys.insert("ZJ4DATE".to_string(), "2025.001".to_string());
+        sys.insert("ZDAYOFWK".to_string(), "Wednesday".to_string());
+        // Screen variables.
         sys.insert("ZSCREEN".to_string(), "1".to_string());
+        sys.insert("ZSCREENI".to_string(), "1".to_string());
         sys.insert("ZSCRMAXD".to_string(), "24".to_string());
         sys.insert("ZSCRMAXW".to_string(), "80".to_string());
+        sys.insert("ZSCRDEPTH".to_string(), "24".to_string());
+        sys.insert("ZSCRWIDTH".to_string(), "80".to_string());
+        // Environment variables.
+        sys.insert("ZENVIR".to_string(), "ISPF 7.6 OpenMainframe".to_string());
+        sys.insert("ZSYSID".to_string(), "SYS1".to_string());
+        sys.insert("ZNODE".to_string(), "NODE1".to_string());
+        sys.insert("ZTEMPF".to_string(), "/tmp/ispf".to_string());
+        sys.insert("ZTERM".to_string(), "3278-2".to_string());
+        sys.insert("ZKEYS".to_string(), "24".to_string());
+        // PF key defaults.
+        for i in 1..=24 {
+            sys.insert(format!("ZPF{i:02}"), String::new());
+        }
 
         Self {
             function_stack: vec![HashMap::new()],
@@ -184,6 +238,46 @@ impl IspfVarPools {
         }
     }
 
+    /// VCOPY — copy a variable's value and length into the function pool.
+    /// Sets `<name>_VALUE` and `<name>_LENGTH` in the function pool.
+    /// Returns 0 on success, 8 if variable not found.
+    pub fn vcopy(&mut self, name: &str) -> i32 {
+        let upper = name.to_uppercase();
+        if let Some(val) = self.get(&upper) {
+            let len = val.len();
+            self.set(&upper, val.clone());
+            self.set(&format!("{upper}_LENGTH"), len.to_string());
+            0
+        } else {
+            8
+        }
+    }
+
+    /// VDEFINE — declare a variable with a type hint and optional initial value.
+    /// In real ISPF this creates an application-level binding; here we store
+    /// a type marker and optionally initialise the value.
+    pub fn vdefine(&mut self, name: &str, var_type: VarType, initial: Option<String>) {
+        let upper = name.to_uppercase();
+        // Store the type marker as a system-level metadata variable.
+        self.set(&format!("{upper}_TYPE"), var_type.as_str().to_string());
+        if let Some(val) = initial {
+            self.set(&upper, val);
+        }
+    }
+
+    /// VRESET — remove all VDEFINE bindings for the current function.
+    pub fn vreset(&mut self) {
+        if let Some(func) = self.function_stack.last_mut() {
+            let type_keys: Vec<String> = func.keys()
+                .filter(|k| k.ends_with("_TYPE"))
+                .cloned()
+                .collect();
+            for k in type_keys {
+                func.remove(&k);
+            }
+        }
+    }
+
     /// Push a new function pool (for SELECT).
     pub fn push_function(&mut self) {
         self.function_stack.push(HashMap::new());
@@ -194,6 +288,21 @@ impl IspfVarPools {
         if self.function_stack.len() > 1 {
             self.function_stack.pop();
         }
+    }
+
+    /// Save profile pool to a map (simulates writing ISPPROF dataset).
+    pub fn save_profile(&self) -> HashMap<String, String> {
+        self.profile.clone()
+    }
+
+    /// Load profile pool from a map (simulates reading ISPPROF dataset).
+    pub fn load_profile(&mut self, data: HashMap<String, String>) {
+        self.profile = data;
+    }
+
+    /// Number of function pool levels (SELECT depth).
+    pub fn function_depth(&self) -> usize {
+        self.function_stack.len()
     }
 }
 
@@ -244,6 +353,9 @@ impl DialogManager {
             Some("VGET") => self.exec_vget(&upper),
             Some("VPUT") => self.exec_vput(&upper),
             Some("VERASE") => self.exec_verase(&upper),
+            Some("VCOPY") => self.exec_vcopy(&upper),
+            Some("VDEFINE") => self.exec_vdefine(&upper),
+            Some("VRESET") => self.exec_vreset(),
             _ => {
                 self.last_rc = 12;
                 12
@@ -437,6 +549,42 @@ impl DialogManager {
     fn exec_verase(&mut self, cmd: &str) -> i32 {
         let (vars, pool) = parse_var_list_and_pool(cmd, "VERASE");
         self.vars.verase(&vars, pool);
+        self.last_rc = 0;
+        0
+    }
+
+    // -----------------------------------------------------------------------
+    //  VCOPY / VDEFINE / VRESET
+    // -----------------------------------------------------------------------
+
+    fn exec_vcopy(&mut self, cmd: &str) -> i32 {
+        // VCOPY name MYLENGTH MYVALUE MOVE|LOCATE
+        // Simplified: VCOPY NAME — copies value + length into function pool.
+        let name = cmd.split_whitespace().nth(1).unwrap_or("");
+        if name.is_empty() {
+            self.last_rc = 20;
+            return 20;
+        }
+        let rc = self.vars.vcopy(name);
+        self.last_rc = rc;
+        rc
+    }
+
+    fn exec_vdefine(&mut self, cmd: &str) -> i32 {
+        // VDEFINE (name) TYPE(CHAR|FIXED|BIT|HEX)
+        let (vars, _pool) = parse_var_list_and_pool(cmd, "VDEFINE");
+        let var_type = extract_paren(cmd, "TYPE")
+            .map(|s| VarType::from_str(&s))
+            .unwrap_or(VarType::Char);
+        for var in &vars {
+            self.vars.vdefine(var, var_type, None);
+        }
+        self.last_rc = 0;
+        0
+    }
+
+    fn exec_vreset(&mut self) -> i32 {
+        self.vars.vreset();
         self.last_rc = 0;
         0
     }
@@ -817,5 +965,161 @@ _DSN
         // DSN is empty by default — VER should fail.
         let rc = dm.exec("DISPLAY PANEL(TEST)");
         assert_eq!(rc, 8);
+    }
+
+    // -------------------------------------------------------------------
+    //  T105 — Variable Services
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_vcopy() {
+        let mut dm = DialogManager::new();
+        dm.vars.set("MYDSN", "SYS1.MACLIB".into());
+        let rc = dm.exec("VCOPY MYDSN");
+        assert_eq!(rc, 0);
+        // VCOPY places value + length into function pool.
+        assert_eq!(dm.vars.get("MYDSN"), Some("SYS1.MACLIB".to_string()));
+        assert_eq!(dm.vars.get("MYDSN_LENGTH"), Some("11".to_string()));
+    }
+
+    #[test]
+    fn test_vcopy_not_found() {
+        let mut dm = DialogManager::new();
+        let rc = dm.exec("VCOPY NOSUCHVAR");
+        assert_eq!(rc, 8);
+    }
+
+    #[test]
+    fn test_vdefine_char() {
+        let mut dm = DialogManager::new();
+        let rc = dm.exec("VDEFINE (MYFIELD) TYPE(CHAR)");
+        assert_eq!(rc, 0);
+        assert_eq!(dm.vars.get("MYFIELD_TYPE"), Some("CHAR".to_string()));
+    }
+
+    #[test]
+    fn test_vdefine_fixed() {
+        let mut dm = DialogManager::new();
+        let rc = dm.exec("VDEFINE (COUNT) TYPE(FIXED)");
+        assert_eq!(rc, 0);
+        assert_eq!(dm.vars.get("COUNT_TYPE"), Some("FIXED".to_string()));
+    }
+
+    #[test]
+    fn test_vreset() {
+        let mut dm = DialogManager::new();
+        dm.exec("VDEFINE (A) TYPE(CHAR)");
+        dm.exec("VDEFINE (B) TYPE(FIXED)");
+        assert!(dm.vars.get("A_TYPE").is_some());
+        assert!(dm.vars.get("B_TYPE").is_some());
+
+        dm.exec("VRESET");
+        assert!(dm.vars.get("A_TYPE").is_none());
+        assert!(dm.vars.get("B_TYPE").is_none());
+    }
+
+    #[test]
+    fn test_system_variables_extended() {
+        let vars = IspfVarPools::new();
+        // Session.
+        assert_eq!(vars.get("ZLOGON"), Some("TSO".to_string()));
+        assert_eq!(vars.get("ZAPPLID"), Some("ISR".to_string()));
+        // Date/time.
+        assert!(vars.get("ZJDATE").is_some());
+        assert!(vars.get("ZDAY").is_some());
+        assert!(vars.get("ZMONTH").is_some());
+        assert!(vars.get("ZYEAR").is_some());
+        assert!(vars.get("ZJ4DATE").is_some());
+        assert!(vars.get("ZDAYOFWK").is_some());
+        // Screen.
+        assert_eq!(vars.get("ZSCRDEPTH"), Some("24".to_string()));
+        assert_eq!(vars.get("ZSCRWIDTH"), Some("80".to_string()));
+        // Environment.
+        assert!(vars.get("ZENVIR").is_some());
+        assert!(vars.get("ZSYSID").is_some());
+        assert_eq!(vars.get("ZTERM"), Some("3278-2".to_string()));
+        assert_eq!(vars.get("ZKEYS"), Some("24".to_string()));
+    }
+
+    #[test]
+    fn test_profile_pool_persistence() {
+        let mut vars = IspfVarPools::new();
+        vars.set("PREF", "OLDVAL".into());
+        vars.vput(&["PREF".into()], PanelVarPool::Profile);
+
+        // Save profile.
+        let saved = vars.save_profile();
+        assert_eq!(saved.get("PREF"), Some(&"OLDVAL".to_string()));
+
+        // Create a fresh pool and load the profile.
+        let mut vars2 = IspfVarPools::new();
+        vars2.load_profile(saved);
+        // Profile pool is searchable.
+        assert_eq!(vars2.get("PREF"), Some("OLDVAL".to_string()));
+    }
+
+    #[test]
+    fn test_function_pool_destroyed_on_return() {
+        let mut vars = IspfVarPools::new();
+        vars.set("OUTER", "1".into());
+        assert_eq!(vars.function_depth(), 1);
+
+        vars.push_function(); // SELECT level 2.
+        assert_eq!(vars.function_depth(), 2);
+        vars.set("INNER", "2".into());
+        assert_eq!(vars.get("INNER"), Some("2".to_string()));
+        assert_eq!(vars.get("OUTER"), None); // Not visible in inner function.
+
+        vars.pop_function();
+        assert_eq!(vars.function_depth(), 1);
+        assert_eq!(vars.get("INNER"), None); // Destroyed.
+        assert_eq!(vars.get("OUTER"), Some("1".to_string())); // Restored.
+    }
+
+    #[test]
+    fn test_vget_shared_across_select_levels() {
+        let mut dm = DialogManager::new();
+        dm.vars.set("DSN", "MY.DATASET".into());
+        dm.exec("VPUT (DSN) SHARED");
+
+        // Simulate SELECT by pushing a new function pool.
+        dm.vars.push_function();
+        dm.exec("VGET (DSN) SHARED");
+        assert_eq!(dm.vars.get("DSN"), Some("MY.DATASET".to_string()));
+        dm.vars.pop_function();
+    }
+
+    #[test]
+    fn test_vput_profile_survives_function_pop() {
+        let mut vars = IspfVarPools::new();
+        vars.set("SETTING", "YES".into());
+        vars.vput(&["SETTING".into()], PanelVarPool::Profile);
+
+        // Pop and push doesn't lose profile.
+        vars.push_function();
+        vars.pop_function();
+
+        // Profile pool still has it.
+        assert_eq!(vars.profile.get("SETTING"), Some(&"YES".to_string()));
+    }
+
+    #[test]
+    fn test_verase_asis_removes_both() {
+        let mut vars = IspfVarPools::new();
+        vars.shared.insert("BOTH".into(), "S".into());
+        vars.profile.insert("BOTH".into(), "P".into());
+        vars.verase(&["BOTH".into()], PanelVarPool::Asis);
+        assert!(vars.shared.get("BOTH").is_none());
+        assert!(vars.profile.get("BOTH").is_none());
+    }
+
+    #[test]
+    fn test_pf_key_system_vars() {
+        let vars = IspfVarPools::new();
+        // PF keys 01–24 should be present.
+        for i in 1..=24 {
+            let key = format!("ZPF{i:02}");
+            assert!(vars.get(&key).is_some(), "Missing {key}");
+        }
     }
 }

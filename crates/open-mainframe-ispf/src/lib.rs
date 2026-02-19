@@ -13,7 +13,7 @@
 pub mod dialog;
 pub mod panel;
 
-pub use dialog::{DialogManager, DisplayEvent, IspfVarPools, MessageDef};
+pub use dialog::{DialogManager, DisplayEvent, IspfVarPools, MessageDef, VarType};
 pub use panel::{
     extract_fields, parse_panel, AreaDef, CmpOp, FieldAttr, FieldType, Intensity,
     Justification, Panel, PanelCond, PanelError, PanelExpr, PanelField, PanelStmt,
