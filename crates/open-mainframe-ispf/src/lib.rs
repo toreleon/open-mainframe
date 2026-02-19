@@ -22,6 +22,7 @@
 
 pub mod dialog;
 pub mod editor;
+pub mod isredit;
 pub mod library;
 pub mod panel;
 pub mod skeleton;
@@ -34,6 +35,7 @@ pub use panel::{
     VarPool, VerCheck,
 };
 pub use editor::{EditProfile, Editor, EditorLine, FindResult, VisibleLine};
+pub use isredit::{IsreRc, IsreditEngine, UserState};
 pub use library::{
     LibdefEntry, LibdefType, LibraryManager, LmRc, MemberStats, OpenMode, PdsMember,
 };
