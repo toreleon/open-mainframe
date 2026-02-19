@@ -38,11 +38,13 @@
 //! ```
 
 pub mod database;
+pub mod dataset;
 pub mod error;
 pub mod profile;
 pub mod types;
 
-pub use database::{ListGroupResult, ListUserResult, RacfDatabase, SearchResult};
+pub use database::{AuthCheckResult, ListDatasetResult, ListGroupResult, ListUserResult, RacfDatabase, SearchResult};
+pub use dataset::DatasetProfile;
 pub use error::RacfError;
 pub use profile::{GroupProfile, UserProfile};
 

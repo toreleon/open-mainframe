@@ -102,4 +102,28 @@ pub enum RacfError {
         /// The invalid group name.
         group: String,
     },
+
+    /// Dataset profile already exists.
+    #[error("dataset profile '{name}' already defined to RACF")]
+    #[diagnostic(code(racf::dataset_exists))]
+    DatasetProfileExists {
+        /// The duplicate profile name.
+        name: String,
+    },
+
+    /// Dataset profile not found.
+    #[error("dataset profile '{name}' is not defined to RACF")]
+    #[diagnostic(code(racf::dataset_not_found))]
+    DatasetProfileNotFound {
+        /// The missing profile name.
+        name: String,
+    },
+
+    /// No matching dataset profile found for authorization check.
+    #[error("no profile found covering dataset '{dataset}'")]
+    #[diagnostic(code(racf::no_covering_profile))]
+    NoCoveringProfile {
+        /// The dataset name with no covering profile.
+        dataset: String,
+    },
 }

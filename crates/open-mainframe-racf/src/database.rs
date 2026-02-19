@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 
 use tracing::{debug, info};
 
+use crate::dataset::{self, DatasetProfile};
 use crate::error::RacfError;
 use crate::profile::{ConnectEntry, GroupProfile, UserProfile};
-use crate::types::{ConnectAuthority, UserAttribute};
+use crate::types::{AccessLevel, ConnectAuthority, UserAttribute};
 
 /// The RACF database — holds all user profiles, group profiles, and connections.
 ///
@@ -19,6 +20,8 @@ pub struct RacfDatabase {
     users: BTreeMap<String, UserProfile>,
     /// Group profiles keyed by uppercase group name.
     groups: BTreeMap<String, GroupProfile>,
+    /// Dataset profiles keyed by uppercase profile name/pattern.
+    datasets: BTreeMap<String, DatasetProfile>,
     /// Optional path for persistent storage.
     persist_path: Option<PathBuf>,
 }
@@ -37,6 +40,24 @@ pub struct ListGroupResult {
     pub profile: GroupProfile,
 }
 
+/// Result of a LISTDSD command.
+#[derive(Debug, Clone)]
+pub struct ListDatasetResult {
+    /// The dataset profile.
+    pub profile: DatasetProfile,
+}
+
+/// Result of a dataset authorization check.
+#[derive(Debug, Clone)]
+pub struct AuthCheckResult {
+    /// Whether access is granted.
+    pub granted: bool,
+    /// The access level the user has.
+    pub access: AccessLevel,
+    /// The profile name that governed the decision.
+    pub profile_name: String,
+}
+
 /// Result of a SEARCH command.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -50,6 +71,7 @@ impl RacfDatabase {
         let mut db = Self {
             users: BTreeMap::new(),
             groups: BTreeMap::new(),
+            datasets: BTreeMap::new(),
             persist_path: None,
         };
         // Create the default SYS1 group (root of the group hierarchy).
@@ -96,6 +118,7 @@ impl RacfDatabase {
         Ok(Self {
             users: stored.users,
             groups: stored.groups,
+            datasets: stored.datasets,
             persist_path: Some(path.to_path_buf()),
         })
     }
@@ -108,6 +131,7 @@ impl RacfDatabase {
         let stored = StoredDatabase {
             users: self.users.clone(),
             groups: self.groups.clone(),
+            datasets: self.datasets.clone(),
         };
         let data = serde_json::to_string_pretty(&stored).map_err(|e| RacfError::IoError {
             message: format!("failed to serialize RACF database: {}", e),
@@ -481,11 +505,172 @@ impl RacfDatabase {
         Ok(())
     }
 
+    // ───────────────────────── Dataset Profile Commands ─────────────────────────
+
+    /// ADDSD — create a new dataset profile.
+    ///
+    /// The `name` can be a discrete name (e.g. `SYS1.PARMLIB`) or a generic
+    /// pattern (e.g. `PROD.PAYROLL.**`).
+    pub fn add_dataset(
+        &mut self,
+        name: &str,
+        uacc: AccessLevel,
+        owner: &str,
+    ) -> Result<(), RacfError> {
+        let name = normalize_dataset_name(name);
+        let owner = owner.trim().to_uppercase();
+
+        if self.datasets.contains_key(&name) {
+            return Err(RacfError::DatasetProfileExists { name });
+        }
+
+        let profile = DatasetProfile::new(name.clone(), uacc, owner);
+
+        info!("ADDSD '{}' UACC({})", name, uacc);
+        self.datasets.insert(name, profile);
+        self.auto_save();
+        Ok(())
+    }
+
+    /// ALTDSD — modify an existing dataset profile.
+    pub fn alter_dataset(
+        &mut self,
+        name: &str,
+        uacc: Option<AccessLevel>,
+        owner: Option<&str>,
+    ) -> Result<(), RacfError> {
+        let name = normalize_dataset_name(name);
+        let profile = self
+            .datasets
+            .get_mut(&name)
+            .ok_or_else(|| RacfError::DatasetProfileNotFound { name: name.clone() })?;
+
+        if let Some(u) = uacc {
+            profile.uacc = u;
+        }
+        if let Some(o) = owner {
+            profile.owner = o.trim().to_uppercase();
+        }
+
+        info!("ALTDSD '{}'", name);
+        self.auto_save();
+        Ok(())
+    }
+
+    /// LISTDSD — retrieve a dataset profile.
+    pub fn list_dataset(&self, name: &str) -> Result<ListDatasetResult, RacfError> {
+        let name = normalize_dataset_name(name);
+        let profile = self
+            .datasets
+            .get(&name)
+            .ok_or_else(|| RacfError::DatasetProfileNotFound { name: name.clone() })?;
+        Ok(ListDatasetResult {
+            profile: profile.clone(),
+        })
+    }
+
+    /// DELDSD — delete a dataset profile.
+    pub fn delete_dataset(&mut self, name: &str) -> Result<(), RacfError> {
+        let name = normalize_dataset_name(name);
+        self.datasets
+            .remove(&name)
+            .ok_or_else(|| RacfError::DatasetProfileNotFound { name: name.clone() })?;
+        info!("DELDSD '{}'", name);
+        self.auto_save();
+        Ok(())
+    }
+
+    /// PERMIT — add or update an access-list entry on a dataset profile.
+    pub fn permit_dataset(
+        &mut self,
+        profile_name: &str,
+        id: &str,
+        access: AccessLevel,
+    ) -> Result<(), RacfError> {
+        let profile_name = normalize_dataset_name(profile_name);
+        let id = id.trim().to_uppercase();
+
+        let profile = self
+            .datasets
+            .get_mut(&profile_name)
+            .ok_or_else(|| RacfError::DatasetProfileNotFound {
+                name: profile_name.clone(),
+            })?;
+
+        profile.access_list.insert(id.clone(), access);
+
+        info!("PERMIT '{}' ID({}) ACCESS({})", profile_name, id, access);
+        self.auto_save();
+        Ok(())
+    }
+
+    /// Check dataset access — find the best matching profile and determine access.
+    ///
+    /// Returns the authorization decision including the governing profile.
+    /// Uses the z/OS "most specific generic" rule: when multiple generic profiles
+    /// match, the one with the highest specificity wins.
+    pub fn check_dataset_access(
+        &self,
+        dataset: &str,
+        userid: &str,
+        requested: AccessLevel,
+    ) -> Result<AuthCheckResult, RacfError> {
+        let dataset = normalize_dataset_name(dataset);
+        let userid = userid.trim().to_uppercase();
+
+        // 1. Try discrete (exact) profile first.
+        if let Some(profile) = self.datasets.get(&dataset) {
+            if !profile.generic {
+                let access = profile.effective_access(&userid);
+                return Ok(AuthCheckResult {
+                    granted: access >= requested,
+                    access,
+                    profile_name: profile.name.clone(),
+                });
+            }
+        }
+
+        // 2. Find the best-matching generic profile.
+        let mut best: Option<(&DatasetProfile, u32)> = None;
+        for profile in self.datasets.values() {
+            if !profile.generic {
+                // Discrete profiles only match exactly (handled above).
+                if profile.name == dataset {
+                    let access = profile.effective_access(&userid);
+                    return Ok(AuthCheckResult {
+                        granted: access >= requested,
+                        access,
+                        profile_name: profile.name.clone(),
+                    });
+                }
+                continue;
+            }
+            if dataset::dataset_matches(&dataset, &profile.name) {
+                let spec = dataset::pattern_specificity(&profile.name);
+                if best.as_ref().map_or(true, |(_, s)| spec > *s) {
+                    best = Some((profile, spec));
+                }
+            }
+        }
+
+        match best {
+            Some((profile, _)) => {
+                let access = profile.effective_access(&userid);
+                Ok(AuthCheckResult {
+                    granted: access >= requested,
+                    access,
+                    profile_name: profile.name.clone(),
+                })
+            }
+            None => Err(RacfError::NoCoveringProfile { dataset }),
+        }
+    }
+
     // ───────────────────────── Search ─────────────────────────
 
     /// SEARCH — search for profiles matching a mask pattern.
     ///
-    /// `class` can be "USER" or "GROUP".
+    /// `class` can be "USER", "GROUP", or "DATASET".
     /// `mask` supports `*` as a wildcard matching any characters.
     pub fn search(&self, class: &str, mask: &str) -> SearchResult {
         let class = class.to_uppercase();
@@ -500,6 +685,12 @@ impl RacfDatabase {
                 .collect(),
             "GROUP" => self
                 .groups
+                .keys()
+                .filter(|k| matches_mask(k, &mask))
+                .cloned()
+                .collect(),
+            "DATASET" => self
+                .datasets
                 .keys()
                 .filter(|k| matches_mask(k, &mask))
                 .cloned()
@@ -545,6 +736,16 @@ impl RacfDatabase {
         self.groups.len()
     }
 
+    /// Get the total number of dataset profiles.
+    pub fn dataset_count(&self) -> usize {
+        self.datasets.len()
+    }
+
+    /// Check if a dataset profile exists.
+    pub fn dataset_exists(&self, name: &str) -> bool {
+        self.datasets.contains_key(&normalize_dataset_name(name))
+    }
+
     /// Auto-save if persistence is configured (ignore errors silently).
     fn auto_save(&self) {
         if self.persist_path.is_some() {
@@ -564,11 +765,22 @@ impl Default for RacfDatabase {
 struct StoredDatabase {
     users: BTreeMap<String, UserProfile>,
     groups: BTreeMap<String, GroupProfile>,
+    #[serde(default)]
+    datasets: BTreeMap<String, DatasetProfile>,
 }
 
 /// Normalize a RACF name to uppercase.
 fn normalize_name(name: &str) -> String {
     name.trim().to_uppercase()
+}
+
+/// Normalize a dataset profile name — strip quotes and uppercase.
+fn normalize_dataset_name(name: &str) -> String {
+    let name = name.trim();
+    // Strip surrounding single quotes (z/OS convention for fully-qualified names).
+    let name = name.strip_prefix('\'').unwrap_or(name);
+    let name = name.strip_suffix('\'').unwrap_or(name);
+    name.to_uppercase()
 }
 
 /// Validate a RACF name: 1-8 alphanumeric characters (plus @, #, $).
@@ -905,6 +1117,243 @@ mod tests {
             assert!(db.group_exists("DEPT01"));
             let user = db.list_user("JSMITH").unwrap();
             assert_eq!(user.profile.name, "John Smith");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ─────── Story S101.1: Dataset Profile Commands ───────
+
+    #[test]
+    fn test_addsd_creates_generic_profile() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("PROD.PAYROLL.**", AccessLevel::None, "ADMIN1")
+            .unwrap();
+
+        let result = db.list_dataset("PROD.PAYROLL.**").unwrap();
+        assert!(result.profile.generic);
+        assert_eq!(result.profile.uacc, AccessLevel::None);
+        assert_eq!(result.profile.owner, "ADMIN1");
+    }
+
+    #[test]
+    fn test_addsd_discrete_profile() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("SYS1.PARMLIB", AccessLevel::Read, "SYS1")
+            .unwrap();
+
+        let result = db.list_dataset("SYS1.PARMLIB").unwrap();
+        assert!(!result.profile.generic);
+        assert_eq!(result.profile.uacc, AccessLevel::Read);
+    }
+
+    #[test]
+    fn test_addsd_duplicate_fails() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("PROD.**", AccessLevel::None, "ADMIN1")
+            .unwrap();
+
+        let err = db
+            .add_dataset("PROD.**", AccessLevel::Read, "ADMIN1")
+            .unwrap_err();
+        assert!(matches!(err, RacfError::DatasetProfileExists { .. }));
+    }
+
+    #[test]
+    fn test_altdsd_changes_uacc() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("PROD.**", AccessLevel::None, "ADMIN1")
+            .unwrap();
+
+        db.alter_dataset("PROD.**", Some(AccessLevel::Read), None)
+            .unwrap();
+
+        let result = db.list_dataset("PROD.**").unwrap();
+        assert_eq!(result.profile.uacc, AccessLevel::Read);
+    }
+
+    #[test]
+    fn test_deldsd_removes_profile() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("PROD.**", AccessLevel::None, "ADMIN1")
+            .unwrap();
+
+        db.delete_dataset("PROD.**").unwrap();
+        assert!(!db.dataset_exists("PROD.**"));
+    }
+
+    #[test]
+    fn test_permit_adds_access_list_entry() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("PROD.PAYROLL.**", AccessLevel::None, "ADMIN1")
+            .unwrap();
+
+        db.permit_dataset("PROD.PAYROLL.**", "JSMITH", AccessLevel::Read)
+            .unwrap();
+
+        let result = db.list_dataset("PROD.PAYROLL.**").unwrap();
+        assert_eq!(
+            result.profile.access_list.get("JSMITH"),
+            Some(&AccessLevel::Read)
+        );
+    }
+
+    #[test]
+    fn test_permit_updates_existing_entry() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("PROD.**", AccessLevel::None, "ADMIN1")
+            .unwrap();
+        db.permit_dataset("PROD.**", "JSMITH", AccessLevel::Read)
+            .unwrap();
+        db.permit_dataset("PROD.**", "JSMITH", AccessLevel::Update)
+            .unwrap();
+
+        let result = db.list_dataset("PROD.**").unwrap();
+        assert_eq!(
+            result.profile.access_list.get("JSMITH"),
+            Some(&AccessLevel::Update)
+        );
+    }
+
+    #[test]
+    fn test_check_access_granted_via_access_list() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("PROD.PAYROLL.**", AccessLevel::None, "ADMIN1")
+            .unwrap();
+        db.permit_dataset("PROD.PAYROLL.**", "JSMITH", AccessLevel::Read)
+            .unwrap();
+
+        let result = db
+            .check_dataset_access("PROD.PAYROLL.DATA", "JSMITH", AccessLevel::Read)
+            .unwrap();
+        assert!(result.granted);
+        assert_eq!(result.access, AccessLevel::Read);
+        assert_eq!(result.profile_name, "PROD.PAYROLL.**");
+    }
+
+    #[test]
+    fn test_check_access_denied_insufficient_level() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("PROD.PAYROLL.**", AccessLevel::None, "ADMIN1")
+            .unwrap();
+        db.permit_dataset("PROD.PAYROLL.**", "JSMITH", AccessLevel::Read)
+            .unwrap();
+
+        let result = db
+            .check_dataset_access("PROD.PAYROLL.DATA", "JSMITH", AccessLevel::Update)
+            .unwrap();
+        assert!(!result.granted);
+        assert_eq!(result.access, AccessLevel::Read);
+    }
+
+    #[test]
+    fn test_check_access_falls_back_to_uacc() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("PROD.**", AccessLevel::Read, "ADMIN1")
+            .unwrap();
+
+        let result = db
+            .check_dataset_access("PROD.DATA", "UNKNOWN", AccessLevel::Read)
+            .unwrap();
+        assert!(result.granted);
+        assert_eq!(result.access, AccessLevel::Read);
+    }
+
+    #[test]
+    fn test_check_access_no_profile_returns_error() {
+        let db = RacfDatabase::new();
+        let err = db
+            .check_dataset_access("UNPROTECTED.DATA", "JSMITH", AccessLevel::Read)
+            .unwrap_err();
+        assert!(matches!(err, RacfError::NoCoveringProfile { .. }));
+    }
+
+    // ─────── Story S101.2: Generic Profile Matching and HLQ Model ───────
+
+    #[test]
+    fn test_most_specific_generic_wins() {
+        let mut db = RacfDatabase::new();
+        // Broad generic — UACC NONE
+        db.add_dataset("SYS1.**", AccessLevel::None, "SYS1")
+            .unwrap();
+        // More specific — UACC READ
+        db.add_dataset("SYS1.PARMLIB.*", AccessLevel::Read, "SYS1")
+            .unwrap();
+
+        // SYS1.PARMLIB.MEMBER1 should match SYS1.PARMLIB.* (more specific)
+        let result = db
+            .check_dataset_access("SYS1.PARMLIB.MEMBER1", "ANYONE", AccessLevel::Read)
+            .unwrap();
+        assert!(result.granted);
+        assert_eq!(result.profile_name, "SYS1.PARMLIB.*");
+    }
+
+    #[test]
+    fn test_discrete_profile_takes_priority() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("SYS1.**", AccessLevel::Read, "SYS1")
+            .unwrap();
+        db.add_dataset("SYS1.PARMLIB", AccessLevel::None, "SYS1")
+            .unwrap();
+
+        // Discrete profile should win over generic.
+        let result = db
+            .check_dataset_access("SYS1.PARMLIB", "ANYONE", AccessLevel::Read)
+            .unwrap();
+        assert!(!result.granted);
+        assert_eq!(result.profile_name, "SYS1.PARMLIB");
+    }
+
+    #[test]
+    fn test_search_dataset_profiles() {
+        let mut db = RacfDatabase::new();
+        db.add_dataset("PROD.PAYROLL.**", AccessLevel::None, "ADMIN1")
+            .unwrap();
+        db.add_dataset("PROD.HR.**", AccessLevel::None, "ADMIN1")
+            .unwrap();
+        db.add_dataset("DEV.TEST.**", AccessLevel::Read, "DEV1")
+            .unwrap();
+
+        let result = db.search("DATASET", "PROD*");
+        assert_eq!(result.entries.len(), 2);
+    }
+
+    #[test]
+    fn test_dataset_name_normalization() {
+        let mut db = RacfDatabase::new();
+        // Quoted name (z/OS convention).
+        db.add_dataset("'prod.payroll.**'", AccessLevel::None, "admin1")
+            .unwrap();
+
+        // Should find it via uppercase unquoted name.
+        assert!(db.dataset_exists("PROD.PAYROLL.**"));
+        let result = db.list_dataset("prod.payroll.**").unwrap();
+        assert_eq!(result.profile.name, "PROD.PAYROLL.**");
+    }
+
+    #[test]
+    fn test_dataset_persistence_round_trip() {
+        let dir = std::env::temp_dir().join("racf_test_dataset_persist");
+        let _ = std::fs::remove_dir_all(&dir);
+        let db_path = dir.join("racf.json");
+
+        {
+            let mut db = RacfDatabase::with_persistence(&db_path);
+            db.add_dataset("PROD.**", AccessLevel::None, "ADMIN1")
+                .unwrap();
+            db.permit_dataset("PROD.**", "JSMITH", AccessLevel::Read)
+                .unwrap();
+            db.save().unwrap();
+        }
+
+        {
+            let db = RacfDatabase::load(&db_path).unwrap();
+            assert!(db.dataset_exists("PROD.**"));
+            let result = db.list_dataset("PROD.**").unwrap();
+            assert_eq!(
+                result.profile.access_list.get("JSMITH"),
+                Some(&AccessLevel::Read)
+            );
         }
 
         let _ = std::fs::remove_dir_all(&dir);
