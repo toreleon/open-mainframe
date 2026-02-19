@@ -26,6 +26,7 @@ pub mod enclave;
 pub mod error;
 pub mod heap;
 pub mod file_io;
+pub mod ilc;
 pub mod interpreter;
 pub mod io;
 pub mod math;
@@ -65,4 +66,8 @@ pub use message::{
     ceedcod, ceemget, ceemsg, ceemout, ceencod, ConditionToken, MessageCatalog,
 };
 pub use options::{OptionSource, OptionValue, RuntimeOptions};
+pub use ilc::{
+    DataDescriptor, IlcCallFrame, IlcCondition, IlcManager, Language, ParameterDescriptor,
+    PassingConvention,
+};
 pub use value::{CobolValue, NumericValue};
