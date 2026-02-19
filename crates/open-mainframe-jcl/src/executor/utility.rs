@@ -178,7 +178,7 @@ impl UtilityRegistry {
         };
         // Register built-in utilities
         registry.register(Box::new(Iefbr14));
-        registry.register(Box::new(Iebgener));
+        registry.register(Box::new(super::iebgener::Iebgener));
         registry.register(Box::new(Idcams));
         registry.register(Box::new(Iebcompr));
         registry.register(Box::new(super::iebcopy::Iebcopy));
@@ -231,57 +231,6 @@ impl UtilityProgram for Iefbr14 {
 
     fn name(&self) -> &str {
         "IEFBR14"
-    }
-}
-
-/// IEBGENER — Dataset copy utility.
-///
-/// Copies SYSUT1 (input) to SYSUT2 (output).
-pub struct Iebgener;
-
-impl UtilityProgram for Iebgener {
-    fn execute(
-        &self,
-        step_name: Option<&str>,
-        dd_files: &HashMap<String, PathBuf>,
-        _parm: Option<&str>,
-    ) -> Result<StepResult, JclError> {
-        let sysut1 = dd_files.get("SYSUT1").ok_or_else(|| JclError::ExecutionFailed {
-            message: "IEBGENER requires SYSUT1 DD (input)".to_string(),
-        })?;
-
-        let sysut2 = dd_files.get("SYSUT2").ok_or_else(|| JclError::ExecutionFailed {
-            message: "IEBGENER requires SYSUT2 DD (output)".to_string(),
-        })?;
-
-        // Create output directory if needed
-        if let Some(parent) = sysut2.parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(|e| JclError::ExecutionFailed {
-                    message: format!("Failed to create output directory: {}", e),
-                })?;
-            }
-        }
-
-        // Copy input to output
-        let bytes_copied = copy_file(sysut1, sysut2)?;
-
-        let stdout = format!(
-            "IEBGENER COMPLETED - {} BYTES COPIED FROM SYSUT1 TO SYSUT2\n",
-            bytes_copied
-        );
-
-        Ok(StepResult {
-            name: step_name.map(|s| s.to_string()),
-            return_code: 0,
-            stdout,
-            stderr: String::new(),
-            success: true,
-        })
-    }
-
-    fn name(&self) -> &str {
-        "IEBGENER"
     }
 }
 
@@ -520,43 +469,11 @@ mod tests {
     }
 
     #[test]
-    fn test_iebgener_copy() {
-        // AC: Given JCL with EXEC PGM=IEBGENER, SYSUT1 DD (input), SYSUT2 DD (output)
-        // When executed
-        // Then the input dataset is copied to the output dataset
-        let temp_dir = std::env::temp_dir().join("jcl_iebgener_test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        fs::create_dir_all(&temp_dir).unwrap();
-
-        let input_path = temp_dir.join("input.dat");
-        let output_path = temp_dir.join("output.dat");
-        fs::write(&input_path, "HELLO WORLD\nLINE 2\n").unwrap();
-
-        let mut dd_files = HashMap::new();
-        dd_files.insert("SYSUT1".to_string(), input_path);
-        dd_files.insert("SYSUT2".to_string(), output_path.clone());
-
-        let util = Iebgener;
-        let result = util.execute(Some("COPY01"), &dd_files, None).unwrap();
-
-        assert!(result.success);
-        assert_eq!(result.return_code, 0);
-        assert!(result.stdout.contains("IEBGENER COMPLETED"));
-
-        let output = fs::read_to_string(&output_path).unwrap();
-        assert_eq!(output, "HELLO WORLD\nLINE 2\n");
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn test_iebgener_missing_sysut1() {
-        let mut dd_files = HashMap::new();
-        dd_files.insert("SYSUT2".to_string(), PathBuf::from("/tmp/out"));
-
-        let util = Iebgener;
-        let result = util.execute(Some("COPY01"), &dd_files, None);
-        assert!(result.is_err());
+    fn test_iebgener_via_registry() {
+        // IEBGENER is now in iebgener.rs — verify it's registered
+        let registry = UtilityRegistry::new();
+        assert!(registry.contains("IEBGENER"));
+        assert_eq!(registry.lookup("IEBGENER").unwrap().name(), "IEBGENER");
     }
 
     #[test]
