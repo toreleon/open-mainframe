@@ -31,6 +31,7 @@ pub mod io;
 pub mod math;
 pub mod message;
 pub mod numeric_editing;
+pub mod options;
 pub mod sort_verb;
 pub mod storage;
 pub mod string;
@@ -63,4 +64,5 @@ pub use math::{
 pub use message::{
     ceedcod, ceemget, ceemsg, ceemout, ceencod, ConditionToken, MessageCatalog,
 };
+pub use options::{OptionSource, OptionValue, RuntimeOptions};
 pub use value::{CobolValue, NumericValue};
