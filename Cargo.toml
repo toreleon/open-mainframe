@@ -15,6 +15,7 @@ members = [
     "crates/open-mainframe-ims",
     "crates/open-mainframe-deploy",
     "crates/open-mainframe-tui",
+    "crates/open-mainframe-racf",
 ]
 
 [workspace.package]
@@ -72,3 +73,4 @@ open-mainframe-assess = { path = "crates/open-mainframe-assess" }
 open-mainframe-ims = { path = "crates/open-mainframe-ims" }
 open-mainframe-deploy = { path = "crates/open-mainframe-deploy" }
 open-mainframe-tui = { path = "crates/open-mainframe-tui" }
+open-mainframe-racf = { path = "crates/open-mainframe-racf" }

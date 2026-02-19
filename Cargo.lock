@@ -1196,6 +1196,7 @@ dependencies = [
  "dirs",
  "inkwell",
  "miette",
+ "open-mainframe-assess",
  "open-mainframe-cics",
  "open-mainframe-cobol",
  "open-mainframe-dataset",
@@ -1321,6 +1322,17 @@ dependencies = [
 [[package]]
 name = "open-mainframe-lang-core"
 version = "0.1.0"
+
+[[package]]
+name = "open-mainframe-racf"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
 
 [[package]]
 name = "open-mainframe-runtime"
