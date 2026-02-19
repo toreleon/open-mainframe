@@ -37,6 +37,7 @@
 //! assert_eq!(results.entries.len(), 1);
 //! ```
 
+pub mod auth;
 pub mod database;
 pub mod dataset;
 pub mod error;
@@ -44,6 +45,7 @@ pub mod profile;
 pub mod saf;
 pub mod types;
 
+pub use auth::{AuthResult, AuthService, PasswordChangeResult, PasswordPolicy};
 pub use database::{AuthCheckResult, ListDatasetResult, ListGroupResult, ListUserResult, RacfDatabase, SearchResult};
 pub use dataset::DatasetProfile;
 pub use error::RacfError;
