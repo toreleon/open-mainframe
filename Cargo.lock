@@ -1368,6 +1368,7 @@ name = "open-mainframe-tso"
 version = "0.1.0"
 dependencies = [
  "miette",
+ "open-mainframe-jes2",
  "serde",
  "serde_json",
  "thiserror",

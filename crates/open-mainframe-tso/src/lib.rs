@@ -10,9 +10,11 @@
 //! - **DELETE/RENAME** — dataset management
 //! - **ALTLIB** — alternative library search paths
 //! - **HELP** — command help system
+//! - **SUBMIT/STATUS/CANCEL/OUTPUT** — JES2 job management
 
 pub mod commands;
 pub mod error;
+pub mod jobs;
 pub mod parser;
 pub mod session;
 

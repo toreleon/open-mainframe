@@ -15,11 +15,11 @@ pub struct CommandResult {
 }
 
 impl CommandResult {
-    fn ok(lines: Vec<String>) -> Self {
+    pub(crate) fn ok(lines: Vec<String>) -> Self {
         Self { output: lines, rc: 0 }
     }
 
-    fn error(msg: &str) -> Self {
+    pub(crate) fn error(msg: &str) -> Self {
         Self {
             output: vec![msg.to_string()],
             rc: 12,
@@ -517,6 +517,42 @@ fn cmd_help(cmd: &ParsedCommand) -> CommandResult {
             "  ALTLIB DEACTIVATE APPLICATION(EXEC)",
             "  ALTLIB DISPLAY",
         ],
+        "SUBMIT" | "SUB" => vec![
+            "SUBMIT - Submit JCL for batch execution",
+            "",
+            "Syntax:",
+            "  SUBMIT 'dsname'",
+            "  SUBMIT dsname",
+            "",
+            "The JCL is read from the specified data set and submitted",
+            "to JES2. The job name and ID are displayed upon submission.",
+        ],
+        "STATUS" | "ST" => vec![
+            "STATUS - Display job status",
+            "",
+            "Syntax:",
+            "  STATUS [jobname]",
+            "",
+            "Displays the status of jobs owned by the current user.",
+            "If a job name is specified, only matching jobs are shown.",
+        ],
+        "CANCEL" | "CAN" => vec![
+            "CANCEL - Cancel a batch job",
+            "",
+            "Syntax:",
+            "  CANCEL jobname(JOBnnnnn)",
+            "  CANCEL JOBnnnnn",
+            "  CANCEL jobname",
+        ],
+        "OUTPUT" | "OUT" => vec![
+            "OUTPUT - Retrieve job output from spool",
+            "",
+            "Syntax:",
+            "  OUTPUT jobname(JOBnnnnn)",
+            "  OUTPUT JOBnnnnn",
+            "",
+            "Displays SYSOUT datasets from the job's spool.",
+        ],
         "" => vec![
             "HELP - Display help for TSO commands",
             "",
@@ -529,6 +565,10 @@ fn cmd_help(cmd: &ParsedCommand) -> CommandResult {
             "  DELETE (DEL)        - Delete a data set",
             "  RENAME (REN)        - Rename a data set",
             "  ALTLIB              - Manage library search paths",
+            "  SUBMIT (SUB)        - Submit JCL for batch execution",
+            "  STATUS (ST)         - Display job status",
+            "  CANCEL (CAN)        - Cancel a batch job",
+            "  OUTPUT (OUT)        - Retrieve job output",
             "  HELP                - Display this help",
             "  TIME                - Display current time",
             "",
