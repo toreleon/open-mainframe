@@ -8,10 +8,17 @@
 //! - Operand tokenization (registers, symbols, literals, self-defining terms)
 //! - **Symbol Table & Expression Evaluator** — two-pass symbol resolution and expression evaluation
 //! - Attribute references: L' (length), T' (type), S' (scale), I' (integer), D' (defined)
+//! - **Machine Instruction Encoding** — z/Architecture instruction formats and encoding
+//! - 200+ instructions across RR, RX, RXY, RS, RSY, RI, RIL, SI, SIY, SIL, SS, S, E formats
+//! - Extended branch mnemonics (B, BE, BNE, J, JE, etc.)
 
+pub mod instruction;
 pub mod lexer;
 pub mod symbol;
 
+pub use instruction::{
+    encode_instruction, EncodeError, InsnCatalog, InsnDef, InsnFormat, InsnOperands,
+};
 pub use lexer::{
     parse_source, parse_source_line, tokenize_operands, InstructionLine, LexerError, SourceLine,
     Token,
