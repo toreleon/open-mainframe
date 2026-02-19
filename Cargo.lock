@@ -1429,6 +1429,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-wlm"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "serde",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "opentelemetry"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

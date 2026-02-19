@@ -1,0 +1,16 @@
+//! z/OS Workload Manager (WLM).
+//!
+//! This crate provides:
+//!
+//! - **Service Classes** — define performance goals for groups of work
+//! - **Service Goals** — response time, execution velocity, discretionary
+//! - **Classification Rules** — route work to service classes based on attributes
+//! - **Service Policy** — named collections of service class/goal definitions
+
+pub mod classify;
+pub mod service;
+
+pub use classify::{ClassificationRule, Classifier, WorkAttribute, WorkRequest};
+pub use service::{
+    GoalType, ServiceClass, ServiceGoal, ServicePolicy, WlmError,
+};

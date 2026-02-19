@@ -18,6 +18,7 @@ members = [
     "crates/open-mainframe-racf", "crates/open-mainframe-jes2", "crates/open-mainframe-tso", "crates/open-mainframe-rexx", "crates/open-mainframe-ispf",
     "crates/open-mainframe-hlasm",
     "crates/open-mainframe-mq",
+    "crates/open-mainframe-wlm",
 ]
 
 [workspace.package]
@@ -80,3 +81,4 @@ open-mainframe-jes2 = { path = "crates/open-mainframe-jes2" }
 open-mainframe-ispf = { path = "crates/open-mainframe-ispf" }
 open-mainframe-hlasm = { path = "crates/open-mainframe-hlasm" }
 open-mainframe-mq = { path = "crates/open-mainframe-mq" }
+open-mainframe-wlm = { path = "crates/open-mainframe-wlm" }
