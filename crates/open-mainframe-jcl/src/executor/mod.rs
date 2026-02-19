@@ -2,6 +2,8 @@
 //!
 //! Executes JCL jobs by running compiled COBOL programs.
 
+pub mod iebcopy;
+pub mod iebgener;
 pub mod utility;
 
 use std::collections::HashMap;

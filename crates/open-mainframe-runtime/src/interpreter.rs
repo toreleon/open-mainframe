@@ -306,16 +306,18 @@ impl Environment {
             if meta.is_justified && !meta.is_numeric && meta.size > 0 {
                 let raw = value.to_display_string();
                 let trimmed = raw.trim_end();
-                if trimmed.len() < meta.size {
-                    // Right-justify: pad with spaces on the left
-                    let justified = format!("{:>width$}", trimmed, width = meta.size);
-                    CobolValue::Alphanumeric(justified)
-                } else if trimmed.len() > meta.size {
-                    // Truncate on the left
-                    let start = trimmed.len() - meta.size;
-                    CobolValue::Alphanumeric(trimmed[start..].to_string())
-                } else {
-                    value
+                match trimmed.len().cmp(&meta.size) {
+                    std::cmp::Ordering::Less => {
+                        // Right-justify: pad with spaces on the left
+                        let justified = format!("{:>width$}", trimmed, width = meta.size);
+                        CobolValue::Alphanumeric(justified)
+                    }
+                    std::cmp::Ordering::Greater => {
+                        // Truncate on the left
+                        let start = trimmed.len() - meta.size;
+                        CobolValue::Alphanumeric(trimmed[start..].to_string())
+                    }
+                    std::cmp::Ordering::Equal => value,
                 }
             } else {
                 value

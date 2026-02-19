@@ -369,6 +369,223 @@ pub fn ceesecs(date_time_str: &str, picture: &str) -> (f64, FeedbackCode) {
     }
 }
 
+// =========================================================================
+// LE103: Extended Date/Time Services
+// =========================================================================
+
+/// LE service: CEEDATM — Convert Lilian seconds to a formatted date/time string.
+///
+/// Supported picture tokens:
+/// - `YYYY` — 4-digit year
+/// - `MM` — 2-digit month
+/// - `DD` — 2-digit day
+/// - `HH` — 2-digit hour (00-23)
+/// - `MI` — 2-digit minute
+/// - `SS` — 2-digit second
+///
+/// Other characters in the picture are passed through literally (e.g. `-`, `:`, ` `).
+pub fn ceedatm(lilian_seconds: f64, picture: &str) -> (String, FeedbackCode) {
+    if lilian_seconds < 0.0 {
+        return (String::new(), FeedbackCode::error(2503));
+    }
+
+    // Convert seconds to Lilian day + time-of-day.
+    let total_secs = lilian_seconds as i64;
+    let lilian_day = total_secs / 86400 + 1; // day 1 starts at second 0
+    let time_of_day = total_secs % 86400;
+
+    let (year, month, day) = match lilian_to_date(lilian_day) {
+        Some(d) => d,
+        None => return (String::new(), FeedbackCode::error(2503)),
+    };
+
+    let hour = (time_of_day / 3600) as u32;
+    let minute = ((time_of_day % 3600) / 60) as u32;
+    let second = (time_of_day % 60) as u32;
+
+    let result = picture
+        .replace("YYYY", &format!("{:04}", year))
+        .replace("MM", &format!("{:02}", month))
+        .replace("DD", &format!("{:02}", day))
+        .replace("HH", &format!("{:02}", hour))
+        .replace("MI", &format!("{:02}", minute))
+        .replace("SS", &format!("{:02}", second));
+
+    (result, FeedbackCode::success())
+}
+
+/// LE service: CEESECI — Decompose Lilian seconds into integer components.
+///
+/// Returns (year, month, day, hour, minute, second, millisecond, feedback).
+pub fn ceeseci(
+    lilian_seconds: f64,
+) -> (i32, u32, u32, u32, u32, u32, u32, FeedbackCode) {
+    if lilian_seconds < 0.0 {
+        return (0, 0, 0, 0, 0, 0, 0, FeedbackCode::error(2503));
+    }
+
+    let total_secs = lilian_seconds as i64;
+    let lilian_day = total_secs / 86400 + 1;
+    let time_of_day = total_secs % 86400;
+
+    let (year, month, day) = match lilian_to_date(lilian_day) {
+        Some(d) => d,
+        None => return (0, 0, 0, 0, 0, 0, 0, FeedbackCode::error(2503)),
+    };
+
+    let hour = (time_of_day / 3600) as u32;
+    let minute = ((time_of_day % 3600) / 60) as u32;
+    let second = (time_of_day % 60) as u32;
+    // Milliseconds from fractional part.
+    let ms = ((lilian_seconds - lilian_seconds.floor()) * 1000.0) as u32;
+
+    (year, month, day, hour, minute, second, ms, FeedbackCode::success())
+}
+
+/// LE service: CEEISEC — Compose integer components into Lilian seconds.
+pub fn ceeisec(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    millisecond: u32,
+) -> (f64, FeedbackCode) {
+    if hour > 23 || minute > 59 || second > 59 || millisecond > 999 {
+        return (0.0, FeedbackCode::error(2501));
+    }
+
+    let lilian = match date_to_lilian(year, month, day) {
+        Some(l) => l,
+        None => return (0.0, FeedbackCode::error(2501)),
+    };
+
+    let day_seconds = (lilian - 1) as f64 * 86400.0;
+    let time_seconds = hour as f64 * 3600.0 + minute as f64 * 60.0 + second as f64;
+    let ms = millisecond as f64 / 1000.0;
+
+    (day_seconds + time_seconds + ms, FeedbackCode::success())
+}
+
+/// LE service: CEEDYWK — Get day of week from Lilian day number.
+///
+/// Returns day of week: 1 = Sunday, 2 = Monday, ..., 7 = Saturday.
+pub fn ceedywk(lilian_day: i64) -> (u32, FeedbackCode) {
+    if lilian_day < 1 {
+        return (0, FeedbackCode::error(2503));
+    }
+    // October 15, 1582 (Lilian day 1) was a Friday.
+    // Friday = 6 in our 1-based Sun=1 system.
+    // day_of_week = ((lilian - 1 + 5) % 7) + 1
+    //   where 5 = Friday's offset (Fri is 6th day, 0-indexed = 5)
+    let dow = ((lilian_day - 1 + 5) % 7 + 1) as u32;
+    (dow, FeedbackCode::success())
+}
+
+/// LE service: CEEGMT — Get current GMT as Lilian seconds and Gregorian string.
+///
+/// Returns (lilian_seconds, gregorian_string, feedback).
+pub fn ceegmt() -> (f64, String, FeedbackCode) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+
+    // Unix epoch (Jan 1, 1970) in Lilian days.
+    let unix_epoch_lilian = date_to_lilian(1970, 1, 1).unwrap();
+    let unix_epoch_seconds = (unix_epoch_lilian - 1) as f64 * 86400.0;
+    let lilian_secs = unix_epoch_seconds + now.as_secs_f64();
+
+    let (formatted, _) = ceedatm(lilian_secs, "YYYY-MM-DD HH:MI:SS");
+    (lilian_secs, formatted, FeedbackCode::success())
+}
+
+/// LE service: CEELOCT — Get current local date/time.
+///
+/// Returns (lilian_day, lilian_seconds, gregorian_string, feedback).
+/// Note: In this simplified implementation, local = GMT (no timezone offset).
+pub fn ceeloct() -> (i64, f64, String, FeedbackCode) {
+    let (lilian_secs, gregorian, fc) = ceegmt();
+    if !fc.is_success() {
+        return (0, 0.0, String::new(), fc);
+    }
+    let lilian_day = (lilian_secs / 86400.0) as i64 + 1;
+    (lilian_day, lilian_secs, gregorian, FeedbackCode::success())
+}
+
+/// LE service: CEEGMTO — Get offset from GMT to local time.
+///
+/// Returns (offset_hours, offset_minutes, offset_seconds, feedback).
+/// In this simplified implementation, offset is always 0 (local = GMT).
+pub fn ceegmto() -> (i32, i32, f64, FeedbackCode) {
+    // Simplified: no timezone support, offset = 0.
+    (0, 0, 0.0, FeedbackCode::success())
+}
+
+/// Century window state (for CEESCEN/CEEQCEN).
+///
+/// A century window defines how 2-digit years are interpreted.
+/// The window spans 100 years starting from (current_year - century_window).
+#[derive(Debug, Clone)]
+pub struct CenturyWindow {
+    /// The century window value (0-100).
+    value: u32,
+}
+
+impl CenturyWindow {
+    /// Create a new century window with the given value.
+    pub fn new(value: u32) -> Self {
+        Self { value: value.min(100) }
+    }
+
+    /// CEESCEN — Set the century window value.
+    pub fn ceescen(&mut self, value: u32) -> FeedbackCode {
+        if value > 100 {
+            return FeedbackCode::error(2504);
+        }
+        self.value = value;
+        FeedbackCode::success()
+    }
+
+    /// CEEQCEN — Query the current century window value.
+    pub fn ceeqcen(&self) -> (u32, FeedbackCode) {
+        (self.value, FeedbackCode::success())
+    }
+
+    /// Interpret a 2-digit year using the century window.
+    ///
+    /// The window starts at (current_year - century_window_value).
+    pub fn interpret_year(&self, two_digit_year: u32, current_year: i32) -> i32 {
+        let start = current_year - self.value as i32;
+        let century = start / 100 * 100;
+        let candidate = century + two_digit_year as i32;
+        if candidate < start {
+            candidate + 100
+        } else {
+            candidate
+        }
+    }
+}
+
+impl Default for CenturyWindow {
+    fn default() -> Self {
+        Self { value: 80 }
+    }
+}
+
+/// LE service: CEE3DLY — Delay (sleep) for the specified number of seconds.
+///
+/// Note: This actually sleeps the calling thread.
+pub fn cee3dly(seconds: f64) -> FeedbackCode {
+    if seconds < 0.0 {
+        return FeedbackCode::error(2505);
+    }
+    if seconds > 0.0 {
+        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+    }
+    FeedbackCode::success()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -615,5 +832,145 @@ mod tests {
         let fc = FeedbackCode::error(2501);
         assert!(!fc.is_success());
         assert_eq!(fc.severity, 2);
+    }
+
+    // --- Story LE103.1: Date/Time Conversion Services ---
+
+    #[test]
+    fn test_ceedatm_formats_lilian_seconds() {
+        // Compute Lilian seconds for 2024-03-15 14:30:00
+        let (secs, fc) = ceeisec(2024, 3, 15, 14, 30, 0, 0);
+        assert!(fc.is_success());
+
+        let (formatted, fc2) = ceedatm(secs, "YYYY-MM-DD HH:MI:SS");
+        assert!(fc2.is_success());
+        assert_eq!(formatted, "2024-03-15 14:30:00");
+    }
+
+    #[test]
+    fn test_ceeseci_decompose() {
+        let (secs, _) = ceeisec(2024, 3, 15, 14, 30, 0, 0);
+        let (year, month, day, hour, min, sec, _ms, fc) = ceeseci(secs);
+        assert!(fc.is_success());
+        assert_eq!((year, month, day), (2024, 3, 15));
+        assert_eq!((hour, min, sec), (14, 30, 0));
+    }
+
+    #[test]
+    fn test_ceeisec_compose() {
+        let (secs, fc) = ceeisec(2024, 3, 15, 14, 30, 0, 0);
+        assert!(fc.is_success());
+        assert!(secs > 0.0);
+
+        // Roundtrip.
+        let (year, month, day, hour, min, sec, _, fc2) = ceeseci(secs);
+        assert!(fc2.is_success());
+        assert_eq!((year, month, day, hour, min, sec), (2024, 3, 15, 14, 30, 0));
+    }
+
+    #[test]
+    fn test_ceeisec_invalid_time() {
+        let (_, fc) = ceeisec(2024, 3, 15, 25, 0, 0, 0); // hour 25
+        assert!(!fc.is_success());
+    }
+
+    #[test]
+    fn test_ceedywk_day_of_week() {
+        // 2024-03-15 is a Friday.
+        let lilian = date_to_lilian(2024, 3, 15).unwrap();
+        let (dow, fc) = ceedywk(lilian);
+        assert!(fc.is_success());
+        assert_eq!(dow, 6); // 6 = Friday (1=Sun, 2=Mon, ..., 6=Fri, 7=Sat)
+    }
+
+    #[test]
+    fn test_ceedywk_lilian_epoch_friday() {
+        // Oct 15, 1582 was a Friday.
+        let (dow, fc) = ceedywk(1);
+        assert!(fc.is_success());
+        assert_eq!(dow, 6); // Friday
+    }
+
+    #[test]
+    fn test_ceedywk_sunday() {
+        // Oct 17, 1582 was a Sunday (day 3).
+        let (dow, fc) = ceedywk(3);
+        assert!(fc.is_success());
+        assert_eq!(dow, 1); // Sunday
+    }
+
+    // --- Story LE103.2: Current Time and GMT Services ---
+
+    #[test]
+    fn test_ceegmt_returns_positive_seconds() {
+        let (secs, greg, fc) = ceegmt();
+        assert!(fc.is_success());
+        assert!(secs > 0.0);
+        assert!(!greg.is_empty());
+    }
+
+    #[test]
+    fn test_ceeloct_returns_valid_day() {
+        let (day, secs, greg, fc) = ceeloct();
+        assert!(fc.is_success());
+        assert!(day > 0);
+        assert!(secs > 0.0);
+        assert!(!greg.is_empty());
+    }
+
+    #[test]
+    fn test_ceegmto_returns_offset() {
+        let (hours, minutes, secs, fc) = ceegmto();
+        assert!(fc.is_success());
+        // Simplified: always 0.
+        assert_eq!(hours, 0);
+        assert_eq!(minutes, 0);
+        assert_eq!(secs, 0.0);
+    }
+
+    // --- Story LE103.3: Century Window and Delay ---
+
+    #[test]
+    fn test_century_window_default() {
+        let cw = CenturyWindow::default();
+        let (val, fc) = cw.ceeqcen();
+        assert!(fc.is_success());
+        assert_eq!(val, 80);
+    }
+
+    #[test]
+    fn test_ceescen_set_century_window() {
+        let mut cw = CenturyWindow::default();
+        let fc = cw.ceescen(60);
+        assert!(fc.is_success());
+        let (val, _) = cw.ceeqcen();
+        assert_eq!(val, 60);
+    }
+
+    #[test]
+    fn test_century_window_interpret_year() {
+        let cw = CenturyWindow::new(80);
+        // Current year 2025, window starts at 1945.
+        // 2-digit 25 → 2025 (within window 1945-2044).
+        assert_eq!(cw.interpret_year(25, 2025), 2025);
+        // 2-digit 44 → 2044.
+        assert_eq!(cw.interpret_year(44, 2025), 2044);
+        // 2-digit 45 → 1945.
+        assert_eq!(cw.interpret_year(45, 2025), 1945);
+        // 2-digit 99 → 1999.
+        assert_eq!(cw.interpret_year(99, 2025), 1999);
+    }
+
+    #[test]
+    fn test_cee3dly_zero_delay() {
+        // Zero delay should succeed immediately.
+        let fc = cee3dly(0.0);
+        assert!(fc.is_success());
+    }
+
+    #[test]
+    fn test_cee3dly_negative_fails() {
+        let fc = cee3dly(-1.0);
+        assert!(!fc.is_success());
     }
 }

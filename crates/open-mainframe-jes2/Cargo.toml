@@ -1,0 +1,15 @@
+[package]
+name = "open-mainframe-jes2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "JES2 job entry subsystem — job queue, spool, initiators, output processing"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

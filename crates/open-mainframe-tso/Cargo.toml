@@ -1,0 +1,16 @@
+[package]
+name = "open-mainframe-tso"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TSO/E command processor — ALLOCATE, FREE, LISTDS, PROFILE, and core commands"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+open-mainframe-jes2 = { path = "../open-mainframe-jes2" }
