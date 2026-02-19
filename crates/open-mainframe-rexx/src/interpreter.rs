@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{
     BinOp, Clause, ClauseBody, DoControl, Expr, ParseSource, Program, SignalTarget, UnaryOp,
 };
+use crate::builtins;
 use crate::parse_template::{execute_parse, parse_template};
 use crate::value::{
     rexx_add, rexx_compare, rexx_div, rexx_idiv, rexx_mul, rexx_pow, rexx_rem, rexx_sub,
@@ -778,7 +779,7 @@ impl Interpreter {
     }
 
     // -----------------------------------------------------------------------
-    //  Built-in functions (minimal set for R101)
+    //  Built-in functions
     // -----------------------------------------------------------------------
 
     fn try_builtin_function(
@@ -786,78 +787,8 @@ impl Interpreter {
         name: &str,
         args: &[String],
     ) -> Option<Result<String, String>> {
+        // Context-dependent functions that need interpreter state.
         match name {
-            "LENGTH" => {
-                let s = args.first().map(|a| a.as_str()).unwrap_or("");
-                Some(Ok(s.len().to_string()))
-            }
-            "SUBSTR" => {
-                let s = args.first().map(|a| a.as_str()).unwrap_or("");
-                let start = args
-                    .get(1)
-                    .and_then(|a| a.parse::<usize>().ok())
-                    .unwrap_or(1);
-                let len = args.get(2).and_then(|a| a.parse::<usize>().ok());
-                let start_idx = if start > 0 { start - 1 } else { 0 };
-                let result = if let Some(l) = len {
-                    let end = (start_idx + l).min(s.len());
-                    if start_idx < s.len() {
-                        let sub = &s[start_idx..end];
-                        // Pad with spaces if requested length exceeds available.
-                        if sub.len() < l {
-                            format!("{sub:width$}", width = l)
-                        } else {
-                            sub.to_string()
-                        }
-                    } else {
-                        " ".repeat(l)
-                    }
-                } else if start_idx < s.len() {
-                    s[start_idx..].to_string()
-                } else {
-                    String::new()
-                };
-                Some(Ok(result))
-            }
-            "WORD" => {
-                let s = args.first().map(|a| a.as_str()).unwrap_or("");
-                let n = args
-                    .get(1)
-                    .and_then(|a| a.parse::<usize>().ok())
-                    .unwrap_or(1);
-                let words: Vec<&str> = s.split_whitespace().collect();
-                let result = words.get(n.wrapping_sub(1)).copied().unwrap_or("");
-                Some(Ok(result.to_string()))
-            }
-            "WORDS" => {
-                let s = args.first().map(|a| a.as_str()).unwrap_or("");
-                Some(Ok(s.split_whitespace().count().to_string()))
-            }
-            "STRIP" => {
-                let s = args.first().map(|a| a.as_str()).unwrap_or("");
-                let option = args
-                    .get(1)
-                    .map(|a| a.to_uppercase())
-                    .unwrap_or_else(|| "B".into());
-                let ch = args
-                    .get(2)
-                    .and_then(|a| a.chars().next())
-                    .unwrap_or(' ');
-                let result = match option.as_str() {
-                    "L" => s.trim_start_matches(ch).to_string(),
-                    "T" => s.trim_end_matches(ch).to_string(),
-                    _ => s.trim_matches(ch).to_string(), // "B" or default
-                };
-                Some(Ok(result))
-            }
-            "COPIES" => {
-                let s = args.first().map(|a| a.as_str()).unwrap_or("");
-                let n = args
-                    .get(1)
-                    .and_then(|a| a.parse::<usize>().ok())
-                    .unwrap_or(0);
-                Some(Ok(s.repeat(n)))
-            }
             "DATATYPE" => {
                 let s = args.first().map(|a| a.as_str()).unwrap_or("");
                 let typ = args
@@ -865,7 +796,6 @@ impl Interpreter {
                     .map(|a| a.to_uppercase())
                     .unwrap_or_default();
                 let result = if typ.is_empty() {
-                    // Default: return "NUM" or "CHAR".
                     if RexxValue::from_string(s).is_number() {
                         "NUM"
                     } else {
@@ -883,23 +813,20 @@ impl Interpreter {
                     };
                     if ok { "1" } else { "0" }.to_string()
                 };
-                Some(Ok(result))
+                return Some(Ok(result));
             }
             "SYMBOL" => {
                 let name_arg = args.first().map(|a| a.as_str()).unwrap_or("");
-                // Check if the variable is set.
                 let state = self.vars().symbol_state(name_arg);
-                Some(Ok(state.to_string()))
+                return Some(Ok(state.to_string()));
             }
             "ABS" => {
                 let s = args.first().map(|a| a.as_str()).unwrap_or("0");
-                match rexx_compare(s, "0", 0) {
-                    Ok(std::cmp::Ordering::Less) => {
-                        Some(rexx_sub("0", s, &self.numeric))
-                    }
+                return match rexx_compare(s, "0", 0) {
+                    Ok(std::cmp::Ordering::Less) => Some(rexx_sub("0", s, &self.numeric)),
                     Ok(_) => Some(rexx_add(s, "0", &self.numeric)),
                     Err(e) => Some(Err(e)),
-                }
+                };
             }
             "MAX" => {
                 if args.is_empty() {
@@ -911,7 +838,7 @@ impl Interpreter {
                         best = a.clone();
                     }
                 }
-                Some(Ok(best))
+                return Some(Ok(best));
             }
             "MIN" => {
                 if args.is_empty() {
@@ -923,7 +850,7 @@ impl Interpreter {
                         best = a.clone();
                     }
                 }
-                Some(Ok(best))
+                return Some(Ok(best));
             }
             "TRUNC" => {
                 let s = args.first().map(|a| a.as_str()).unwrap_or("0");
@@ -931,8 +858,7 @@ impl Interpreter {
                     .get(1)
                     .and_then(|a| a.parse::<usize>().ok())
                     .unwrap_or(0);
-                // Truncate to n decimal places.
-                if let Some(dot) = s.find('.') {
+                return if let Some(dot) = s.find('.') {
                     if n == 0 {
                         Some(Ok(s[..dot].to_string()))
                     } else {
@@ -945,10 +871,13 @@ impl Interpreter {
                     Some(Ok(format!("{s}.{zeros}", zeros = "0".repeat(n))))
                 } else {
                     Some(Ok(s.to_string()))
-                }
+                };
             }
-            _ => None,
+            _ => {}
         }
+
+        // Delegate to builtins module for all other functions.
+        builtins::call_builtin(name, args)
     }
 
     // -----------------------------------------------------------------------

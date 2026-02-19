@@ -9,6 +9,7 @@
 //! - **Value** — REXX values with arbitrary-precision decimal arithmetic
 
 pub mod ast;
+pub mod builtins;
 pub mod interpreter;
 pub mod lexer;
 pub mod parse_template;
