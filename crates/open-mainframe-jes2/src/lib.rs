@@ -26,6 +26,7 @@ pub mod commands;
 pub mod config;
 pub mod error;
 pub mod initiator;
+pub mod intrdr;
 pub mod jecl;
 pub mod job;
 pub mod output;
@@ -41,6 +42,10 @@ pub use output::{
     OutputGroup, OutputProcessor,
 };
 pub use initiator::{InitiatorManager, InitiatorState, ManagedInitiator};
+pub use intrdr::{
+    sdsf_browse_output, sdsf_display_active, sdsf_header, sdsf_input_queue, sdsf_line_action,
+    sdsf_output_queue, sdsf_status, InternalReader, SdsfLineCommand, SdsfPanel, SdsfRow,
+};
 pub use jecl::{parse_jecl, JeclStmt, JobparmParams, OutputParams, SetupParams};
 pub use job::{Job, JobClass, JobId, JobState};
 pub use queue::Jes2;

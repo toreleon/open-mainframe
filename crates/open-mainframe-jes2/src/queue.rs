@@ -194,6 +194,11 @@ impl Jes2 {
         self.jobs.len()
     }
 
+    /// List all jobs in the system (all states).
+    pub fn all_jobs(&self) -> Vec<&Job> {
+        self.jobs.values().collect()
+    }
+
     /// List all active jobs (not purged).
     pub fn active_jobs(&self) -> Vec<&Job> {
         self.jobs
