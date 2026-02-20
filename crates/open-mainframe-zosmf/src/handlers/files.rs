@@ -22,6 +22,42 @@ use crate::state::AppState;
 use crate::types::auth::AuthContext;
 use crate::types::error::ZosmfErrorResponse;
 
+/// JSON body for USS file action requests (chmod, chown, chtag, move, copy).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)]
+struct UssActionRequest {
+    /// Action type: "chmod", "chown", "chtag", "move", "copy".
+    request: String,
+    /// New mode for chmod (e.g., "rwxr-xr-x" or octal "755").
+    #[serde(default)]
+    mode: Option<String>,
+    /// Owner for chown (e.g., "IBMUSER").
+    #[serde(default)]
+    owner: Option<String>,
+    /// Group for chown.
+    #[serde(default)]
+    group: Option<String>,
+    /// Tag type for chtag (e.g., "mixed", "binary", "text").
+    #[serde(default, rename = "type")]
+    tag_type: Option<String>,
+    /// Codeset for chtag.
+    #[serde(default)]
+    codeset: Option<String>,
+    /// Source path for move/copy.
+    #[serde(default)]
+    from: Option<String>,
+    /// Whether to overwrite existing target.
+    #[serde(default)]
+    overwrite: Option<bool>,
+    /// Whether to apply recursively.
+    #[serde(default)]
+    recursive: Option<bool>,
+    /// Links handling ("follow" or "suppress").
+    #[serde(default)]
+    links: Option<String>,
+}
+
 /// Query parameters for USS file operations (Zowe CLI sends path as query param).
 #[derive(Debug, Deserialize)]
 pub struct UssPathQuery {
@@ -253,13 +289,188 @@ async fn write_file_impl(
         .await
         .map_err(|_| ZosmfErrorResponse::bad_request("Failed to read request body"))?;
 
+    // Check if this is a JSON action request.
+    if let Ok(action) = serde_json::from_slice::<UssActionRequest>(&bytes) {
+        return uss_file_action(state, uss_path, &full_path, &action);
+    }
+
+    // Content write path.
+    write_file_content(&full_path, &bytes)
+}
+
+/// Perform a USS file action (chmod, chown, chtag, move, copy).
+fn uss_file_action(
+    state: &AppState,
+    uss_path: &str,
+    full_path: &std::path::Path,
+    action: &UssActionRequest,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    match action.request.to_lowercase().as_str() {
+        "chmod" => {
+            let mode_str = action.mode.as_deref().ok_or_else(|| {
+                ZosmfErrorResponse::bad_request("Missing 'mode' for chmod")
+            })?;
+
+            if !full_path.exists() {
+                return Err(ZosmfErrorResponse::not_found(format!(
+                    "Path '{}' not found",
+                    uss_path
+                )));
+            }
+
+            // Parse octal mode (e.g., "755") or symbolic string.
+            let mode = u32::from_str_radix(mode_str.trim(), 8).unwrap_or(0o644);
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let perms = std::fs::Permissions::from_mode(mode);
+                std::fs::set_permissions(full_path, perms).map_err(|e| {
+                    ZosmfErrorResponse::internal(format!("chmod failed: {}", e))
+                })?;
+            }
+
+            Ok(StatusCode::OK)
+        }
+        "chown" => {
+            // chown is a no-op in our emulation (we don't have real z/OS uid/gid mapping).
+            if !full_path.exists() {
+                return Err(ZosmfErrorResponse::not_found(format!(
+                    "Path '{}' not found",
+                    uss_path
+                )));
+            }
+            Ok(StatusCode::OK)
+        }
+        "chtag" => {
+            // chtag is metadata-only; we accept it and return OK.
+            if !full_path.exists() {
+                return Err(ZosmfErrorResponse::not_found(format!(
+                    "Path '{}' not found",
+                    uss_path
+                )));
+            }
+            Ok(StatusCode::OK)
+        }
+        "move" => {
+            let from = action.from.as_deref().ok_or_else(|| {
+                ZosmfErrorResponse::bad_request("Missing 'from' path for move")
+            })?;
+            let src = resolve_uss_path(state, from);
+
+            if !src.exists() {
+                return Err(ZosmfErrorResponse::not_found(format!(
+                    "Source path '{}' not found",
+                    from
+                )));
+            }
+
+            let overwrite = action.overwrite.unwrap_or(false);
+            if full_path.exists() && !overwrite {
+                return Err(ZosmfErrorResponse::bad_request(format!(
+                    "Target path '{}' already exists",
+                    uss_path
+                )));
+            }
+
+            if let Some(parent) = full_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    ZosmfErrorResponse::internal(format!("Failed to create parent: {}", e))
+                })?;
+            }
+
+            std::fs::rename(&src, full_path).map_err(|e| {
+                ZosmfErrorResponse::internal(format!("Move failed: {}", e))
+            })?;
+
+            Ok(StatusCode::OK)
+        }
+        "copy" => {
+            let from = action.from.as_deref().ok_or_else(|| {
+                ZosmfErrorResponse::bad_request("Missing 'from' path for copy")
+            })?;
+            let src = resolve_uss_path(state, from);
+
+            if !src.exists() {
+                return Err(ZosmfErrorResponse::not_found(format!(
+                    "Source path '{}' not found",
+                    from
+                )));
+            }
+
+            let overwrite = action.overwrite.unwrap_or(false);
+            if full_path.exists() && !overwrite {
+                return Err(ZosmfErrorResponse::bad_request(format!(
+                    "Target path '{}' already exists",
+                    uss_path
+                )));
+            }
+
+            if let Some(parent) = full_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    ZosmfErrorResponse::internal(format!("Failed to create parent: {}", e))
+                })?;
+            }
+
+            if src.is_dir() {
+                copy_dir_recursive(&src, full_path)?;
+            } else {
+                std::fs::copy(&src, full_path).map_err(|e| {
+                    ZosmfErrorResponse::internal(format!("Copy failed: {}", e))
+                })?;
+            }
+
+            Ok(StatusCode::OK)
+        }
+        other => Err(ZosmfErrorResponse::bad_request(format!(
+            "Unknown USS file action: {}",
+            other
+        ))),
+    }
+}
+
+/// Recursively copy a directory tree.
+fn copy_dir_recursive(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+) -> std::result::Result<(), ZosmfErrorResponse> {
+    std::fs::create_dir_all(dst).map_err(|e| {
+        ZosmfErrorResponse::internal(format!("Failed to create directory: {}", e))
+    })?;
+
+    for entry in std::fs::read_dir(src).map_err(|e| {
+        ZosmfErrorResponse::internal(format!("Failed to read directory: {}", e))
+    })? {
+        let entry = entry.map_err(|e| {
+            ZosmfErrorResponse::internal(format!("Directory entry error: {}", e))
+        })?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path).map_err(|e| {
+                ZosmfErrorResponse::internal(format!("Copy failed: {}", e))
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Write raw content to a USS file.
+fn write_file_content(
+    full_path: &std::path::Path,
+    bytes: &[u8],
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
     if let Some(parent) = full_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             ZosmfErrorResponse::internal(format!("Failed to create parent directory: {}", e))
         })?;
     }
 
-    std::fs::write(&full_path, bytes.as_ref()).map_err(|e| {
+    std::fs::write(full_path, bytes).map_err(|e| {
         ZosmfErrorResponse::internal(format!("Failed to write file: {}", e))
     })?;
 
