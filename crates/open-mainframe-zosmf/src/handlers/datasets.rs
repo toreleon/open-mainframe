@@ -17,6 +17,7 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use open_mainframe_dataset::{DatasetAttributes, DatasetOrg, Pds, RecordFormat};
+use serde::Deserialize;
 
 use crate::state::AppState;
 use crate::types::auth::AuthContext;
@@ -25,6 +26,27 @@ use crate::types::datasets::{
     MemberListResponse,
 };
 use crate::types::error::ZosmfErrorResponse;
+
+/// JSON body for dataset action requests (rename, copy, migrate, recall).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct DatasetActionRequest {
+    /// Action type: "rename", "copy", "hmigrate", "hrecall".
+    request: String,
+    /// Source dataset for rename/copy.
+    #[serde(default)]
+    from_dataset: Option<FromDataset>,
+}
+
+/// Source dataset reference for rename/copy actions.
+#[derive(Debug, Clone, Deserialize)]
+struct FromDataset {
+    /// Source dataset name.
+    dsn: String,
+    /// Source member name (for copy).
+    #[serde(default)]
+    member: Option<String>,
+}
 
 /// Register dataset routes.
 pub fn routes() -> Router<Arc<AppState>> {
@@ -315,20 +337,162 @@ async fn read_dataset(
     }
 }
 
-/// PUT /zosmf/restfiles/ds/:dsn — write dataset or member content.
+/// PUT /zosmf/restfiles/ds/:dsn — write content or perform dataset action (rename/copy/migrate/recall).
+///
+/// If the body is JSON with a `"request"` field, dispatch to the action handler.
+/// Otherwise, treat as a content write.
 async fn write_dataset(
     State(state): State<Arc<AppState>>,
     _auth: AuthContext,
     Path(dsn): Path<String>,
     body: Body,
 ) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
-    let (ds_name, member) = parse_dsn(&dsn);
-
     let bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(|_| ZosmfErrorResponse::bad_request("Failed to read request body"))?;
 
-    let content = bytes.to_vec();
+    // Check if this is a JSON action request by attempting to parse.
+    if let Ok(action) = serde_json::from_slice::<DatasetActionRequest>(&bytes) {
+        return dataset_action(&state, &dsn, &action);
+    }
+
+    // Content write path.
+    write_dataset_content(&state, &dsn, bytes.to_vec())
+}
+
+/// Perform a dataset action (rename, copy, migrate, recall).
+fn dataset_action(
+    state: &AppState,
+    dsn: &str,
+    action: &DatasetActionRequest,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let dsn_upper = dsn.to_uppercase();
+    match action.request.to_lowercase().as_str() {
+        "rename" => {
+            let from = action.from_dataset.as_ref().ok_or_else(|| {
+                ZosmfErrorResponse::bad_request("Missing 'from-dataset' for rename")
+            })?;
+            let from_dsn = from.dsn.to_uppercase();
+
+            let mut catalog = state
+                .catalog
+                .write()
+                .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
+
+            if !catalog.exists(&from_dsn) {
+                return Err(ZosmfErrorResponse::not_found(format!(
+                    "Source dataset '{}' not found",
+                    from_dsn
+                )));
+            }
+            if catalog.exists(&dsn_upper) {
+                return Err(ZosmfErrorResponse::bad_request(format!(
+                    "Target dataset '{}' already exists",
+                    dsn_upper
+                )));
+            }
+
+            catalog.rename(&from_dsn, &dsn_upper).map_err(|e| {
+                ZosmfErrorResponse::internal(format!("Rename failed: {}", e))
+            })?;
+
+            Ok(StatusCode::OK)
+        }
+        "copy" => {
+            let from = action.from_dataset.as_ref().ok_or_else(|| {
+                ZosmfErrorResponse::bad_request("Missing 'from-dataset' for copy")
+            })?;
+            let from_dsn = from.dsn.to_uppercase();
+
+            let catalog = state
+                .catalog
+                .read()
+                .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
+
+            // Read source content.
+            let src_content = if let Some(ref member) = from.member {
+                let dsref = catalog.lookup(&from_dsn).map_err(|_| {
+                    ZosmfErrorResponse::not_found(format!("Source dataset '{}' not found", from_dsn))
+                })?;
+                let pds_path = dsref.path.as_ref().ok_or_else(|| {
+                    ZosmfErrorResponse::not_found("Source path not resolved")
+                })?;
+                let pds = Pds::open(pds_path).map_err(|_| {
+                    ZosmfErrorResponse::not_found(format!("Source PDS '{}' not found", from_dsn))
+                })?;
+                pds.read_member(member).map_err(|_| {
+                    ZosmfErrorResponse::not_found(format!("Source member '{}({})' not found", from_dsn, member))
+                })?
+            } else {
+                let dsref = catalog.lookup(&from_dsn).map_err(|_| {
+                    ZosmfErrorResponse::not_found(format!("Source dataset '{}' not found", from_dsn))
+                })?;
+                let path = dsref.path.as_ref().ok_or_else(|| {
+                    ZosmfErrorResponse::not_found("Source path not resolved")
+                })?;
+                std::fs::read(path).map_err(|e| {
+                    ZosmfErrorResponse::internal(format!("Failed to read source: {}", e))
+                })?
+            };
+
+            // Write to target.
+            drop(catalog);
+            write_dataset_content(state, dsn, src_content)?;
+
+            Ok(StatusCode::OK)
+        }
+        "hmigrate" => {
+            let mut catalog = state
+                .catalog
+                .write()
+                .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
+
+            if !catalog.exists(&dsn_upper) {
+                return Err(ZosmfErrorResponse::not_found(format!(
+                    "Dataset '{}' not found",
+                    dsn_upper
+                )));
+            }
+
+            catalog.set_migrated(&dsn_upper, true).map_err(|e| {
+                ZosmfErrorResponse::internal(format!("Migrate failed: {}", e))
+            })?;
+
+            Ok(StatusCode::OK)
+        }
+        "hrecall" => {
+            let mut catalog = state
+                .catalog
+                .write()
+                .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
+
+            if !catalog.exists(&dsn_upper) {
+                return Err(ZosmfErrorResponse::not_found(format!(
+                    "Dataset '{}' not found",
+                    dsn_upper
+                )));
+            }
+
+            catalog.set_migrated(&dsn_upper, false).map_err(|e| {
+                ZosmfErrorResponse::internal(format!("Recall failed: {}", e))
+            })?;
+
+            Ok(StatusCode::OK)
+        }
+        other => Err(ZosmfErrorResponse::bad_request(format!(
+            "Unknown dataset action: {}",
+            other
+        ))),
+    }
+}
+
+/// Write content to a dataset or PDS member.
+fn write_dataset_content(
+    state: &AppState,
+    dsn: &str,
+    content: Vec<u8>,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let (ds_name, member) = parse_dsn(dsn);
 
     let catalog = state
         .catalog

@@ -413,6 +413,73 @@ impl Catalog {
         true
     }
 
+    /// Rename a dataset in the catalog.
+    ///
+    /// Renames the catalog entry and the underlying file/directory on disk.
+    pub fn rename(&mut self, old_dsn: &str, new_dsn: &str) -> Result<(), DatasetError> {
+        let old_upper = old_dsn.to_uppercase();
+        let new_upper = new_dsn.to_uppercase();
+
+        let entry = self.entries.remove(&old_upper).ok_or_else(|| {
+            DatasetError::NotFound {
+                name: old_upper.clone(),
+            }
+        })?;
+
+        // Compute new path.
+        let new_path = {
+            let mut p = self.base_dir.clone();
+            for component in new_upper.split('.') {
+                p.push(component);
+            }
+            p
+        };
+
+        // Rename on filesystem.
+        if entry.path.exists() {
+            if let Some(parent) = new_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| DatasetError::IoError {
+                    message: format!("Failed to create directory: {}", e),
+                })?;
+            }
+            std::fs::rename(&entry.path, &new_path).map_err(|e| DatasetError::IoError {
+                message: format!("Failed to rename: {}", e),
+            })?;
+        }
+
+        let new_entry = CatalogEntry {
+            dsn: new_upper.clone(),
+            path: new_path,
+            attributes: entry.attributes,
+            is_pds: entry.is_pds,
+        };
+        self.entries.insert(new_upper, new_entry);
+
+        Ok(())
+    }
+
+    /// Set migration status on a dataset.
+    ///
+    /// This is a metadata-only operation; the dataset remains on disk.
+    pub fn set_migrated(&mut self, dsn: &str, _migrated: bool) -> Result<(), DatasetError> {
+        let dsn_upper = dsn.to_uppercase();
+        if !self.entries.contains_key(&dsn_upper) {
+            // Try to look up from filesystem and add as entry.
+            let dsref = self.lookup(&dsn_upper)?;
+            if let Some(path) = dsref.path {
+                self.entries.insert(dsn_upper.clone(), CatalogEntry {
+                    dsn: dsn_upper,
+                    path,
+                    attributes: dsref.attributes,
+                    is_pds: false,
+                });
+            }
+        }
+        // Migration is a metadata concept — on a real mainframe this would move data to tape.
+        // For our emulation, this is a no-op (data stays on disk).
+        Ok(())
+    }
+
     /// Get the base directory.
     pub fn base_dir(&self) -> &Path {
         &self.base_dir
