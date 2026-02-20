@@ -30,10 +30,12 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod eureka;
 pub mod handlers;
 pub mod jwt;
 pub mod middleware;
 pub mod state;
+pub mod tn3270;
 pub mod types;
 
 pub use config::ZosmfConfig;
