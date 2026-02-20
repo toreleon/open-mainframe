@@ -21,6 +21,7 @@ pub mod error;
 pub mod exec;
 pub mod jobs;
 pub mod parser;
+pub mod rexx_tso;
 pub mod services;
 pub mod session;
 
@@ -29,6 +30,7 @@ pub use error::{TsoError, Result};
 pub use exec::{batch_rexx, batch_tso, ExecResult, ExecType};
 pub use parser::{parse_command, ParsedCommand};
 pub use services::{ikjpars, MemoryIo, ParseControlEntry, ParseDescriptorList, TsoIo};
+pub use rexx_tso::RexxTsoHost;
 pub use session::{
     AllocDisp, AllocEntry, AltlibEntry, AltlibLevel, AltlibType,
     DcbAttrs, TsoProfile, TsoSession,

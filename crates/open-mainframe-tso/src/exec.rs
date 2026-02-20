@@ -262,6 +262,7 @@ pub fn batch_rexx(
 mod tests {
     use super::*;
     use crate::parser::parse_command;
+    use crate::services::MemoryIo;
     use std::path::PathBuf;
 
     fn test_session() -> TsoSession {
