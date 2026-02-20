@@ -1,6 +1,6 @@
 //! Shared application state for all z/OSMF handlers.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use dashmap::DashMap;
 use open_mainframe_dataset::Catalog;
@@ -18,10 +18,10 @@ pub struct AppState {
     pub saf: SafRouter,
     /// RACF authentication service.
     pub auth_service: AuthService,
-    /// Dataset catalog.
-    pub catalog: Catalog,
-    /// JES2 job entry subsystem.
-    pub jes2: Jes2,
+    /// Dataset catalog (RwLock for mutable list/create/delete).
+    pub catalog: RwLock<Catalog>,
+    /// JES2 job entry subsystem (RwLock for submit/cancel/purge).
+    pub jes2: RwLock<Jes2>,
     /// TSO sessions: servlet key → session handle.
     pub tso_sessions: DashMap<String, TsoSessionHandle>,
     /// Token store: JWT token → authenticated user.
@@ -48,8 +48,8 @@ impl AppState {
             racf: RacfDatabase::new(),
             saf: SafRouter::new(),
             auth_service: AuthService::new(),
-            catalog: Catalog::default(),
-            jes2: Jes2::new(),
+            catalog: RwLock::new(Catalog::default()),
+            jes2: RwLock::new(Jes2::new()),
             tso_sessions: DashMap::new(),
             token_store: DashMap::new(),
             config: Arc::new(config),

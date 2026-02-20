@@ -18,6 +18,8 @@ pub struct DatasetListResponse {
 }
 
 /// A single dataset in a list response — field names match z/OSMF spec.
+///
+/// Numeric fields are serialized as JSON strings per z/OSMF convention.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetListItem {
     /// Dataset name.
@@ -37,6 +39,15 @@ pub struct DatasetListItem {
     /// Volume serial.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vol: Option<String>,
+    /// Creation date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cdate: Option<String>,
+    /// Last reference date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rdate: Option<String>,
+    /// Catalog name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catnm: Option<String>,
 }
 
 /// Response body for PDS member list operations.
@@ -109,5 +120,6 @@ pub struct DatasetCreateParams {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DatasetListQuery {
     /// Dataset level filter pattern (e.g., `HLQ.*`).
+    #[serde(rename = "dslevel")]
     pub dslevel: String,
 }
