@@ -13,7 +13,7 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-tokio = { version = "1", features = ["sync", "time", "rt"] }
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 dashmap = "6"
 chrono = { version = "0.4", features = ["serde"] }
 

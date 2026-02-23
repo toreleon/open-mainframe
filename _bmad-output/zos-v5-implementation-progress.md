@@ -1,9 +1,9 @@
 ---
-currentIG: IG-1
-currentEpic: SYS-101
-epicsComplete: 1
+currentIG: IG-2
+currentEpic: SYS-109
+epicsComplete: 2
 epicsTotal: 162
-storiesComplete: 8
+storiesComplete: 16
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -15,7 +15,7 @@ lastUpdated: "2026-02-23"
 ### IG-1: MVS System Services (NEW: open-mainframe-mvs)
 - [x] Scaffold crate
 - [x] SYS-100: MVS System Services Core (8 stories)
-- [ ] SYS-101: ESTAE/ESPIE Recovery & Extended Services (8 stories)
+- [x] SYS-101: ESTAE/ESPIE Recovery & Extended Services (8 stories)
 
 ### IG-2: RACF Extensions (EXTEND: open-mainframe-racf)
 - [ ] SYS-109: General Resource Class Framework (7 stories)
