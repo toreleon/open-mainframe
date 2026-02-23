@@ -1,9 +1,9 @@
 ---
 currentIG: IG-4
-currentEpic: UTIL-110
-epicsComplete: 5
+currentEpic: UTIL-100
+epicsComplete: 7
 epicsTotal: 162
-storiesComplete: 36
+storiesComplete: 40
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -25,8 +25,8 @@ lastUpdated: "2026-02-23"
 - [x] SYS-108: JES2 Installation Exits Framework (6 stories)
 
 ### IG-4: Utilities & DFSORT (NEW: open-mainframe-utilities)
-- [ ] Scaffold crate
-- [ ] UTIL-110: Utility Framework (4 stories)
+- [x] Scaffold crate
+- [x] UTIL-110: Utility Framework (4 stories)
 - [ ] UTIL-100: IEBCOPY (6 stories)
 - [ ] UTIL-101: IEBGENER Enhancements (4 stories)
 - [ ] UTIL-102: IEBCOMPR (4 stories)
