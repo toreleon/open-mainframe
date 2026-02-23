@@ -25,6 +25,7 @@ pub mod checkpoint;
 pub mod commands;
 pub mod config;
 pub mod error;
+pub mod exit;
 pub mod initiator;
 pub mod intrdr;
 pub mod jecl;
@@ -37,6 +38,10 @@ pub use checkpoint::{CheckpointConfig, CheckpointData, CheckpointManager, StartM
 pub use commands::{execute_command, parse_command, CommandResponse, Initiator, Jes2Command};
 pub use config::{apply_parms, build_initiators, parse_jes2parm, Jes2Config, Jes2Parm};
 pub use error::Jes2Error;
+pub use exit::{
+    ExitAction, ExitConfig, ExitContext, ExitDispatcher, ExitDisplayResult, ExitNumber, ExitParm,
+    Jes2Exit, exit_name, parse_exit_parm, EXIT1, EXIT2, EXIT5, EXIT6, EXIT7, EXIT15, EXIT44,
+};
 pub use output::{
     parse_destination, Destination, JesDatasets, OutputDescriptor, OutputDisposition,
     OutputGroup, OutputProcessor,

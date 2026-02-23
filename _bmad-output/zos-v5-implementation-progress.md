@@ -1,9 +1,9 @@
 ---
-currentIG: IG-3
-currentEpic: SYS-108
-epicsComplete: 4
+currentIG: IG-4
+currentEpic: UTIL-110
+epicsComplete: 5
 epicsTotal: 162
-storiesComplete: 30
+storiesComplete: 36
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -22,7 +22,7 @@ lastUpdated: "2026-02-23"
 - [x] SYS-110: PassTicket & Digital Certificate Mgmt (7 stories)
 
 ### IG-3: JES2 Extensions (EXTEND: open-mainframe-jes2)
-- [ ] SYS-108: JES2 Installation Exits Framework (6 stories)
+- [x] SYS-108: JES2 Installation Exits Framework (6 stories)
 
 ### IG-4: Utilities & DFSORT (NEW: open-mainframe-utilities)
 - [ ] Scaffold crate
