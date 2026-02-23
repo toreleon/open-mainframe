@@ -32,6 +32,7 @@ pub mod bsam;
 pub mod catalog;
 pub mod error;
 pub mod gdg;
+pub mod hsm;
 pub mod icf;
 pub mod idcams;
 pub mod locking;
@@ -48,6 +49,10 @@ pub use bsam::{
 pub use catalog::{Catalog, CatalogEntry};
 pub use error::DatasetError;
 pub use gdg::{GdgBase, GdgGeneration, GdgGenerationInfo, GdgListInfo, GdgOptions, GenerationNumber};
+pub use hsm::{
+    BackupRecord, Hsm, HsmConfig, HsmControlDataSets, MigrationRecord, MigrationStatus,
+    StorageTier,
+};
 pub use icf::{
     BcsEntry, BcsEntryType, CatalogIssue, CatalogLookupResult, IcfCatalog, IcfCatalogSystem, Vvds,
     VvdsRecord, VvdsRecordType,
