@@ -18,9 +18,11 @@
 //!   re-exported there for compatibility.
 
 mod diagnostic;
+pub mod preprocess;
 mod span;
 mod traits;
 
 pub use diagnostic::{Diagnostic, Severity};
+pub use preprocess::{normalize_line_endings, LineIndex, PreprocessedSource};
 pub use span::{offset_to_line_col, FileId, Location, Span};
 pub use traits::{AstNode, Lexer, Parse};

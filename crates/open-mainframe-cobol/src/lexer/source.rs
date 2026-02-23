@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::CobolError;
 use crate::lexer::span::{FileId, Span};
+use open_mainframe_lang_core::preprocess;
 
 /// Result type for source operations.
 pub type Result<T> = std::result::Result<T, CobolError>;
@@ -104,6 +105,8 @@ pub struct SourceFile {
 impl SourceFile {
     /// Create a source file from text.
     pub fn from_text(id: FileId, text: String, format: SourceFormat) -> Self {
+        // Always normalize line endings to prevent offset drift
+        let text = preprocess::normalize_line_endings(&text);
         let lines = parse_lines(&text, format);
         Self {
             id,
@@ -120,8 +123,8 @@ impl SourceFile {
             message: format!("Failed to read {}: {}", path.display(), e),
         })?;
 
-        // Normalize line endings
-        let text = normalize_line_endings(&text);
+        // Normalize line endings using the canonical core implementation
+        let text = preprocess::normalize_line_endings(&text);
         let lines = parse_lines(&text, format);
 
         Ok(Self {
@@ -167,19 +170,23 @@ impl SourceFile {
     }
 }
 
-/// Normalize line endings to Unix style (LF).
-fn normalize_line_endings(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\r', "\n")
-}
-
 /// Parse source text into processed lines.
+///
+/// The input text **must** already be normalized (no `\r` bytes). This is
+/// guaranteed when called via [`SourceFile::from_text`] or
+/// [`SourceFile::from_path`], both of which normalize first.
+///
+/// Line offsets are computed using pointer arithmetic against the source
+/// string, avoiding the `offset += line.len() + 1` pattern that drifts
+/// on `\r\n` inputs.
 fn parse_lines(text: &str, format: SourceFormat) -> Vec<SourceLine> {
     let mut lines = Vec::new();
-    let mut offset: u32 = 0;
+    let base = text.as_ptr() as usize;
     let mut line_number: u32 = 1;
 
     for line in text.lines() {
-        let line_bytes = line.len() as u32;
+        // Derive the true byte offset via pointer arithmetic.
+        let offset = (line.as_ptr() as usize - base) as u32;
 
         let (sequence, indicator, content, content_offset) = match format {
             SourceFormat::Fixed => parse_fixed_line(line, offset),
@@ -195,8 +202,6 @@ fn parse_lines(text: &str, format: SourceFormat) -> Vec<SourceLine> {
             content_offset,
         });
 
-        // Move past this line and the newline character
-        offset += line_bytes + 1; // +1 for \n
         line_number += 1;
     }
 
@@ -357,9 +362,9 @@ mod tests {
 
     #[test]
     fn test_normalize_line_endings() {
-        assert_eq!(normalize_line_endings("a\r\nb\r\nc"), "a\nb\nc");
-        assert_eq!(normalize_line_endings("a\rb\rc"), "a\nb\nc");
-        assert_eq!(normalize_line_endings("a\nb\nc"), "a\nb\nc");
+        assert_eq!(preprocess::normalize_line_endings("a\r\nb\r\nc"), "a\nb\nc");
+        assert_eq!(preprocess::normalize_line_endings("a\rb\rc"), "a\nb\nc");
+        assert_eq!(preprocess::normalize_line_endings("a\nb\nc"), "a\nb\nc");
     }
 
     #[test]

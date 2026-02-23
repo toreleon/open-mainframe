@@ -14,14 +14,15 @@ pub use scanner::tokenize_operands;
 pub use token::{JclStatement, Token};
 
 use crate::error::JclError;
+use open_mainframe_lang_core::PreprocessedSource;
 
 /// JCL lexer.
-pub struct Lexer<'a> {
-    /// Original source text.
-    source: &'a str,
-    /// Input lines.
-    lines: Vec<&'a str>,
-    /// Byte offset of each line in the source.
+pub struct Lexer {
+    /// Preprocessed source (normalized line endings + line index).
+    preprocessed: PreprocessedSource,
+    /// Input lines (slices into the normalized text).
+    lines: Vec<String>,
+    /// Byte offset of each line in the normalized source.
     line_offsets: Vec<u32>,
     /// Current line index.
     current_line: usize,
@@ -31,20 +32,16 @@ pub struct Lexer<'a> {
     inline_delimiter: Option<String>,
 }
 
-impl<'a> Lexer<'a> {
+impl Lexer {
     /// Create a new lexer for the given JCL source.
-    pub fn new(source: &'a str) -> Self {
-        let lines: Vec<&str> = source.lines().collect();
-        // Compute byte offset of each line
-        let mut line_offsets = Vec::with_capacity(lines.len());
-        let mut offset = 0u32;
-        for line in source.lines() {
-            line_offsets.push(offset);
-            // +1 for the newline character (or end of string)
-            offset += line.len() as u32 + 1;
-        }
+    pub fn new(source: &str) -> Self {
+        let preprocessed = PreprocessedSource::new(source);
+        let lines: Vec<String> = preprocessed.text.lines().map(|l| l.to_string()).collect();
+        let line_offsets: Vec<u32> = (0..lines.len())
+            .map(|i| preprocessed.line_index.line_start(i).unwrap_or(0))
+            .collect();
         Self {
-            source,
+            preprocessed,
             lines,
             line_offsets,
             current_line: 0,
@@ -53,9 +50,14 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Get the preprocessed (normalized) source text.
+    pub fn source(&self) -> &str {
+        &self.preprocessed.text
+    }
+
     /// Get the byte offset of the start of the given line index.
     fn line_byte_offset(&self, line_idx: usize) -> u32 {
-        self.line_offsets.get(line_idx).copied().unwrap_or(self.source.len() as u32)
+        self.line_offsets.get(line_idx).copied().unwrap_or(self.preprocessed.text.len() as u32)
     }
 
     /// Get the byte offset of the end of the given line index (exclusive, includes line content).
@@ -68,7 +70,7 @@ impl<'a> Lexer<'a> {
         let mut statements = Vec::new();
 
         while self.current_line < self.lines.len() {
-            let line = self.lines[self.current_line];
+            let line = &self.lines[self.current_line];
 
             // Check for inline data end
             if self.in_inline_data {
@@ -146,7 +148,7 @@ impl<'a> Lexer<'a> {
         let start_line_idx = self.current_line;
         let start_line = self.current_line as u32 + 1;
         let byte_offset = self.line_byte_offset(start_line_idx);
-        let first_line = self.lines[self.current_line];
+        let first_line = self.lines[self.current_line].clone();
         self.current_line += 1;
 
         // Must start with //
@@ -188,7 +190,7 @@ impl<'a> Lexer<'a> {
         let mut full_operands = operands.to_string();
         let mut last_line_idx = start_line_idx;
         while self.is_continued(&full_operands) && self.current_line < self.lines.len() {
-            let cont_line = self.lines[self.current_line];
+            let cont_line = &self.lines[self.current_line];
             if !cont_line.starts_with("//") || cont_line.starts_with("//*") {
                 break;
             }
@@ -282,7 +284,7 @@ impl<'a> Lexer<'a> {
         let end_marker = delimiter.unwrap_or("/*");
 
         while self.current_line < self.lines.len() {
-            let line = self.lines[self.current_line];
+            let line = &self.lines[self.current_line];
             if line.starts_with(end_marker) {
                 self.current_line += 1;
                 break;
@@ -358,5 +360,47 @@ mod tests {
         assert_eq!(statements.len(), 2);
         assert_eq!(statements[0].operation, "JOB");
         assert_eq!(statements[1].operation, "EXEC");
+    }
+
+    #[test]
+    fn test_crlf_line_endings_produce_correct_offsets() {
+        // This was the original bug: \r\n caused byte offset drift
+        let jcl = "//JOB1    JOB CLASS=A\r\n//STEP1   EXEC PGM=SORT\r\n//DD1     DD *\r\n";
+        let mut lexer = Lexer::new(jcl);
+        let statements = lexer.parse_statements().unwrap();
+
+        assert_eq!(statements.len(), 3);
+        assert_eq!(statements[0].operation, "JOB");
+        assert_eq!(statements[1].operation, "EXEC");
+        assert_eq!(statements[2].operation, "DD");
+
+        // After normalization, line offsets should be based on \n only.
+        // Line 0: "//JOB1    JOB CLASS=A" (21 chars) + \n = offset 0
+        // Line 1: "//STEP1   EXEC PGM=SORT" (23 chars) starts at offset 22
+        // Line 2: "//DD1     DD *" (14 chars) starts at offset 46
+        assert_eq!(statements[0].byte_offset, 0);
+        assert_eq!(statements[1].byte_offset, 22);
+        assert_eq!(statements[2].byte_offset, 46);
+
+        // Verify the source text can be sliced at these offsets
+        let src = lexer.source();
+        assert!(src[statements[1].byte_offset as usize..].starts_with("//STEP1"));
+        assert!(src[statements[2].byte_offset as usize..].starts_with("//DD1"));
+    }
+
+    #[test]
+    fn test_mixed_line_endings() {
+        // Mix of \n and \r\n
+        let jcl = "//JOB1 JOB CLASS=A\n//STEP1 EXEC PGM=TEST\r\n//DD1 DD SYSOUT=*\n";
+        let mut lexer = Lexer::new(jcl);
+        let statements = lexer.parse_statements().unwrap();
+
+        assert_eq!(statements.len(), 3);
+        // All offsets should still be accurate after normalization
+        let src = lexer.source();
+        for stmt in &statements {
+            let slice = &src[stmt.byte_offset as usize..stmt.byte_end as usize];
+            assert!(slice.starts_with("//"));
+        }
     }
 }
