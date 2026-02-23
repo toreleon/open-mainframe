@@ -7,11 +7,13 @@
 //! - **Classification Rules** — route work to service classes based on attributes
 //! - **Service Policy** — named collections of service class/goal definitions
 
+pub mod capping;
 pub mod classify;
 pub mod goals;
 pub mod policy;
 pub mod service;
 
+pub use capping::{CappingEngine, EnforcementAction, GroupUtilization, RuntimeEnvironment, ThrottleAction};
 pub use classify::{ClassificationRule, Classifier, SubsystemType, WorkAttribute, WorkRequest};
 pub use goals::{
     PerformanceIndex, ResourceDemand, ServiceUnits, SlidingWindow, WorkUnitTracker,

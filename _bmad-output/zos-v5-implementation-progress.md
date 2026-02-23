@@ -1,9 +1,9 @@
 ---
 currentIG: IG-9
-currentEpic: WLM-103
-epicsComplete: 36
+currentEpic: WLM-104
+epicsComplete: 37
 epicsTotal: 162
-storiesComplete: 220
+storiesComplete: 225
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -70,7 +70,7 @@ lastUpdated: "2026-02-23"
 - [x] WLM-100: Service Definition Data Model (7 stories)
 - [x] WLM-101: Classification Rule Engine (6 stories)
 - [x] WLM-102: Goal Evaluation & PI (6 stories)
-- [ ] WLM-103: Resource Groups & Capping (5 stories)
+- [x] WLM-103: Resource Groups & Capping (5 stories)
 - [ ] WLM-104: WLM-Managed Initiator Scheduling (6 stories)
 - [ ] WLM-105: Enclave Framework (5 stories)
 - [ ] WLM-106: IWM Services API (7 stories)
