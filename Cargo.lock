@@ -1468,6 +1468,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-syscmd"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "thiserror",
+]
+
+[[package]]
 name = "open-mainframe-tso"
 version = "0.1.0"
 dependencies = [
@@ -1488,6 +1496,17 @@ dependencies = [
  "open-mainframe-cobol",
  "open-mainframe-runtime",
  "ratatui",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "open-mainframe-utilities"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "serde",
+ "serde_json",
  "thiserror",
  "tracing",
 ]

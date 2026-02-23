@@ -1,9 +1,9 @@
 ---
 currentIG: IG-7
-currentEpic: SYS-102
-epicsComplete: 29
+currentEpic: SYS-103
+epicsComplete: 30
 epicsTotal: 162
-storiesComplete: 167
+storiesComplete: 176
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -57,8 +57,8 @@ lastUpdated: "2026-02-23"
 ## Phase B — Interactive & Scripting
 
 ### IG-7: System Commands & Console (NEW: open-mainframe-syscmd)
-- [ ] Scaffold crate
-- [ ] SYS-102: System Command Dispatcher & DISPLAY (9 stories)
+- [x] Scaffold crate
+- [x] SYS-102: System Command Dispatcher & DISPLAY (9 stories)
 - [ ] SYS-103: SDSF (9 stories)
 
 ### IG-8: Program Management & Binder (NEW: open-mainframe-pgmmgmt)

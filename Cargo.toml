@@ -23,6 +23,7 @@ members = [
     "crates/open-mainframe-zosmf",
     "crates/open-mainframe-mvs",
     "crates/open-mainframe-utilities",
+    "crates/open-mainframe-syscmd",
 ]
 
 [workspace.package]
@@ -92,3 +93,4 @@ open-mainframe-pli = { path = "crates/open-mainframe-pli" }
 open-mainframe-zosmf = { path = "crates/open-mainframe-zosmf" }
 open-mainframe-mvs = { path = "crates/open-mainframe-mvs" }
 open-mainframe-utilities = { path = "crates/open-mainframe-utilities" }
+open-mainframe-syscmd = { path = "crates/open-mainframe-syscmd" }
