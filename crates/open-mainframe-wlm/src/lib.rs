@@ -11,6 +11,7 @@ pub mod capping;
 pub mod classify;
 pub mod enclave;
 pub mod goals;
+pub mod health;
 pub mod iwm;
 pub mod operator;
 pub mod persistence;
@@ -20,6 +21,10 @@ pub mod service;
 
 pub use capping::{CappingEngine, EnforcementAction, GroupUtilization, RuntimeEnvironment, ThrottleAction};
 pub use enclave::{Enclave, EnclaveManager, EnclaveState};
+pub use health::{
+    ClassResponse, ClassesResponse, EnclaveResponse, InitiatorResponse,
+    PolicyResponse, ResourceGroupResponse, ResourceGroupsResponse,
+};
 pub use iwm::{ClassifyResult, IwmServices, RegisteredServer, ServiceClassInfo};
 pub use operator::{
     ClassMeasurement, ClassStatus, DisplayWlmResponse, PrometheusMetric,
