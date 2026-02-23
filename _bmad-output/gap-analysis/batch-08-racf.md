@@ -535,3 +535,33 @@ Planning documents indicate RACF is deferred to v2.0+. The architecture notes "T
 - [IBM RACF Security Target (Common Criteria)](https://www.commoncriteriaportal.org/files/epfiles/st_racfv2r3_v5.5_public.pdf)
 - [RACDCERT Survival Guide (Nigel Pentland, PDF)](https://nigelpentland.co.uk/pdfs/racdcert.pdf)
 - [IBM/IBM-Z-zOS RACF Downloads — GitHub](https://github.com/IBM/IBM-Z-zOS/blob/main/zOS-RACF/Downloads/readme.md)
+
+## Implementation Status
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| User profiles (ADDUSER/ALTUSER/LISTUSER/DELUSER) | YES | `database.rs` — full CRUD with attributes, password, connect groups |
+| Group profiles (ADDGROUP/ALTGROUP/CONNECT/REMOVE) | YES | `database.rs` — hierarchical groups under SYS1, connect authorities |
+| User attributes (SPECIAL/OPERATIONS/AUDITOR/REVOKE) | YES | `types.rs` — UserAttribute enum with all 7 variants |
+| Dataset profiles (ADDSD/ALTDSD/LISTDSD/DELDSD) | YES | `database.rs` + `dataset.rs` — full generic/discrete profiles |
+| Generic vs discrete profiles (wildcard patterns) | YES | `dataset.rs` — `*`, `**`, `%` wildcards with specificity scoring |
+| General resource profiles (RDEFINE/RALTER/RLIST/RDELETE) | YES | `resource.rs` — ResourceManager with full command set |
+| 100+ resource classes (DATASET, FACILITY, PROGRAM, etc.) | YES | `resource.rs` — IbmClasses with 46+ class constants, CDT entries |
+| PERMIT command (5 access levels) | YES | `database.rs` + `resource.rs` — dataset and general resource PERMIT |
+| Conditional access (WHEN clause) | YES | `resource.rs` — WhenCondition with Program/Terminal/Console/JesInput/ServAuth/SysId/AppcPort |
+| SETROPTS system options (~30+ options) | YES | `setropts.rs` — CLASSACT/RACLIST/GENERIC/GENCMD/GENLIST/GLOBAL/PASSWORD/AUDIT/MAC/REFRESH |
+| Password rules (MINCHANGE/REVOKE/HISTORY/RULES) | YES | `setropts.rs` — PasswordRules + `auth.rs` — PasswordPolicy enforcement |
+| RACROUTE macro interface (AUTH/VERIFY/FASTAUTH/etc.) | YES | `saf.rs` — SafRouter with AUTH/FASTAUTH/VERIFY/EXTRACT |
+| SAF router interface | YES | `saf.rs` — SafRouter with SafRc/RacfRc return codes |
+| RACDCERT certificate management (~26 functions) | YES | `certificate.rs` — GENCERT/GENREQ/ADD/DELETE/LIST/LISTCHAIN/CHECKCERT/EXPORT/IMPORT/REKEY/ROLLOVER |
+| Keyrings (ADDRING/CONNECT/LISTRING) | YES | `certificate.rs` — ADDRING/DELRING/LISTRING/CONNECT/REMOVE |
+| AT-TLS integration | GAP | Not implemented — requires networking layer integration |
+| Security Labels / MAC (SECLABEL) | GAP (now implemented) | `seclabel.rs` — SecurityLevel/SecurityCategory/SecurityLabel with dominance checking, SeclabelManager, MAC enforcement |
+| SMF audit records (Type 80/81/83) | GAP | Not implemented — depends on SMF crate (batch-14) |
+| RACF database (primary/backup, utilities) | GAP (now implemented) | `utilities.rs` — IRRUT100 search, IRRUT200 verify, IRRDBU00 unload; `database.rs` — JSON persistence |
+| RACF exits (ICHRTX00, ICHRCX01, ICHPWX01, etc.) | GAP (now implemented) | `exits.rs` — ExitManager with ICHRTX00/ICHRCX02/ICHPWX01/IRREVX01 exit hooks |
+| SEARCH command (database search) | YES | `database.rs` — wildcard mask matching across user/group/dataset profiles |
+| PassTickets (PTKTDATA/PTKTVAL) | YES | `auth.rs` — RDEFINE/RLIST/RDELETE PTKTDATA, generate/validate with replay prevention |
+| Kerberos authentication | GAP | Not implemented — low priority for emulation |
+| Multi-Factor Authentication (MFADEF class) | GAP | Not implemented — low priority for emulation |
+| Custom class definition (CDT) | YES | `resource.rs` — ClassDescriptor with POSIT, properties, custom class registration |

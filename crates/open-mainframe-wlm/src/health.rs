@@ -188,7 +188,7 @@ pub fn to_json<T: serde::Serialize>(response: &T) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operator::{ClassStatus, ResourceGroupStatus};
+    use crate::operator::{ClassStatus, ResourceGroupStatus, WlmMode};
 
     fn make_display() -> DisplayWlmResponse {
         DisplayWlmResponse {

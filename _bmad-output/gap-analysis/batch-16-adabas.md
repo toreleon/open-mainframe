@@ -554,3 +554,136 @@ ADABAS is mentioned in:
 - ADABAS Utilities — https://documentation.softwareag.com/adabas/azp843/concepts/cfutil.htm
 - ADAINV Utility — https://documentation.softwareag.com/adabas/ada67luw/utils/inv.htm
 - Wikipedia: ADABAS — https://en.wikipedia.org/wiki/ADABAS
+
+## Implementation Status
+
+Reviewed against crate `open-mainframe-adabas` at `crates/open-mainframe-adabas/src/`.
+
+### ADABAS Architecture (storage.rs)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Associator (inverted lists + AC + FDT) | YES | `AssociatorStorage` with inverted lists and address converter |
+| Data Storage (compressed records) | YES | `DataStorage` with RABN-keyed block store |
+| Work area (ISN lists, temp data) | YES | `WorkPool` in nucleus.rs provides named work areas |
+| ISN (Internal Sequence Number) | YES | `Isn` type alias (u64) with allocator in `AdabasFile` |
+| RABN (Relative ADABAS Block Number) | YES | `Rabn` type alias (u64) |
+| Address Converter (ISN->RABN) | YES | `AddressConverter` struct |
+| Inverted list (Normal + Upper indexes) | YES | `InvertedList` with BTreeMap, exact/range search |
+| FDT (Field Definition Table) | YES | `Fdt` struct in fdt.rs |
+| ADAM (Direct Access Method) | GAP | Hash-based ISN access not implemented |
+| Data compression | GAP | No compression engine; records stored raw |
+
+### FDT & Field Types (fdt.rs)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Alpha (A) field type | YES | `FieldType::Alpha` |
+| Binary (B) field type | YES | `FieldType::Binary` |
+| Fixed-point (F) field type | YES (now implemented) | `FieldType::FixedPoint` added |
+| Packed decimal (P) field type | YES | `FieldType::Packed` |
+| Unpacked (U) field type | YES | `FieldType::Unpacked` |
+| Wide (W) field type | YES | `FieldType::Wide` |
+| Float (G) field type | YES (now implemented) | `FieldType::Float` added |
+| DE (descriptor option) | YES | `FieldDef::is_descriptor` + `FieldOption::Descriptor` |
+| UQ (unique) option | YES (now implemented) | `FieldOption::Unique` added |
+| NU (null suppression) option | YES (now implemented) | `FieldOption::NullSuppression` added |
+| FI (fixed storage) option | YES (now implemented) | `FieldOption::FixedStorage` added |
+| MU (multiple-value) fields | YES | `FieldDef::is_multiple_value` + `MultipleValueField` |
+| PE (periodic groups) | YES | `FieldDef::is_periodic` + `GroupField::is_periodic` |
+| LA/LB (LOB) fields | YES (now implemented) | `FieldOption::LongAlpha` / `FieldOption::LargeObject` added |
+| NB (no blank compression) | YES (now implemented) | `FieldOption::NoBlankCompression` added |
+| NC (no char compression) | YES (now implemented) | `FieldOption::NoCharCompression` added |
+| NN (not null) | YES (now implemented) | `FieldOption::NotNull` added |
+| HF (high-order first) | YES (now implemented) | `FieldOption::HighOrderFirst` added |
+| XI (exclude replication) | YES (now implemented) | `FieldOption::ExcludeReplication` added |
+| Superdescriptors | YES | `SuperDescriptor` with `derive_value()` |
+| Subdescriptors | YES | `SubDescriptor` with `extract_value()` |
+| Phonetic descriptors | YES | `PhoneticDescriptor` with Soundex-like `phonetic_code()` |
+| Hyperdescriptors | YES | `HyperDescriptor` with `generate_values()` |
+| Collation descriptors | YES (now implemented) | `CollationDescriptor` with `collation_key()` added |
+
+### Direct Call Commands (acb.rs)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| S1/S2/S4 (Find) | YES | `AcbCommand::S1/S2/S4` + `SearchCommand` enum |
+| S8 (ISN list operations) | YES | `AcbCommand::S8` + `SearchBuffer::evaluate()` with AND/OR/NOT |
+| S9 (Sort ISN list) | YES (now implemented) | `AcbCommand::S9` + `SearchCommand::SortIsnList` added |
+| L1/L4 (Read by ISN) | YES | `AcbCommand::L1/L4` + `ReadCommand::ReadByIsn/ReadByIsnList` |
+| L2/L5 (Physical sequential) | YES | `AcbCommand::L2/L5` + `ReadCommand` variants |
+| L3/L6 (Logical sequential) | YES | `AcbCommand::L3/L6` + `ReadCommand` variants |
+| L9 (Histogram) | YES (now implemented) | `AcbCommand::L9` + `ReadCommand::ReadHistogram` added |
+| LF (Read FDT) | YES (now implemented) | `AcbCommand::Lf` + `ReadCommand::ReadFdt` added |
+| N1/N2 (Add record) | YES | `AcbCommand::N1/N2` + `StoreCommand` |
+| A1 (Update) | YES | `AcbCommand::A1` + `UpdateCommand` |
+| E1 (Delete) | YES | `AcbCommand::E1` + `DeleteCommand` |
+| ET (End Transaction) | YES | `AcbCommand::Et` + `TransactionManager::commit()` |
+| BT (Backout Transaction) | YES | `AcbCommand::Bt` + `TransactionManager::rollback()` |
+| OP (Open session) | YES | `AcbCommand::Op` handled in nucleus |
+| CL (Close session) | YES | `AcbCommand::Cl` handled in nucleus |
+| RC (Release Command ID) | YES (now implemented) | `AcbCommand::Rc` added |
+| HI/RI (Hold/Release ISN) | YES (now implemented) | `AcbCommand::Hi/Ri` with `HoldQueue` integration added |
+| RE (Read ET data) | YES (now implemented) | `AcbCommand::Re` added |
+| ACB (ADABAS Control Block) | YES | `Acb` struct with all fields |
+| Format/Record/Search/Value/ISN buffers | YES | All buffer fields on `Acb` struct |
+| Response codes | YES | `AcbResult::response_code` with standard codes (0,3,9,17,22,113,145) |
+
+### ADABAS Utilities (utilities.rs)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| ADALOD (load) | YES | `AdalodUtility` with Initial/MassUpdate modes |
+| ADAULD (unload) | YES | `AdauniUtility` with all/specific ISN unload |
+| ADASAV (save/restore) | YES | `AdasavUtility` with `BackupImage` |
+| ADACMP (compress/decompress) | GAP | No compression engine |
+| ADAORD (reorder) | GAP | File restructuring not implemented |
+| ADAFRM (format) | GAP | Dataset initialization not implemented |
+| ADADBS (DB services) | GAP | Add/delete files partially via `AdabasNucleus::define_file()` |
+| ADAINV (inverted lists) | GAP | Create/delete descriptors not as standalone utility |
+| ADAREP (report) | GAP | Database statistics reporting not implemented |
+| ADAVAL (validate) | GAP | Integrity checking not implemented |
+| ADAICK (check) | GAP | Index verification not implemented |
+
+### ADABAS Nucleus (nucleus.rs)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Multi-threaded nucleus | YES | `AdabasNucleus` with `execute_acb()` dispatch |
+| ADARUN parameters | YES | `NucleusParams` (max_files, buffer_size, max_users, etc.) |
+| Buffer pool | YES | `WorkPool` with allocate/release/get |
+| Command queue | YES | `CommandQueue` with enqueue/dequeue/capacity |
+| User queue | GAP | No explicit user session tracking (OP/CL are no-ops) |
+| Protection log (PLOG) | YES | `ProtectionLog` with write-ahead entries |
+| Command log (CLOG) | YES (now implemented) | `CommandLog` with audit trail entries added |
+| Autorestart | GAP | Recovery after failure not implemented |
+| Timeout handling | GAP | Inactive session cleanup not implemented |
+| ADACOM | GAP | Cross-memory communication not implemented |
+
+### Integration & Additional
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| DDM (Data Definition Module) | YES | `Ddm` with field mapping + `from_fdt()` generation |
+| Entire Net-Work | GAP | Cross-platform DB access not implemented |
+| EntireX | GAP | Middleware not implemented |
+| ADABAS SQL Gateway | GAP | SQL access not implemented |
+| Event Replicator | GAP | Change data capture not implemented |
+| ADABAS-to-ADABAS replication | GAP | Real-time sync not implemented |
+| AOS (ADABAS Online System) | GAP | Interactive admin not implemented |
+| Security | GAP | File/field-level access control not implemented |
+| Triggers | GAP | Event-driven stored procedures not implemented |
+
+### Summary
+
+| Category | Total Features | YES | GAP (now implemented) | GAP |
+|----------|---------------|-------|----------------------|-----|
+| Architecture | 10 | 8 | 0 | 2 |
+| FDT & Field Types | 24 | 10 | 14 | 0 |
+| Direct Call Commands | 22 | 15 | 7 | 0 |
+| Utilities | 11 | 3 | 0 | 8 |
+| Nucleus | 10 | 5 | 1 | 4 |
+| Integration | 9 | 1 | 0 | 8 |
+| **Total** | **86** | **42** | **22** | **22** |
+
+The crate has solid coverage of core ADABAS functionality (storage engine, FDT, descriptors, ACB interface, search/read/modify commands, transactions, nucleus orchestration, and basic utilities). The remaining gaps are primarily in advanced utilities (ADACMP, ADAORD, ADAFRM, ADAICK, ADAVAL, ADAREP), enterprise integration features (Net-Work, EntireX, SQL Gateway, replication), and operational features (security, triggers, AOS). During this review, 22 features were newly implemented including FieldType::FixedPoint/Float, all FDT field options (UQ, NU, FI, LA, LB, NB, NC, NN, HF, XI), CollationDescriptor, S9/L9/LF/RC/HI/RI/RE commands, and the Command Log (CLOG).

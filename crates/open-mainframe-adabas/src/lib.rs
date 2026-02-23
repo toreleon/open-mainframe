@@ -29,13 +29,14 @@ pub mod utilities;
 
 pub use acb::{Acb, AcbCommand, AcbResult, FieldRef, FormatBuffer, parse_format_buffer};
 pub use descriptor::{
-    Descriptor, DescriptorSet, HyperDescriptor, PhoneticDescriptor, SubDescriptor,
-    SuperDescriptor,
+    CollationDescriptor, Descriptor, DescriptorSet, HyperDescriptor, PhoneticDescriptor,
+    SubDescriptor, SuperDescriptor,
 };
-pub use fdt::{Fdt, FieldDef, FieldType, GroupField, MultipleValueField};
+pub use fdt::{Fdt, FieldDef, FieldOption, FieldType, GroupField, MultipleValueField};
 pub use modify::{DeleteCommand, StoreCommand, UpdateCommand, UpdateDescriptors};
 pub use nucleus::{
-    AdabasNucleus, CommandQueue, NucleusParams, ProtectionLog, ProtectionLogEntry, WorkPool,
+    AdabasNucleus, CommandLog, CommandLogEntry, CommandQueue, NucleusParams, ProtectionLog,
+    ProtectionLogEntry, WorkPool,
 };
 pub use read::{ReadCommand, ReadCursor, ReadOptions, ReadResult};
 pub use search::{

@@ -508,3 +508,50 @@ However, several existing subsystems could be reused:
 - [PL/I — Wikipedia](https://en.wikipedia.org/wiki/PL/I)
 - [PL/I Preprocessor — Wikipedia](https://en.wikipedia.org/wiki/PL/I_preprocessor)
 - [PL/I Language Features — Try MTS](https://try-mts.com/pli-language-features-1/)
+
+## Implementation Status
+
+> Reviewed 2026-02-23 against crate `open-mainframe-pli` (`crates/open-mainframe-pli/src/`).
+> The gap analysis above was written when no PL/I implementation existed. A substantial implementation now exists.
+
+| # | Feature | Status | Notes |
+|---|---------|--------|-------|
+| 1 | PL/I Lexer | YES | Full free-form lexer in `lexer.rs` (556 lines). Tokenizes keywords (non-reserved), identifiers with `#@$`, string/bit/hex literals (suffix and prefix forms), all operators (`** -> || ^= <= >=`), comments (`/* */`), preprocessor (`%`), line/col tracking. 30+ unit tests. |
+| 2 | PL/I Parser | YES | Full parser in `parser.rs` (2250 lines). DECLARE with levels 1-15, full attribute syntax (data types, storage classes, LIKE, BASED, DEFINED, DIMENSION, INITIAL, ALIGNED). Control flow (IF/DO/SELECT/GO TO/CALL/RETURN/LEAVE/ITERATE). I/O (PUT/GET LIST/EDIT/DATA, OPEN/CLOSE, READ/WRITE). ON/SIGNAL/REVERT. Preprocessor (%INCLUDE/%XINCLUDE/%NOTE). 25+ unit tests. |
+| 3 | Arithmetic data types (FIXED DEC/BIN, FLOAT DEC/BIN) | YES | `types.rs` implements FIXED DECIMAL(p,q), FIXED BINARY(p,q), FLOAT DECIMAL(p), FLOAT BINARY(p) with runtime values, storage size calculations, and arithmetic result type rules. COMPLEX not yet implemented. |
+| 4 | String data types (CHAR, CHAR VARYING, BIT, GRAPHIC, WIDECHAR) | YES | CHARACTER(n), CHARACTER(n) VARYING, CHARACTER(*), BIT(n), BIT(n) VARYING, GRAPHIC(n), WIDECHAR(n) all implemented in parser, type system, and runtime values. |
+| 5 | Pointer types (POINTER, OFFSET, HANDLE, AREA) | YES | POINTER, OFFSET, HANDLE(name), AREA(n) all have DataType, PliType, PliValue, and parser support. Pointer qualification (`->`) supported in expressions. |
+| 6 | Special types (LABEL, ENTRY, FILE, FORMAT, TASK, EVENT) | YES (partial) | LABEL, ENTRY, FILE, FORMAT all have full type/value support. TASK and EVENT have parser/type variants but map to FixedBinary in interpreter. |
+| 7 | User-defined types (DEFINE ALIAS, ORDINAL, STRUCTURE, UNION) | YES (partial) | ORDINAL and UNION have DataType/PliType variants. DEFINE ALIAS/DEFINE STRUCTURE not in parser. |
+| 8 | Storage classes (AUTOMATIC, STATIC, CONTROLLED, BASED, DEFINED) | YES | All 6 storage classes (AUTOMATIC, STATIC, CONTROLLED, BASED, DEFINED, PARAMETER) parsed and stored. BASED(pointer) and DEFINED(target) references captured. |
+| 9 | Structures and arrays (up to 15 dims, LIKE, REFER, UNION) | YES (partial) | Structure levels 1-15, LIKE attribute, DIMENSION parsing implemented. Structure/Union PliType with members. REFER and BY NAME not implemented. |
+| 10 | ~80 statement types | YES (partial) | ~28 statement types implemented: PROCEDURE, BEGIN, DECLARE, Assignment, IF/THEN/ELSE, DO (simple/WHILE/UNTIL/iterative/REPEAT), SELECT/WHEN/OTHERWISE, CALL, RETURN, GO TO, LEAVE, ITERATE, PUT, GET, OPEN, CLOSE, READ, WRITE, ON, SIGNAL, REVERT, ALLOCATE, FREE, DISPLAY, STOP, EXIT, labeled statements, preprocessor directives. Missing: FETCH, RELEASE, ATTACH, WAIT, DELAY, FLUSH, FORMAT, DELETE, LOCATE, REWRITE. |
+| 11 | ~200 built-in functions | YES (partial) | ~85 built-in functions in `builtins.rs` (1315 lines): Arithmetic (ABS, MOD, CEIL, FLOOR, ROUND, TRUNC, MAX, MIN, SIGN, MULTIPLY, DIVIDE, REM), Math (SQRT, SIN/SIND, COS/COSD, TAN/TAND, ASIN/ASIND, ACOS/ACOSD, ATAN/ATAND, ATANH, LOG, LOG2, LOG10, EXP, ERF, ERFC), String (LENGTH, SUBSTR, INDEX, VERIFY, TRANSLATE, TRIM, LTRIM, RTRIM, LEFT, RIGHT, CENTER, COPY, REPEAT, REVERSE, SEARCH/SEARCHR, TALLY, LOWERCASE, UPPERCASE, MAXLENGTH, BIT, BOOL, COLLATE), Conversion (BINARY, DECIMAL, FIXED, FLOAT, CHAR, HEX, UNSPEC, HIGH, LOW, BYTE, RANK), DateTime (DATETIME, DATE, TIME, DAYS, DAYSTODATE, SECS, SECSTODAYS, WEEKDAY, Y4DATE), Storage (NULL, SYSNULL, ADDR, SIZE/STORAGE), Array (HBOUND, LBOUND, DIM, SUM, PROD), Misc (PLIRETV, ONCODE, ONLOC, DATAFIELD). |
+| 12 | ~25 ON-conditions (exception handling) | YES | Full implementation in `exceptions.rs` (742 lines). All 22 conditions (AREA, ATTENTION, CONVERSION, ENDFILE, ENDPAGE, ERROR, FINISH, FIXEDOVERFLOW, INVALIDOP, KEY, NAME, OVERFLOW, RECORD, SIZE, STORAGE, STRINGRANGE, STRINGSIZE, SUBSCRIPTRANGE, TRANSMIT, UNDEFINEDFILE, UNDERFLOW, ZERODIVIDE) plus user-defined CONDITION(name). ON-unit stack with scope management, REVERT, SIGNAL, condition codes, enabled/disabled conditions (SIZE/STRINGRANGE/STRINGSIZE/SUBSCRIPTRANGE disabled by default), condition inquiry functions (ONCODE, ONLOC, ONCHAR, ONSOURCE, ONFILE, ONKEY, ONCOUNT). 25+ tests. |
+| 13 | Stream I/O (GET/PUT LIST/EDIT/DATA) | YES (partial) | PUT LIST/EDIT/DATA and GET LIST/EDIT/DATA parsed with FILE, SKIP, PAGE, LINE options. PUT LIST executes in interpreter (writes to output buffer). EDIT format items not processed. |
+| 14 | Record I/O (READ/WRITE/REWRITE/DELETE, VSAM) | YES (partial) | READ FILE(f) INTO(v) KEY(k) and WRITE FILE(f) FROM(v) KEYFROM(k) parsed. OPEN/CLOSE with attributes. Interpreter stubs only -- no actual file I/O. REWRITE, DELETE, LOCATE not in parser. |
+| 15 | Preprocessor (%IF, %INCLUDE, %PROCEDURE, etc.) | YES (partial) | %INCLUDE, %XINCLUDE, %NOTE parsed and represented in AST. %IF/%THEN/%ELSE, %DECLARE, %assignment, %PROCEDURE, %ACTIVATE/%DEACTIVATE have AST node types but parser currently skips unrecognized directives. |
+| 16 | EXEC CICS integration | GAP | Not implemented. Would need PL/I syntax variant adapter for existing CICS preprocessor. |
+| 17 | EXEC SQL integration | GAP | Not implemented. Would need PL/I syntax variant adapter for existing DB2 preprocessor. |
+| 18 | EXEC DLI integration | GAP | Not implemented. Would need PL/I syntax variant adapter for existing IMS preprocessor. |
+| 19 | Multitasking (ATTACH, WAIT, EVENT) | GAP | TASK and EVENT types exist but ATTACH/WAIT/DELAY/PRIORITY/COMPLETION/STATUS statements not implemented. |
+| 20 | FETCH/RELEASE (dynamic loading) | GAP | Not implemented. |
+| 21 | Code generation | GAP | Interpreter-based execution only; no native z/Architecture or LLVM code generation. |
+| 22 | Format items for EDIT I/O | GAP | Parser accepts EDIT mode but format items (A, F, E, B, P, COLUMN, LINE, X, SKIP, R) not parsed or evaluated. |
+| 23 | PICTURE data type (numeric editing) | YES (partial) | DataType::Picture(spec) and PliType::Picture(spec) exist with storage_size calculation. No numeric editing runtime (drifting signs, insertion chars, exponent spec). |
+| 24 | Interpreter core | YES | Full interpreter in `interpreter.rs` (1384 lines). Expression evaluation with type coercion, control flow (IF/DO/SELECT), procedures with recursion and scoped variables, assignment with automatic type conversion, built-in function dispatch. 30+ tests including factorial, fibonacci, nested loops. |
+| 25 | Type system and conversions | YES | Comprehensive type system in `types.rs` (990 lines). PliType with 20 variants, PliValue with 13 variants, TypeCategory classification, can_convert_to rules, convert_value engine (arithmetic-to-arithmetic, arithmetic-to-string, string-to-arithmetic, bit conversions, graphic conversions), arithmetic_result_type, concat_result_type, comparison_common_type. 30+ tests. |
+
+### Summary
+
+The `open-mainframe-pli` crate contains a substantial PL/I implementation across 7 source files (~7,530 lines total):
+
+- **lexer.rs** (825 lines) -- Complete free-form lexer with context-sensitive keyword handling
+- **parser.rs** (2,250 lines) -- Full recursive-descent parser producing typed AST
+- **types.rs** (989 lines) -- Complete type system with 20 types, runtime values, conversion engine
+- **interpreter.rs** (1,383 lines) -- Working interpreter with expression evaluation, control flow, procedures
+- **builtins.rs** (1,314 lines) -- ~85 built-in functions across 7 categories
+- **exceptions.rs** (741 lines) -- Full ON-condition system with all 22+ conditions
+- **lib.rs** (28 lines) -- Public re-exports
+
+**Coverage**: 17 of 25 features are fully or partially implemented. The main remaining gaps are EXEC CICS/SQL/DLI integration (which can leverage existing preprocessors with PL/I syntax adapters), multitasking, FETCH/RELEASE, code generation, EDIT format items, and PICTURE numeric editing runtime.

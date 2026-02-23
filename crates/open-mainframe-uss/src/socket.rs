@@ -90,6 +90,19 @@ pub enum SocketType {
     Stream,
     /// Datagram (UDP) — SOCK_DGRAM.
     Datagram,
+    /// Raw socket — SOCK_RAW.
+    Raw,
+}
+
+/// How to shut down a socket (for shutdown()).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownHow {
+    /// SHUT_RD — disable further receives.
+    Read,
+    /// SHUT_WR — disable further sends.
+    Write,
+    /// SHUT_RDWR — disable both.
+    Both,
 }
 
 // ---------------------------------------------------------------------------
@@ -592,6 +605,31 @@ impl SocketManager {
         self.sockets.get(&fd)
     }
 
+    /// shutdown() — shut down part of a full-duplex connection.
+    pub fn shutdown(&mut self, fd: u32, how: ShutdownHow) -> Result<(), SocketError> {
+        let sock = self
+            .sockets
+            .get_mut(&fd)
+            .ok_or(SocketError::BadDescriptor { fd })?;
+        if sock.state != SocketState::Connected {
+            return Err(SocketError::NotConnected);
+        }
+        match how {
+            ShutdownHow::Read => {
+                sock.recv_buffer.clear();
+            }
+            ShutdownHow::Write => {
+                sock.send_buffer.clear();
+            }
+            ShutdownHow::Both => {
+                sock.recv_buffer.clear();
+                sock.send_buffer.clear();
+                sock.state = SocketState::Closed;
+            }
+        }
+        Ok(())
+    }
+
     /// Close a socket.
     pub fn close(&mut self, fd: u32) -> Result<(), SocketError> {
         self.sockets
@@ -811,5 +849,37 @@ mod tests {
         let fd = mgr.socket(AddressFamily::Inet, SocketType::Stream);
         let err = mgr.send(fd, b"data").unwrap_err();
         assert!(matches!(err, SocketError::NotConnected));
+    }
+
+    #[test]
+    fn test_shutdown_both() {
+        let mut mgr = SocketManager::new();
+        let fd = mgr.socket(AddressFamily::Inet, SocketType::Stream);
+        mgr.connect(fd, SocketAddress::ipv4("10.0.0.1", 80))
+            .unwrap();
+        mgr.deliver_data(fd, b"data").unwrap();
+        mgr.send(fd, b"out").unwrap();
+
+        mgr.shutdown(fd, ShutdownHow::Both).unwrap();
+        let sock = mgr.get_socket(fd).unwrap();
+        assert_eq!(sock.state, SocketState::Closed);
+        assert!(sock.recv_buffer.is_empty());
+        assert!(sock.send_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_shutdown_not_connected() {
+        let mut mgr = SocketManager::new();
+        let fd = mgr.socket(AddressFamily::Inet, SocketType::Stream);
+        let err = mgr.shutdown(fd, ShutdownHow::Read).unwrap_err();
+        assert!(matches!(err, SocketError::NotConnected));
+    }
+
+    #[test]
+    fn test_unix_domain_socket() {
+        let mut mgr = SocketManager::new();
+        let fd = mgr.socket(AddressFamily::Unix, SocketType::Stream);
+        let sock = mgr.get_socket(fd).unwrap();
+        assert_eq!(sock.family, AddressFamily::Unix);
     }
 }

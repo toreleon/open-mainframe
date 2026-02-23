@@ -43,6 +43,15 @@ pub fn eval_builtin(name: &str, args: &[NaturalValue]) -> Result<NaturalValue, F
         // Conversion / test functions
         "IS" => fn_is(args),
 
+        // Trigonometric functions
+        "SIN" => fn_sin(args),
+        "COS" => fn_cos(args),
+        "TAN" => fn_tan(args),
+        "ATN" | "ATAN" => fn_atn(args),
+        "LOG" => fn_log(args),
+        "EXP" => fn_exp(args),
+        "SGN" => fn_sign(args),
+
         // Misc
         "MIN" => fn_min(args),
         "MAX" => fn_max(args),
@@ -225,6 +234,44 @@ fn fn_sqrt(args: &[NaturalValue]) -> Result<NaturalValue, FunctionError> {
         return Err(FunctionError::InvalidArgument("SQRT of negative number".into()));
     }
     Ok(NaturalValue::Float(v.sqrt()))
+}
+
+// ---------------------------------------------------------------------------
+// Trigonometric functions
+// ---------------------------------------------------------------------------
+
+fn fn_sin(args: &[NaturalValue]) -> Result<NaturalValue, FunctionError> {
+    check_args("SIN", args, 1, 1)?;
+    Ok(NaturalValue::Float(args[0].to_f64().sin()))
+}
+
+fn fn_cos(args: &[NaturalValue]) -> Result<NaturalValue, FunctionError> {
+    check_args("COS", args, 1, 1)?;
+    Ok(NaturalValue::Float(args[0].to_f64().cos()))
+}
+
+fn fn_tan(args: &[NaturalValue]) -> Result<NaturalValue, FunctionError> {
+    check_args("TAN", args, 1, 1)?;
+    Ok(NaturalValue::Float(args[0].to_f64().tan()))
+}
+
+fn fn_atn(args: &[NaturalValue]) -> Result<NaturalValue, FunctionError> {
+    check_args("ATN", args, 1, 1)?;
+    Ok(NaturalValue::Float(args[0].to_f64().atan()))
+}
+
+fn fn_log(args: &[NaturalValue]) -> Result<NaturalValue, FunctionError> {
+    check_args("LOG", args, 1, 1)?;
+    let v = args[0].to_f64();
+    if v <= 0.0 {
+        return Err(FunctionError::InvalidArgument("LOG of non-positive number".into()));
+    }
+    Ok(NaturalValue::Float(v.ln()))
+}
+
+fn fn_exp(args: &[NaturalValue]) -> Result<NaturalValue, FunctionError> {
+    check_args("EXP", args, 1, 1)?;
+    Ok(NaturalValue::Float(args[0].to_f64().exp()))
 }
 
 // ---------------------------------------------------------------------------
@@ -646,5 +693,55 @@ mod tests {
             NaturalValue::Alpha("99,999".into()),
         ]).unwrap();
         assert_eq!(result.to_display_string(), "12,345");
+    }
+
+    // --- Trigonometric / math functions ---
+
+    #[test]
+    fn test_sin() {
+        let result = eval_builtin("SIN", &[NaturalValue::Float(0.0)]).unwrap();
+        assert!((result.to_f64() - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cos() {
+        let result = eval_builtin("COS", &[NaturalValue::Float(0.0)]).unwrap();
+        assert!((result.to_f64() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tan() {
+        let result = eval_builtin("TAN", &[NaturalValue::Float(0.0)]).unwrap();
+        assert!((result.to_f64() - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_atn() {
+        let result = eval_builtin("ATN", &[NaturalValue::Float(1.0)]).unwrap();
+        assert!((result.to_f64() - std::f64::consts::FRAC_PI_4).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log() {
+        let result = eval_builtin("LOG", &[NaturalValue::Float(std::f64::consts::E)]).unwrap();
+        assert!((result.to_f64() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log_negative() {
+        let result = eval_builtin("LOG", &[NaturalValue::Float(-1.0)]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_exp() {
+        let result = eval_builtin("EXP", &[NaturalValue::Float(0.0)]).unwrap();
+        assert!((result.to_f64() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sgn() {
+        let result = eval_builtin("SGN", &[NaturalValue::Integer(-42)]).unwrap();
+        assert_eq!(result.to_i64(), -1);
     }
 }

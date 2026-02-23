@@ -547,3 +547,43 @@ END
 - [FOCUS — Wikipedia](https://en.wikipedia.org/wiki/FOCUS)
 - [FOCUS Programming Language Resources](https://programminglanguages.info/language/focus/)
 - [FOCUS Community Home Page](https://members.tripod.com/focus_site/intro.html)
+
+## Implementation Status
+
+| # | Feature | Status |
+|---|---------|--------|
+| 1 | TABLE request language (PRINT/SUM/COUNT/AVG/MAX/MIN/PCT/FIRST/LAST) | YES (now implemented) -- PRINT+SUM existed; COUNT/AVG/MAX/MIN/PCT/FIRST/LAST verbs added in this review |
+| 2 | GRAPH request language (BAR/PIE/LINE/AREA/SCATTER) | YES -- BAR/PIE/LINE/AREA implemented; SCATTER not yet supported |
+| 3 | MODIFY transaction processing (MATCH/ON MATCH/ON NOMATCH) | YES -- FIXFORM parsing, batch MODIFY with MATCH/ON MATCH UPDATE/INCLUDE/REJECT |
+| 4 | MAINTAIN interactive data entry (WINFORM, screens) | YES -- MaintainRequest parser, CrtformDef, insert/update/delete operations |
+| 5 | Master File Descriptor (MFD) metadata layer | YES -- MfdParser with FILENAME/SEGNAME/FIELDNAME/ALIAS/USAGE/INDEX/TITLE/MISSING |
+| 6 | Access File (ACF) physical data mapping | YES -- AccessFile parser with FILENAME/SUFFIX/ADAPTER/CONNECTION/DATASET |
+| 7 | FOCUS native database engine (.FOC files) | YES -- FocusNativeAdapter with key-sequenced CRUD, cursor-based sequential read |
+| 8 | Dialogue Manager (~29 commands) | PARTIAL -- 9 of ~29 commands: -SET/-IF/-GOTO/-RUN/-INCLUDE/-REPEAT/-UNTIL/-TYPE/-READ |
+| 9 | Amper variables (&/&& local/global, system, statistical) | PARTIAL -- local (&), global (&&), system vars; statistical vars and .EXIST/.LENGTH/.EVAL suffixes missing |
+| 10 | Data types (~10: A, I, D, F, P, Dn.m, In.m, TX, Sm.n, AnV) | YES (now implemented) -- all 10 types: A, AnV, I, F, D, P, Date, DateTime (In.m), TX, SmartDate (Sm.n) |
+| 11 | 150+ built-in functions (char, date, math, conversion) | PARTIAL -- ~35 functions: 18 char + 8 date + 12 numeric + 5 conversion; ~115 still missing |
+| 12 | DEFINE FILE / COMPUTE -- virtual fields | PARTIAL -- COMPUTE in TABLE engine works; DEFINE FILE (persistent virtual fields) not implemented |
+| 13 | JOIN / COMBINE / MATCH FILE -- multi-source operations | YES -- inner join, left outer join, COMBINE append/interleave, MATCH FILE standard/differences |
+| 14 | HOLD / SAVE -- intermediate result storage | PARTIAL -- HoldFormatter with delimiter output; multi-format HOLD and SAVE not implemented |
+| 15 | StyleSheet -- formatted output (HTML, PDF, Excel, CSV) | PARTIAL -- StyleSheet with font/color/alignment; HTML + Text + HOLD formatters; PDF/Excel/CSV missing |
+| 16 | COMPOUND REPORT -- multi-report documents | GAP |
+| 17 | FOCEXEC stored procedures | PARTIAL -- via Dialogue Manager -RUN/-INCLUDE with procedure registry |
+| 18 | SQL pass-through (DB2, Oracle, etc.) | PARTIAL -- SqlPassthrough parser; no execution engine |
+| 19 | 14+ data adapters (DB2, VSAM, IMS, ADABAS, flat files) | PARTIAL -- 5 adapters: FocusNative, Sequential, VSAM (simulated), DB2 (simulated), IMS (simulated); 9+ missing |
+| 20 | FILEDEF / DYNAM ALLOCATE -- dataset access | YES -- FileDefRegistry with define/lookup/undefine/redefine + DynamAllocation with allocate/deallocate |
+| 21 | MVS/TSO interactive environment | YES -- TsoInterface with detect/userid/prefix/execute_command (simulated) |
+| 22 | CICS interface | YES -- CicsInterface with detect/applid/sysid/transaction_id/execute_command (simulated) |
+| 23 | WebFOCUS (web-based reporting/dashboards) | GAP |
+| 24 | DECODE / DB_LOOKUP -- data lookup functions | PARTIAL -- DECODE implemented in function registry; DB_LOOKUP not implemented |
+| 25 | ON ERROR handling | GAP |
+| 26 | Report formatting (HEADING/FOOTING/BY/ACROSS/PAGE-BREAK) | PARTIAL -- HEADING/FOOTING/SUBFOOT/BY/ACROSS implemented; PAGE-BREAK/SUBHEAD missing |
+
+### Summary
+
+- **Crate**: `open-mainframe-focus` (12 source files, 257 passing tests)
+- **Epics covered**: All 11 proposed epics (F100-F110) have at least partial implementation
+- **Fully implemented**: TABLE engine (with all verbs), GRAPH (4 chart types), MODIFY/MAINTAIN, MFD/ACF, data types (all 10), JOINs, FILEDEF/DYNAM, TSO/CICS interfaces
+- **Partially implemented**: Dialogue Manager (9/29 commands), functions (35/150+), data adapters (5/14+), output formats (3/6+), FOCEXEC, SQL pass-through
+- **Gaps remaining**: COMPOUND REPORT, WebFOCUS, ON ERROR handling, ~115 built-in functions, ~20 Dialogue Manager commands, PDF/Excel/CSV output, SCATTER chart type
+- **Changes in this review**: Added COUNT/AVG/MAX/MIN/PCT/FIRST/LAST table verbs; added AnV, DateTime (In.m), SmartDate (Sm.n) data types

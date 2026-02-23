@@ -63,6 +63,24 @@ pub struct SmfExitConfig {
     pub types: HashSet<u8>,
 }
 
+/// Per-subsystem recording configuration (SUBSYS parameter).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SubsysConfig {
+    /// Subsystem name (e.g., "STC", "JES2", "DB2A").
+    pub name: String,
+    /// Record types to collect for this subsystem.
+    pub types: HashSet<u8>,
+}
+
+/// Per-type log stream assignment (LSNAME parameter).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LsnameConfig {
+    /// Log stream name.
+    pub name: String,
+    /// Record types assigned to this log stream.
+    pub types: HashSet<u8>,
+}
+
 // ---------------------------------------------------------------------------
 //  SMFPRMxx Configuration
 // ---------------------------------------------------------------------------
@@ -82,6 +100,14 @@ pub struct SmfPrmConfig {
     pub max_buffer_size: usize,
     /// Recording mode.
     pub recording_mode: RecordingMode,
+    /// Per-subsystem configurations (SUBSYS parameter).
+    pub subsystems: Vec<SubsysConfig>,
+    /// Recording dataset names (DSNAME parameter).
+    pub dataset_names: Vec<String>,
+    /// Default log stream name (DEFAULTLSNAME parameter).
+    pub default_lsname: Option<String>,
+    /// Per-type log stream assignments (LSNAME parameter).
+    pub lsnames: Vec<LsnameConfig>,
 }
 
 impl Default for SmfPrmConfig {
@@ -93,6 +119,10 @@ impl Default for SmfPrmConfig {
             interval_secs: 1800, // 30 minutes
             max_buffer_size: 65536, // 64KB
             recording_mode: RecordingMode::Dataset,
+            subsystems: Vec::new(),
+            dataset_names: Vec::new(),
+            default_lsname: None,
+            lsnames: Vec::new(),
         }
     }
 }
@@ -140,6 +170,21 @@ impl SmfPrmConfig {
                 config.recording_mode = parse_recording_mode(&upper);
             } else if upper.starts_with("MAXBUFSIZE(") {
                 config.max_buffer_size = parse_max_buf_size(&upper)?;
+            } else if upper.starts_with("SUBSYS(") {
+                if let Some(subsys) = parse_subsys(&upper)? {
+                    config.subsystems.push(subsys);
+                }
+            } else if upper.starts_with("DSNAME(") {
+                let names = parse_name_list(&upper, "DSNAME(");
+                config.dataset_names.extend(names);
+            } else if upper.starts_with("DEFAULTLSNAME(") {
+                if let Some(name) = extract_parens(&upper, "DEFAULTLSNAME(") {
+                    config.default_lsname = Some(name.trim().to_string());
+                }
+            } else if upper.starts_with("LSNAME(") {
+                if let Some(ls) = parse_lsname(&upper)? {
+                    config.lsnames.push(ls);
+                }
             }
             // Ignore unknown lines gracefully (some PARMLIB members have comments).
         }
@@ -154,6 +199,21 @@ impl SmfPrmConfig {
 
 fn extract_parens(line: &str, prefix: &str) -> Option<String> {
     let start = line.find(prefix)? + prefix.len();
+    // Find the matching closing paren, handling nested parens.
+    let mut depth = 1;
+    for (i, ch) in line[start..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(line[start..start + i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    // Fallback: find first ')' (original behavior).
     let end = line[start..].find(')')? + start;
     Some(line[start..end].to_string())
 }
@@ -252,6 +312,74 @@ fn parse_max_buf_size(line: &str) -> Result<usize, SmfConfigError> {
         .parse()
         .map_err(|_| SmfConfigError::InvalidBufferSize(content.to_string()))?;
     Ok(val * multiplier)
+}
+
+/// Parse SUBSYS(name,TYPE(n,...)) parameter.
+fn parse_subsys(line: &str) -> Result<Option<SubsysConfig>, SmfConfigError> {
+    let content = match extract_parens(line, "SUBSYS(") {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    // Format: SUBSYS(name,TYPE(n,...))
+    let mut parts = content.splitn(2, ',');
+    let name = parts.next().unwrap_or("").trim().to_string();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let mut types = HashSet::new();
+    if let Some(rest) = parts.next() {
+        let rest = rest.trim();
+        if rest.starts_with("TYPE(") {
+            if let Some(type_content) = extract_parens(rest, "TYPE(") {
+                for part in type_content.split(',') {
+                    if let Ok(t) = part.trim().parse::<u8>() {
+                        types.insert(t);
+                    }
+                }
+            }
+        }
+    }
+    Ok(Some(SubsysConfig { name, types }))
+}
+
+/// Parse a comma-separated name list within parentheses: PREFIX(name1,name2,...).
+fn parse_name_list(line: &str, prefix: &str) -> Vec<String> {
+    let content = match extract_parens(line, prefix) {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+    content
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Parse LSNAME(name,TYPE(n,...)) parameter.
+fn parse_lsname(line: &str) -> Result<Option<LsnameConfig>, SmfConfigError> {
+    let content = match extract_parens(line, "LSNAME(") {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let mut parts = content.splitn(2, ',');
+    let name = parts.next().unwrap_or("").trim().to_string();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let mut types = HashSet::new();
+    if let Some(rest) = parts.next() {
+        let rest = rest.trim();
+        if rest.starts_with("TYPE(") {
+            if let Some(type_content) = extract_parens(rest, "TYPE(") {
+                for part in type_content.split(',') {
+                    if let Ok(t) = part.trim().parse::<u8>() {
+                        types.insert(t);
+                    }
+                }
+            }
+        }
+    }
+    Ok(Some(LsnameConfig { name, types }))
 }
 
 // ---------------------------------------------------------------------------
@@ -372,5 +500,75 @@ MAXBUFSIZE(128K)
         let input = "* This is a comment\nTYPE(30)\n/* Also a comment */";
         let cfg = SmfPrmConfig::parse(input).unwrap();
         assert!(cfg.is_type_active(30));
+    }
+
+    #[test]
+    fn test_parse_subsys() {
+        let cfg = SmfPrmConfig::parse("SUBSYS(STC,TYPE(30,80))").unwrap();
+        assert_eq!(cfg.subsystems.len(), 1);
+        assert_eq!(cfg.subsystems[0].name, "STC");
+        assert!(cfg.subsystems[0].types.contains(&30));
+        assert!(cfg.subsystems[0].types.contains(&80));
+    }
+
+    #[test]
+    fn test_parse_subsys_no_types() {
+        let cfg = SmfPrmConfig::parse("SUBSYS(JES2)").unwrap();
+        assert_eq!(cfg.subsystems.len(), 1);
+        assert_eq!(cfg.subsystems[0].name, "JES2");
+        assert!(cfg.subsystems[0].types.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dsname() {
+        let cfg = SmfPrmConfig::parse("DSNAME(SYS1.MAN1,SYS1.MAN2,SYS1.MAN3)").unwrap();
+        assert_eq!(cfg.dataset_names.len(), 3);
+        assert_eq!(cfg.dataset_names[0], "SYS1.MAN1");
+        assert_eq!(cfg.dataset_names[2], "SYS1.MAN3");
+    }
+
+    #[test]
+    fn test_parse_defaultlsname() {
+        let cfg = SmfPrmConfig::parse("DEFAULTLSNAME(IFASMF.DEFAULT)").unwrap();
+        assert_eq!(cfg.default_lsname.as_deref(), Some("IFASMF.DEFAULT"));
+    }
+
+    #[test]
+    fn test_parse_lsname() {
+        let cfg = SmfPrmConfig::parse("LSNAME(IFASMF.TYPE80,TYPE(80))").unwrap();
+        assert_eq!(cfg.lsnames.len(), 1);
+        assert_eq!(cfg.lsnames[0].name, "IFASMF.TYPE80");
+        assert!(cfg.lsnames[0].types.contains(&80));
+    }
+
+    #[test]
+    fn test_parse_full_config() {
+        let input = r#"
+* Full SMFPRMxx configuration
+TYPE(30,70:79,80)
+NOTYPE(0:3)
+EXITS(IEFU83,IEFU84,IEFU85)
+INTERVAL(SMF,0030)
+RECORDING(LOGSTREAM)
+MAXBUFSIZE(128K)
+SUBSYS(STC,TYPE(30,80))
+SUBSYS(JES2,TYPE(26))
+DSNAME(SYS1.MAN1,SYS1.MAN2)
+DEFAULTLSNAME(IFASMF.DEFAULT)
+LSNAME(IFASMF.TYPE80,TYPE(80))
+"#;
+        let cfg = SmfPrmConfig::parse(input).unwrap();
+        assert!(cfg.is_type_active(30));
+        assert!(!cfg.is_type_active(0));
+        assert_eq!(cfg.exits.len(), 3);
+        assert_eq!(cfg.interval_secs, 1800);
+        assert_eq!(cfg.recording_mode, RecordingMode::Logstream);
+        assert_eq!(cfg.max_buffer_size, 131072);
+        assert_eq!(cfg.subsystems.len(), 2);
+        assert_eq!(cfg.subsystems[0].name, "STC");
+        assert_eq!(cfg.subsystems[1].name, "JES2");
+        assert_eq!(cfg.dataset_names.len(), 2);
+        assert_eq!(cfg.default_lsname.as_deref(), Some("IFASMF.DEFAULT"));
+        assert_eq!(cfg.lsnames.len(), 1);
     }
 }

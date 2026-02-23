@@ -339,6 +339,136 @@ impl TcpIpProfile {
 }
 
 // ---------------------------------------------------------------------------
+// NET-103.5 — TCPIP.DATA Resolver Configuration
+// ---------------------------------------------------------------------------
+
+/// TCPIP.DATA file — resolver configuration separate from TCPIP.PROFILE.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TcpIpData {
+    pub tcpip_node: String,
+    pub hostname: String,
+    pub domainorigin: String,
+    pub nameserver: Vec<std::net::IpAddr>,
+    pub datasetprefix: String,
+}
+
+impl Default for TcpIpData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TcpIpData {
+    pub fn new() -> Self {
+        Self {
+            tcpip_node: String::new(),
+            hostname: String::new(),
+            domainorigin: String::new(),
+            nameserver: Vec::new(),
+            datasetprefix: "TCPIP".to_string(),
+        }
+    }
+
+    /// Parse a TCPIP.DATA file.
+    pub fn parse(input: &str) -> Result<Self, TcpIpError> {
+        let mut data = Self::new();
+        for (line_num, line) in input.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.is_empty() {
+                continue;
+            }
+            match parts[0].to_uppercase().as_str() {
+                "TCPIPJOBNAME" | "TCPIPNODE" => {
+                    if parts.len() >= 2 {
+                        data.tcpip_node = parts[1].to_string();
+                    }
+                }
+                "HOSTNAME" => {
+                    if parts.len() >= 2 {
+                        data.hostname = parts[1].to_string();
+                    }
+                }
+                "DOMAINORIGIN" => {
+                    if parts.len() >= 2 {
+                        data.domainorigin = parts[1].to_string();
+                    }
+                }
+                "NAMESERVER" | "NSINTERADDR" => {
+                    if parts.len() >= 2 {
+                        let addr: std::net::IpAddr =
+                            parts[1].parse().map_err(|_| TcpIpError::ParseError {
+                                line: line_num + 1,
+                                message: format!("invalid IP: {}", parts[1]),
+                            })?;
+                        data.nameserver.push(addr);
+                    }
+                }
+                "DATASETPREFIX" => {
+                    if parts.len() >= 2 {
+                        data.datasetprefix = parts[1].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(data)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NET-103.6 — CINET Multi-Stack Support
+// ---------------------------------------------------------------------------
+
+/// A registered TCP/IP stack instance for CINET.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CinetStack {
+    pub jobname: String,
+    pub default: bool,
+}
+
+/// CINET (Common INET) — multiple TCP/IP stack support.
+#[derive(Debug, Default)]
+pub struct CinetConfig {
+    stacks: Vec<CinetStack>,
+}
+
+impl CinetConfig {
+    pub fn new() -> Self {
+        Self { stacks: Vec::new() }
+    }
+
+    /// Register a TCP/IP stack with CINET.
+    pub fn add_stack(&mut self, jobname: impl Into<String>, default: bool) {
+        let jobname = jobname.into();
+        if default {
+            for s in &mut self.stacks {
+                s.default = false;
+            }
+        }
+        self.stacks.push(CinetStack { jobname, default });
+    }
+
+    /// Get the default stack.
+    pub fn default_stack(&self) -> Option<&CinetStack> {
+        self.stacks.iter().find(|s| s.default)
+    }
+
+    /// Get a stack by jobname.
+    pub fn find_stack(&self, jobname: &str) -> Option<&CinetStack> {
+        self.stacks.iter().find(|s| s.jobname == jobname)
+    }
+
+    /// Number of stacks.
+    pub fn stack_count(&self) -> usize {
+        self.stacks.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests — NET-103.5
 // ---------------------------------------------------------------------------
 
@@ -457,5 +587,51 @@ DOMAINNAME example.com
     fn port_owner_not_found() {
         let profile = TcpIpProfile::parse(SAMPLE_PROFILE).unwrap();
         assert_eq!(profile.port_owner(9999), None);
+    }
+
+    // TCPIP.DATA tests
+    #[test]
+    fn parse_tcpip_data() {
+        let input = r#"
+; TCPIP.DATA
+TCPIPJOBNAME TCPIP
+HOSTNAME LPAR1
+DOMAINORIGIN example.com
+NAMESERVER 10.1.1.1
+NAMESERVER 10.1.1.2
+DATASETPREFIX TCPIP
+"#;
+        let data = TcpIpData::parse(input).unwrap();
+        assert_eq!(data.tcpip_node, "TCPIP");
+        assert_eq!(data.hostname, "LPAR1");
+        assert_eq!(data.domainorigin, "example.com");
+        assert_eq!(data.nameserver.len(), 2);
+        assert_eq!(data.datasetprefix, "TCPIP");
+    }
+
+    #[test]
+    fn parse_tcpip_data_empty() {
+        let data = TcpIpData::parse("").unwrap();
+        assert!(data.hostname.is_empty());
+    }
+
+    // CINET tests
+    #[test]
+    fn cinet_multi_stack() {
+        let mut cinet = CinetConfig::new();
+        cinet.add_stack("TCPIP1", true);
+        cinet.add_stack("TCPIP2", false);
+        assert_eq!(cinet.stack_count(), 2);
+        assert_eq!(cinet.default_stack().unwrap().jobname, "TCPIP1");
+        assert!(cinet.find_stack("TCPIP2").is_some());
+    }
+
+    #[test]
+    fn cinet_set_default_clears_previous() {
+        let mut cinet = CinetConfig::new();
+        cinet.add_stack("TCPIP1", true);
+        cinet.add_stack("TCPIP2", true);
+        assert_eq!(cinet.default_stack().unwrap().jobname, "TCPIP2");
+        assert!(!cinet.find_stack("TCPIP1").unwrap().default);
     }
 }

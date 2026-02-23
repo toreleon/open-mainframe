@@ -253,6 +253,46 @@ impl HyperDescriptor {
     }
 }
 
+// ── CollationDescriptor ────────────────────────────────────────────
+
+/// A collation descriptor for locale-aware sorting.
+///
+/// Collation descriptors generate sort keys based on a specified locale or
+/// collation sequence, enabling locale-sensitive ordering of descriptor values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollationDescriptor {
+    /// The collation descriptor name.
+    pub name: String,
+    /// Parent field name on which collation is based.
+    pub parent_field: String,
+    /// Collation sequence identifier (e.g., locale name).
+    pub collation_id: String,
+}
+
+impl CollationDescriptor {
+    /// Create a new collation descriptor.
+    pub fn new(
+        name: impl Into<String>,
+        parent_field: impl Into<String>,
+        collation_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            parent_field: parent_field.into(),
+            collation_id: collation_id.into(),
+        }
+    }
+
+    /// Generate a collation sort key from a value.
+    ///
+    /// This is a simplified implementation that converts to uppercase for
+    /// case-insensitive sorting. A real implementation would use the
+    /// specified collation sequence.
+    pub fn collation_key(&self, value: &str) -> String {
+        value.to_uppercase()
+    }
+}
+
 /// A collection of all descriptor types for a file.
 #[derive(Debug, Clone, Default)]
 pub struct DescriptorSet {
@@ -266,6 +306,8 @@ pub struct DescriptorSet {
     pub phonetic_descriptors: Vec<PhoneticDescriptor>,
     /// Hyper-descriptors.
     pub hyper_descriptors: Vec<HyperDescriptor>,
+    /// Collation descriptors.
+    pub collation_descriptors: Vec<CollationDescriptor>,
 }
 
 impl DescriptorSet {
@@ -290,6 +332,9 @@ impl DescriptorSet {
             names.push(&d.name);
         }
         for d in &self.hyper_descriptors {
+            names.push(&d.name);
+        }
+        for d in &self.collation_descriptors {
             names.push(&d.name);
         }
         names

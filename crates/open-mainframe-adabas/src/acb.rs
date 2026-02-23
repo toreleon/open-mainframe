@@ -53,6 +53,16 @@ pub enum AcbCommand {
     Op,
     /// CL — Close (session end).
     Cl,
+    /// LF — Read Field Definition Table.
+    Lf,
+    /// RC — Release command ID.
+    Rc,
+    /// HI — Hold ISN (explicit pessimistic lock).
+    Hi,
+    /// RI — Release ISN (release explicit lock).
+    Ri,
+    /// RE — Read ET data (user-defined transaction restart data).
+    Re,
 }
 
 impl AcbCommand {
@@ -79,6 +89,11 @@ impl AcbCommand {
             "BT" => Ok(Self::Bt),
             "OP" => Ok(Self::Op),
             "CL" => Ok(Self::Cl),
+            "LF" => Ok(Self::Lf),
+            "RC" => Ok(Self::Rc),
+            "HI" => Ok(Self::Hi),
+            "RI" => Ok(Self::Ri),
+            "RE" => Ok(Self::Re),
             _ => Err(AdabasError::InvalidCommand {
                 code: code.to_string(),
             }),
@@ -108,6 +123,11 @@ impl AcbCommand {
             Self::Bt => "BT",
             Self::Op => "OP",
             Self::Cl => "CL",
+            Self::Lf => "LF",
+            Self::Rc => "RC",
+            Self::Hi => "HI",
+            Self::Ri => "RI",
+            Self::Re => "RE",
         }
     }
 }

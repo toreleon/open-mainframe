@@ -8,6 +8,73 @@
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
+//  Location mode
+// ---------------------------------------------------------------------------
+
+/// How records of this type are physically placed in the database.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LocationMode {
+    /// Hashed placement by CALC key field(s).
+    Calc {
+        /// Field names used for the CALC key.
+        fields: Vec<String>,
+        /// Duplicate handling.
+        duplicates: DuplicateOption,
+    },
+    /// Clustered near the owner record via a named set.
+    Via {
+        /// Set name for clustering.
+        set_name: String,
+    },
+    /// Direct placement by database key.
+    Direct,
+}
+
+/// Handling of duplicate CALC key values or sorted set keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DuplicateOption {
+    /// Duplicates are not allowed.
+    NotAllowed,
+    /// Duplicates are placed first.
+    First,
+    /// Duplicates are placed last.
+    Last,
+}
+
+// ---------------------------------------------------------------------------
+//  Set membership class
+// ---------------------------------------------------------------------------
+
+/// Set membership class governing connect/disconnect rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SetMembership {
+    /// Must belong to a set; automatically connected on STORE.
+    MandatoryAutomatic,
+    /// Must belong to a set; explicit CONNECT required.
+    MandatoryManual,
+    /// May belong to a set; automatically connected on STORE.
+    OptionalAutomatic,
+    /// May belong to a set; explicit CONNECT required.
+    OptionalManual,
+}
+
+// ---------------------------------------------------------------------------
+//  Set implementation mode
+// ---------------------------------------------------------------------------
+
+/// Physical implementation of a set (pointer structure).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SetMode {
+    /// Chain (linked list) with optional LINKED TO PRIOR.
+    Chain {
+        /// Whether prior pointers are maintained.
+        linked_to_prior: bool,
+    },
+    /// B-tree index implementation.
+    Index,
+}
+
+// ---------------------------------------------------------------------------
 //  Field definition
 // ---------------------------------------------------------------------------
 
@@ -51,8 +118,10 @@ pub struct RecordType {
     pub name: String,
     /// Ordered list of fields.
     pub fields: Vec<FieldDef>,
-    /// Optional CALC key field name for hashed placement.
+    /// Optional CALC key field name for hashed placement (legacy convenience).
     pub calc_key: Option<String>,
+    /// Location mode (CALC, VIA, DIRECT).
+    pub location_mode: Option<LocationMode>,
     /// Name of the area where this record is stored.
     pub area_name: String,
 }
@@ -65,6 +134,7 @@ impl RecordType {
             name: name.to_uppercase(),
             fields: Vec::new(),
             calc_key: None,
+            location_mode: None,
             area_name: area.to_uppercase(),
         }
     }
@@ -123,6 +193,12 @@ pub struct SetType {
     pub order: SetOrder,
     /// Optional sort key field name (only meaningful when order == Sorted).
     pub sort_key: Option<String>,
+    /// Set membership class.
+    pub membership: Option<SetMembership>,
+    /// Physical implementation mode (CHAIN or INDEX).
+    pub mode: Option<SetMode>,
+    /// Duplicate key handling for sorted sets.
+    pub duplicates: Option<DuplicateOption>,
 }
 
 impl SetType {
@@ -134,6 +210,9 @@ impl SetType {
             members: Vec::new(),
             order,
             sort_key: None,
+            membership: None,
+            mode: None,
+            duplicates: None,
         }
     }
 

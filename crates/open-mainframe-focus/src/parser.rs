@@ -34,6 +34,13 @@ pub enum FocusToken {
     File,
     Print,
     Sum,
+    Count,
+    Avg,
+    Max,
+    Min,
+    Pct,
+    First,
+    Last,
     By,
     Across,
     Where,
@@ -318,6 +325,13 @@ impl FocusLexer {
             "FILE" => FocusToken::File,
             "PRINT" => FocusToken::Print,
             "SUM" => FocusToken::Sum,
+            "COUNT" => FocusToken::Count,
+            "AVG" => FocusToken::Avg,
+            "MAX" => FocusToken::Max,
+            "MIN" => FocusToken::Min,
+            "PCT" => FocusToken::Pct,
+            "FIRST" => FocusToken::First,
+            "LAST" => FocusToken::Last,
             "BY" => FocusToken::By,
             "ACROSS" => FocusToken::Across,
             "WHERE" => FocusToken::Where,
@@ -417,11 +431,18 @@ pub struct TableRequest {
     pub subfoot: Option<String>,
 }
 
-/// TABLE verb — PRINT or SUM.
+/// TABLE verb — PRINT, SUM, COUNT, AVG, MAX, MIN, etc.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableVerb {
     Print,
     Sum,
+    Count,
+    Avg,
+    Max,
+    Min,
+    Pct,
+    First,
+    Last,
 }
 
 /// GRAPH request AST.
@@ -584,14 +605,15 @@ impl FocusParser {
         let file = self.expect_ident()?;
 
         let verb = match self.peek() {
-            FocusToken::Print => {
-                self.advance();
-                TableVerb::Print
-            }
-            FocusToken::Sum => {
-                self.advance();
-                TableVerb::Sum
-            }
+            FocusToken::Print => { self.advance(); TableVerb::Print }
+            FocusToken::Sum => { self.advance(); TableVerb::Sum }
+            FocusToken::Count => { self.advance(); TableVerb::Count }
+            FocusToken::Avg => { self.advance(); TableVerb::Avg }
+            FocusToken::Max => { self.advance(); TableVerb::Max }
+            FocusToken::Min => { self.advance(); TableVerb::Min }
+            FocusToken::Pct => { self.advance(); TableVerb::Pct }
+            FocusToken::First => { self.advance(); TableVerb::First }
+            FocusToken::Last => { self.advance(); TableVerb::Last }
             _ => TableVerb::Print,
         };
 

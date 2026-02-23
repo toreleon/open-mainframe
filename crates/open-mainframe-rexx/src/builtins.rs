@@ -58,6 +58,12 @@ pub fn call_builtin(name: &str, args: &[String]) -> Option<Result<String, String
 
         // -- Misc (non-context-dependent) --
         "SIGN" => Some(fn_sign(args)),
+        "RANDOM" => Some(fn_random(args)),
+        "FORMAT" => Some(fn_format(args)),
+        "XRANGE" => Some(fn_xrange(args)),
+        "DATE" => Some(fn_date(args)),
+        "TIME" => Some(fn_time(args)),
+        "ERRORTEXT" => Some(fn_errortext(args)),
 
         _ => None,
     }
@@ -648,6 +654,268 @@ fn fn_sign(args: &[String]) -> Result<String, String> {
         Ok(std::cmp::Ordering::Equal) => Ok("0".into()),
         Err(e) => Err(e),
     }
+}
+
+fn fn_random(args: &[String]) -> Result<String, String> {
+    let min_val = args.get(0).and_then(|a| a.parse::<i64>().ok()).unwrap_or(0);
+    let max_val = args.get(1).and_then(|a| a.parse::<i64>().ok()).unwrap_or(999);
+    // Seed argument (index 2) is accepted but ignored in this implementation.
+    if min_val > max_val {
+        return Err(format!("RANDOM: min ({min_val}) > max ({max_val})"));
+    }
+    // Simple pseudo-random using system time as seed.
+    let tick = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() as i64;
+    let range = max_val - min_val + 1;
+    let val = min_val + (tick.unsigned_abs() as i64 % range);
+    Ok(val.to_string())
+}
+
+fn fn_format(args: &[String]) -> Result<String, String> {
+    let s = arg(args, 0);
+    let before = args.get(1).and_then(|a| a.parse::<usize>().ok());
+    let after = args.get(2).and_then(|a| a.parse::<usize>().ok());
+
+    // Parse the number.
+    let trimmed = s.trim();
+    let (int_part, frac_part) = if let Some(dot) = trimmed.find('.') {
+        (&trimmed[..dot], &trimmed[dot + 1..])
+    } else {
+        (trimmed, "")
+    };
+
+    // Format integer part.
+    let int_str = if int_part.is_empty() { "0" } else { int_part };
+    let formatted_int = if let Some(b) = before {
+        if int_str.len() > b && b > 0 {
+            return Err(format!("FORMAT: integer part too large for width {b}"));
+        }
+        format!("{int_str:>width$}", width = b)
+    } else {
+        int_str.to_string()
+    };
+
+    // Format fractional part.
+    let result = if let Some(a) = after {
+        if a == 0 {
+            formatted_int
+        } else {
+            let mut frac = frac_part.to_string();
+            if frac.len() > a {
+                frac.truncate(a);
+            } else {
+                while frac.len() < a {
+                    frac.push('0');
+                }
+            }
+            format!("{formatted_int}.{frac}")
+        }
+    } else if frac_part.is_empty() {
+        formatted_int
+    } else {
+        format!("{formatted_int}.{frac_part}")
+    };
+
+    Ok(result)
+}
+
+fn fn_xrange(args: &[String]) -> Result<String, String> {
+    let start = args.get(0).and_then(|a| a.bytes().next()).unwrap_or(0x00);
+    let end = args.get(1).and_then(|a| a.bytes().next()).unwrap_or(0xFF);
+    let mut result = String::new();
+    if start <= end {
+        for b in start..=end {
+            result.push(b as char);
+        }
+    } else {
+        // Wrap-around: start..=255 then 0..=end.
+        for b in start..=255u8 {
+            result.push(b as char);
+        }
+        for b in 0..=end {
+            result.push(b as char);
+        }
+    }
+    Ok(result)
+}
+
+fn fn_date(args: &[String]) -> Result<String, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let option = args.get(0).map(|a| a.to_uppercase()).unwrap_or_else(|| "N".into());
+
+    // Get current date from system.
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_secs = duration.as_secs() as i64;
+
+    // Convert to date components using a simple algorithm.
+    let days_since_epoch = total_secs / 86400;
+    let (year, month, day, day_of_year) = days_to_ymd(days_since_epoch);
+
+    let month_names = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let weekday_names = [
+        "Thursday", "Friday", "Saturday", "Sunday",
+        "Monday", "Tuesday", "Wednesday",
+    ];
+    let weekday_idx = (days_since_epoch % 7) as usize;
+
+    match option.chars().next().unwrap_or('N') {
+        'N' => Ok(format!("{:02} {} {:04}", day, month_names[(month - 1) as usize], year)),
+        'B' => {
+            // Base days since 1 Jan 0001.
+            let base = days_since_epoch + 719162;
+            Ok(base.to_string())
+        }
+        'C' => {
+            // Days since (and including) Jan 1 of the current century.
+            let century_start = ymd_to_days(year - year % 100, 1, 1);
+            let c_days = days_since_epoch - century_start + 1;
+            Ok(c_days.to_string())
+        }
+        'D' => Ok(day_of_year.to_string()),
+        'E' => Ok(format!("{:02}/{:02}/{:02}", day, month, year % 100)),
+        'J' => Ok(format!("{:02}{:03}", year % 100, day_of_year)),
+        'M' => Ok(month_names[(month - 1) as usize].to_string()),
+        'O' => Ok(format!("{:02}/{:02}/{:02}", year % 100, month, day)),
+        'S' => Ok(format!("{:04}{:02}{:02}", year, month, day)),
+        'U' => Ok(format!("{:02}/{:02}/{:02}", month, day, year % 100)),
+        'W' => Ok(weekday_names[weekday_idx % 7].to_string()),
+        _ => Err(format!("DATE: unknown option '{option}'")),
+    }
+}
+
+fn fn_time(args: &[String]) -> Result<String, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let option = args.get(0).map(|a| a.to_uppercase()).unwrap_or_else(|| "N".into());
+
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_secs = duration.as_secs();
+    let secs_today = (total_secs % 86400) as u32;
+    let hours = secs_today / 3600;
+    let minutes = (secs_today % 3600) / 60;
+    let seconds = secs_today % 60;
+    let micros = duration.subsec_micros();
+
+    match option.chars().next().unwrap_or('N') {
+        'N' => Ok(format!("{:02}:{:02}:{:02}", hours, minutes, seconds)),
+        'C' => {
+            let h12 = if hours == 0 { 12 } else if hours > 12 { hours - 12 } else { hours };
+            let ampm = if hours < 12 { "am" } else { "pm" };
+            Ok(format!("{}:{:02}{ampm}", h12, minutes))
+        }
+        'H' => Ok(hours.to_string()),
+        'L' => Ok(format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, micros)),
+        'M' => Ok((hours * 60 + minutes).to_string()),
+        'S' => Ok(secs_today.to_string()),
+        'E' | 'R' => {
+            // Elapsed/Reset would need a stored start time; return seconds today as approximation.
+            Ok(format!("{secs_today}.{micros:06}"))
+        }
+        _ => Err(format!("TIME: unknown option '{option}'")),
+    }
+}
+
+fn fn_errortext(args: &[String]) -> Result<String, String> {
+    let n = arg_usize(args, 0, 0);
+    let msg = match n {
+        0 => "",
+        1 => "Program interrupted",
+        2 => "Failure during execution",
+        3 => "Failure during initialization",
+        4 => "Program interrupted",
+        5 => "System resources exhausted",
+        6 => "Unmatched /*",
+        7 => "Expected WHEN or OTHERWISE",
+        8 => "Unexpected THEN or ELSE",
+        9 => "Unexpected WHEN or OTHERWISE",
+        10 => "Unexpected or unmatched END",
+        11 => "Control stack full",
+        13 => "Invalid character in program",
+        14 => "Incomplete DO/SELECT/IF",
+        15 => "Invalid hex or binary string",
+        16 => "Label not found",
+        17 => "Unexpected PROCEDURE",
+        18 => "THEN expected",
+        19 => "String or symbol expected",
+        20 => "Name expected",
+        21 => "Invalid data on end of clause",
+        22 => "Invalid character string",
+        24 => "Invalid TRACE request",
+        25 => "Invalid sub-keyword found",
+        26 => "Invalid whole number",
+        27 => "Invalid DO syntax",
+        28 => "Invalid LEAVE or ITERATE",
+        29 => "Environment name too long",
+        30 => "Name or string too long",
+        31 => "Name starts with number or '.'",
+        33 => "Invalid expression result",
+        34 => "Logical value not 0 or 1",
+        35 => "Invalid expression",
+        36 => "Unmatched ( or )",
+        37 => "Unexpected , or )",
+        38 => "Invalid template or pattern",
+        40 => "Incorrect call to routine",
+        41 => "Bad arithmetic conversion",
+        42 => "Arithmetic overflow/underflow",
+        43 => "Routine not found",
+        44 => "Function did not return data",
+        45 => "No data specified on function RETURN",
+        46 => "Invalid variable reference",
+        48 => "Failure in system service",
+        49 => "Interpretation error",
+        _ => "",
+    };
+    Ok(msg.to_string())
+}
+
+// ---------------------------------------------------------------------------
+//  Date helper functions
+// ---------------------------------------------------------------------------
+
+/// Convert days since Unix epoch to (year, month, day, day_of_year).
+fn days_to_ymd(days: i64) -> (i64, i64, i64, i64) {
+    // Algorithm from https://howardhinnant.github.io/date_algorithms.html
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+
+    // Compute day of year.
+    let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days: [i64; 12] = [31, if is_leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut day_of_year = d;
+    for i in 0..(m - 1) as usize {
+        day_of_year += month_days[i];
+    }
+
+    (year, m, d, day_of_year)
+}
+
+/// Convert (year, month, day) to days since Unix epoch.
+fn ymd_to_days(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let m = if month <= 2 { month + 9 } else { month - 3 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
 }
 
 // ---------------------------------------------------------------------------

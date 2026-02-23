@@ -37,11 +37,13 @@ pub use record::{
 pub use writer::{SmfTriplet, SmfWriter, SmfWriterConfig, SmfWriterError};
 
 // Re-export config types.
-pub use config::{RecordingMode, SmfPrmConfig, SmfConfigError, SmfExitConfig};
+pub use config::{
+    LsnameConfig, RecordingMode, SmfConfigError, SmfExitConfig, SmfPrmConfig, SubsysConfig,
+};
 
 // Re-export exit types.
 pub use exits::{
-    Iefu83Exit, Iefu84Exit, SmfExit, SmfExitAction, SmfExitRegistry,
+    Iefu83Exit, Iefu84Exit, Iefu85Exit, Iefu86Exit, SmfExit, SmfExitAction, SmfExitRegistry,
 };
 
 // Re-export Type 30 job accounting.

@@ -29,10 +29,20 @@ pub enum CurrencyUpdate {
 //  Currency table
 // ---------------------------------------------------------------------------
 
+/// A snapshot of all currency indicators, used for save/restore.
+#[derive(Debug, Clone)]
+struct CurrencySnapshot {
+    run_unit: Option<u64>,
+    record_type: HashMap<String, u64>,
+    set_type: HashMap<String, u64>,
+    area: HashMap<String, u64>,
+}
+
 /// Tracks all currency indicators for a run-unit.
 ///
 /// Each indicator stores the database key (dbkey) of the record that is
-/// "current" for a particular context.
+/// "current" for a particular context.  Supports save/restore via an
+/// internal stack for nested operations.
 #[derive(Debug, Clone, Default)]
 pub struct CurrencyTable {
     /// Current of run-unit.
@@ -43,6 +53,8 @@ pub struct CurrencyTable {
     set_type: HashMap<String, u64>,
     /// Current of area (area-name -> dbkey).
     area: HashMap<String, u64>,
+    /// Stack for save/restore of currency state.
+    stack: Vec<CurrencySnapshot>,
 }
 
 impl CurrencyTable {
@@ -157,12 +169,42 @@ impl CurrencyTable {
         }
     }
 
+    /// Save all currency indicators onto the internal stack.
+    pub fn save(&mut self) {
+        self.stack.push(CurrencySnapshot {
+            run_unit: self.run_unit,
+            record_type: self.record_type.clone(),
+            set_type: self.set_type.clone(),
+            area: self.area.clone(),
+        });
+    }
+
+    /// Restore currency indicators from the last save.
+    /// Returns `true` if a snapshot was restored, `false` if the stack was empty.
+    pub fn restore(&mut self) -> bool {
+        if let Some(snapshot) = self.stack.pop() {
+            self.run_unit = snapshot.run_unit;
+            self.record_type = snapshot.record_type;
+            self.set_type = snapshot.set_type;
+            self.area = snapshot.area;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Return the depth of the currency save stack.
+    pub fn stack_depth(&self) -> usize {
+        self.stack.len()
+    }
+
     /// Reset all currency indicators.
     pub fn reset(&mut self) {
         self.run_unit = None;
         self.record_type.clear();
         self.set_type.clear();
         self.area.clear();
+        self.stack.clear();
     }
 }
 

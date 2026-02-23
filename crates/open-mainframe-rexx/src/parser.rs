@@ -102,6 +102,9 @@ impl<'a> Parser<'a> {
                 "ADDRESS" => return self.parse_address(line),
                 "PROCEDURE" => return self.parse_procedure(line),
                 "NUMERIC" => return self.parse_numeric(line),
+                "INTERPRET" => return self.parse_interpret(line),
+                "UPPER" => return self.parse_upper(line),
+                "OPTIONS" => return self.parse_options(line),
                 _ => {}
             }
         }
@@ -516,6 +519,27 @@ impl<'a> Parser<'a> {
         let setting = self.expect_symbol()?; // DIGITS, FUZZ, or FORM
         let value = self.parse_expr()?;
         Ok(Clause { line, body: ClauseBody::Numeric { setting, value } })
+    }
+
+    fn parse_interpret(&mut self, line: u32) -> Result<Clause, ParseError> {
+        self.advance(); // skip INTERPRET
+        let expr = self.parse_expr()?;
+        Ok(Clause { line, body: ClauseBody::Interpret(expr) })
+    }
+
+    fn parse_upper(&mut self, line: u32) -> Result<Clause, ParseError> {
+        self.advance(); // skip UPPER
+        let mut vars = Vec::new();
+        while !self.at_clause_end() {
+            vars.push(self.expect_symbol()?);
+        }
+        Ok(Clause { line, body: ClauseBody::Upper(vars) })
+    }
+
+    fn parse_options(&mut self, line: u32) -> Result<Clause, ParseError> {
+        self.advance(); // skip OPTIONS
+        let text = self.collect_remaining_text();
+        Ok(Clause { line, body: ClauseBody::Options(text) })
     }
 
     // -----------------------------------------------------------------------

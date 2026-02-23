@@ -19,7 +19,7 @@ pub mod report;
 pub mod sort;
 pub mod sql;
 
-pub use fileio::{EzFieldDef, EzFile, EzRecord, FileProcessor};
+pub use fileio::{EditMask, EzFieldDef, EzFile, EzRecord, EzTable, FileProcessor, IndexedFileProcessor};
 pub use interpreter::{EzInterpreter, EzValue, EzVariable};
 pub use macros::{EzCopy, EzExternalCall, EzMacro};
 pub use parser::{EzParser, EzProgram, EzStatement, EzToken};

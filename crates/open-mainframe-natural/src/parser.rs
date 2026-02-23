@@ -181,6 +181,37 @@ pub enum Token {
     Catalog,
     Stow,
 
+    // Additional keywords
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Reset,
+    Stop,
+    Terminate,
+    Include,
+    MoveAll,
+    Limit,
+    Accept,
+    Reject,
+    Set,
+    Key,
+    Window,
+    Run,
+    Call,
+
+    // OO keywords
+    Class,
+    Method,
+    Property,
+    Create,
+    Object,
+    Send,
+    Interface,
+    EndClass,
+    EndMethod,
+    EndInterface,
+
     // Special
     True,
     False,
@@ -523,6 +554,32 @@ impl<'a> Lexer<'a> {
             "LOGON" => Token::Logon,
             "CATALOG" => Token::Catalog,
             "STOW" => Token::Stow,
+            "ADD" => Token::Add,
+            "SUBTRACT" => Token::Subtract,
+            "MULTIPLY" => Token::Multiply,
+            "DIVIDE" => Token::Divide,
+            "RESET" => Token::Reset,
+            "STOP" => Token::Stop,
+            "TERMINATE" => Token::Terminate,
+            "INCLUDE" => Token::Include,
+            "LIMIT" => Token::Limit,
+            "ACCEPT" => Token::Accept,
+            "REJECT" => Token::Reject,
+            "SET" => Token::Set,
+            "KEY" => Token::Key,
+            "WINDOW" => Token::Window,
+            "RUN" => Token::Run,
+            "CALL" => Token::Call,
+            "CLASS" => Token::Class,
+            "METHOD" => Token::Method,
+            "PROPERTY" => Token::Property,
+            "CREATE" => Token::Create,
+            "OBJECT" => Token::Object,
+            "SEND" => Token::Send,
+            "INTERFACE" => Token::Interface,
+            "END-CLASS" => Token::EndClass,
+            "END-METHOD" => Token::EndMethod,
+            "END-INTERFACE" => Token::EndInterface,
             "TRUE" => Token::True,
             "FALSE" => Token::False,
             "TO" => Token::To,
@@ -646,6 +703,31 @@ pub enum Statement {
     ReadWorkFile { file_num: u8, vars: Vec<String> },
     WriteWorkFile { file_num: u8, items: Vec<Expr> },
     InlineSubroutine { name: String, body: Vec<Statement> },
+    // Additional statements
+    AddStmt { target: String, expr: Expr },
+    SubtractStmt { target: String, expr: Expr },
+    MultiplyStmt { target: String, expr: Expr },
+    DivideStmt { target: String, expr: Expr, giving: Option<String> },
+    ResetStmt { vars: Vec<String> },
+    StopStmt,
+    TerminateStmt,
+    IncludeStmt { copycode: String },
+    MoveAllStmt { source: Expr, target: String },
+    LimitStmt { count: Expr },
+    AcceptStmt,
+    RejectStmt,
+    SetKeyStmt { key: String, action: Option<String> },
+    SetWindowStmt { window: Option<String> },
+    DefineWindowStmt { name: String, size: Option<(Expr, Expr)>, position: Option<(Expr, Expr)> },
+    CallExternalStmt { program: String, args: Vec<Expr> },
+    RunStmt { program: String },
+    // OO statements
+    DefineClassStmt { name: String, methods: Vec<Statement>, properties: Vec<(String, String)> },
+    CreateObjectStmt { class: String, target: String },
+    SendMethodStmt { object: String, method: String, args: Vec<Expr> },
+    DefineInterfaceStmt { name: String, methods: Vec<String> },
+    MethodStmt { name: String, body: Vec<Statement> },
+    PropertyStmt { name: String, data_type: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -902,6 +984,22 @@ impl Parser {
             Token::Insert => self.parse_insert(),
             Token::Commit => { self.advance(); Ok(Statement::CommitStmt) }
             Token::Rollback => { self.advance(); Ok(Statement::RollbackStmt) }
+            Token::Define => self.parse_define_block(),
+            Token::Add => self.parse_add(),
+            Token::Subtract => self.parse_subtract(),
+            Token::Multiply => self.parse_multiply(),
+            Token::Divide => self.parse_divide(),
+            Token::Reset => self.parse_reset(),
+            Token::Stop => { self.advance(); Ok(Statement::StopStmt) }
+            Token::Terminate => { self.advance(); Ok(Statement::TerminateStmt) }
+            Token::Include => self.parse_include(),
+            Token::Accept => { self.advance(); Ok(Statement::AcceptStmt) }
+            Token::Reject => { self.advance(); Ok(Statement::RejectStmt) }
+            Token::Set => self.parse_set(),
+            Token::Call => self.parse_call_external(),
+            Token::Run => self.parse_run(),
+            Token::Create => self.parse_create_object(),
+            Token::Send => self.parse_send_method(),
             Token::OnError => self.parse_on_error(),
             Token::Identifier(ref s) if s == "ON" => self.parse_on_error(),
             _ => {
@@ -1525,6 +1623,238 @@ impl Parser {
     }
 
     // -----------------------------------------------------------------------
+    // Additional statement parsers
+    // -----------------------------------------------------------------------
+
+    fn parse_define_block(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // DEFINE
+        if self.check(&Token::Identifier(String::new())) || matches!(self.peek(), Some(Token::Identifier(ref s)) if s == "SUBROUTINE") {
+            if matches!(self.peek(), Some(Token::Identifier(ref s)) if s == "SUBROUTINE") {
+                self.advance();
+                let name = self.expect_identifier()?;
+                let mut body = Vec::new();
+                while self.pos < self.tokens.len() && !matches!(self.peek(), Some(Token::Identifier(ref s)) if s == "END-SUBROUTINE") {
+                    body.push(self.parse_statement()?);
+                }
+                if matches!(self.peek(), Some(Token::Identifier(ref s)) if s == "END-SUBROUTINE") {
+                    self.advance();
+                }
+                return Ok(Statement::InlineSubroutine { name, body });
+            }
+        }
+        if self.check(&Token::Window) {
+            return self.parse_define_window_inner();
+        }
+        if self.check(&Token::Class) {
+            return self.parse_define_class();
+        }
+        Err(ParseError::Expected { expected: "SUBROUTINE, CLASS, or WINDOW after DEFINE".into(), found: self.peek().unwrap_or(Token::Eof) })
+    }
+
+    fn parse_define_class(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // CLASS
+        let name = self.expect_identifier()?;
+        let mut methods = Vec::new();
+        let mut properties = Vec::new();
+        while self.pos < self.tokens.len() && !self.check(&Token::EndClass) {
+            if self.check(&Token::Method) {
+                self.advance();
+                let method_name = self.expect_identifier()?;
+                let mut body = Vec::new();
+                while self.pos < self.tokens.len() && !self.check(&Token::EndMethod) {
+                    body.push(self.parse_statement()?);
+                }
+                if self.check(&Token::EndMethod) { self.advance(); }
+                methods.push(Statement::MethodStmt { name: method_name, body });
+            } else if self.check(&Token::Property) {
+                self.advance();
+                let prop_name = self.expect_identifier()?;
+                let dtype = if self.check(&Token::LeftParen) {
+                    self.advance();
+                    let t = self.parse_type_spec()?;
+                    self.expect_token(&Token::RightParen)?;
+                    t
+                } else {
+                    String::new()
+                };
+                properties.push((prop_name, dtype));
+            } else {
+                self.advance(); // skip unrecognized tokens in class body
+            }
+        }
+        if self.check(&Token::EndClass) { self.advance(); }
+        Ok(Statement::DefineClassStmt { name, methods, properties })
+    }
+
+    fn parse_define_window_inner(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // WINDOW
+        let name = self.expect_identifier()?;
+        let mut size = None;
+        let mut position = None;
+        if matches!(self.peek(), Some(Token::Identifier(ref s)) if s == "SIZE") {
+            self.advance();
+            let rows = self.parse_expression()?;
+            if self.check(&Token::Star) { self.advance(); }
+            let cols = self.parse_expression()?;
+            size = Some((rows, cols));
+        }
+        if matches!(self.peek(), Some(Token::Identifier(ref s)) if s == "POSITION") {
+            self.advance();
+            let row = self.parse_expression()?;
+            if self.check(&Token::Slash) { self.advance(); }
+            let col = self.parse_expression()?;
+            position = Some((row, col));
+        }
+        Ok(Statement::DefineWindowStmt { name, size, position })
+    }
+
+    fn parse_add(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // ADD
+        let expr = self.parse_expression()?;
+        self.expect(&Token::To)?;
+        let target = self.expect_identifier()?;
+        Ok(Statement::AddStmt { target, expr })
+    }
+
+    fn parse_subtract(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // SUBTRACT
+        let expr = self.parse_expression()?;
+        self.expect(&Token::From)?;
+        let target = self.expect_identifier()?;
+        Ok(Statement::SubtractStmt { target, expr })
+    }
+
+    fn parse_multiply(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // MULTIPLY
+        let expr = self.parse_expression()?;
+        if self.check(&Token::By) { self.advance(); }
+        let target = self.expect_identifier()?;
+        Ok(Statement::MultiplyStmt { target, expr })
+    }
+
+    fn parse_divide(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // DIVIDE
+        let expr = self.parse_expression()?;
+        self.expect(&Token::Into)?;
+        let target = self.expect_identifier()?;
+        let giving = if self.check(&Token::Giving) {
+            self.advance();
+            Some(self.expect_identifier()?)
+        } else {
+            None
+        };
+        Ok(Statement::DivideStmt { target, expr, giving })
+    }
+
+    fn parse_reset(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // RESET
+        let mut vars = Vec::new();
+        while self.pos < self.tokens.len() {
+            match self.peek() {
+                Some(Token::HashVariable(v)) => { vars.push(format!("#{v}")); self.advance(); }
+                Some(Token::Identifier(_)) => { vars.push(self.expect_identifier()?); }
+                _ => break,
+            }
+        }
+        Ok(Statement::ResetStmt { vars })
+    }
+
+    fn parse_include(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // INCLUDE
+        let copycode = match self.peek() {
+            Some(Token::StringLiteral(s)) => { let n = s; self.advance(); n }
+            _ => self.expect_identifier()?,
+        };
+        Ok(Statement::IncludeStmt { copycode })
+    }
+
+    fn parse_set(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // SET
+        if self.check(&Token::Key) {
+            self.advance();
+            let key = self.expect_identifier()?;
+            let action = if self.check(&Token::Equals) {
+                self.advance();
+                match self.peek() {
+                    Some(Token::StringLiteral(s)) => { let a = s; self.advance(); Some(a) }
+                    _ => Some(self.expect_identifier()?),
+                }
+            } else {
+                None
+            };
+            Ok(Statement::SetKeyStmt { key, action })
+        } else if self.check(&Token::Window) {
+            self.advance();
+            let window = if matches!(self.peek(), Some(Token::Identifier(_))) || matches!(self.peek(), Some(Token::StringLiteral(_))) {
+                match self.peek() {
+                    Some(Token::StringLiteral(s)) => { let n = s; self.advance(); Some(n) }
+                    _ => Some(self.expect_identifier()?),
+                }
+            } else {
+                None
+            };
+            Ok(Statement::SetWindowStmt { window })
+        } else {
+            // SET GLOBALS or SET CONTROL or SET TIME — skip the rest
+            while self.pos < self.tokens.len() {
+                match self.peek() {
+                    Some(Token::If | Token::For | Token::Repeat | Token::Read | Token::Find
+                        | Token::Display | Token::Write | Token::Compute | Token::Move
+                        | Token::EndIf | Token::EndFor | Token::EndRepeat) => break,
+                    None => break,
+                    _ => { self.advance(); }
+                }
+            }
+            Ok(Statement::SetKeyStmt { key: "GLOBALS".into(), action: None })
+        }
+    }
+
+    fn parse_call_external(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // CALL
+        let program = match self.peek() {
+            Some(Token::StringLiteral(s)) => { let n = s; self.advance(); n }
+            _ => self.expect_identifier()?,
+        };
+        let args = self.parse_expr_list()?;
+        Ok(Statement::CallExternalStmt { program, args })
+    }
+
+    fn parse_run(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // RUN
+        let program = match self.peek() {
+            Some(Token::StringLiteral(s)) => { let n = s; self.advance(); n }
+            _ => self.expect_identifier()?,
+        };
+        Ok(Statement::RunStmt { program })
+    }
+
+    fn parse_create_object(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // CREATE
+        if self.check(&Token::Object) { self.advance(); }
+        let target = self.expect_identifier()?;
+        if self.check(&Token::Of) { self.advance(); }
+        if matches!(self.peek(), Some(Token::Identifier(ref s)) if s == "CLASS") { self.advance(); }
+        let class = match self.peek() {
+            Some(Token::StringLiteral(s)) => { let n = s; self.advance(); n }
+            _ => self.expect_identifier()?,
+        };
+        Ok(Statement::CreateObjectStmt { class, target })
+    }
+
+    fn parse_send_method(&mut self) -> Result<Statement, ParseError> {
+        self.advance(); // SEND
+        if self.check(&Token::Method) { self.advance(); }
+        let method = match self.peek() {
+            Some(Token::StringLiteral(s)) => { let n = s; self.advance(); n }
+            _ => self.expect_identifier()?,
+        };
+        self.expect(&Token::To)?;
+        let object = self.expect_identifier()?;
+        let args = self.parse_expr_list()?;
+        Ok(Statement::SendMethodStmt { object, method, args })
+    }
+
+    // -----------------------------------------------------------------------
     // Expression parser with precedence climbing
     // -----------------------------------------------------------------------
 
@@ -1657,7 +1987,9 @@ impl Parser {
             match self.peek() {
                 Some(Token::EndIf | Token::EndFor | Token::EndRepeat | Token::EndDecide
                     | Token::EndRead | Token::EndFind | Token::EndHistogram
-                    | Token::EndPerform | Token::EndDefine | Token::EndError | Token::Eof) => break,
+                    | Token::EndPerform | Token::EndDefine | Token::EndError
+                    | Token::EndClass | Token::EndMethod | Token::EndInterface
+                    | Token::Eof) => break,
                 // Block-boundary keywords
                 Some(Token::Else | Token::When | Token::Until | Token::None) => break,
                 // Also stop at next statement keywords
@@ -1669,7 +2001,11 @@ impl Parser {
                     | Token::Examine | Token::Sort | Token::Callnat | Token::Fetch
                     | Token::Return | Token::Stack | Token::At | Token::Newpage
                     | Token::Select | Token::Insert | Token::Commit | Token::Rollback
-                    | Token::Escape | Token::Perform | Token::Backout | Token::Reinput) => break,
+                    | Token::Escape | Token::Perform | Token::Backout | Token::Reinput
+                    | Token::Add | Token::Subtract | Token::Multiply | Token::Divide
+                    | Token::Reset | Token::Stop | Token::Terminate | Token::Include
+                    | Token::Accept | Token::Reject | Token::Set | Token::Call
+                    | Token::Run | Token::Create | Token::Send | Token::Define) => break,
                 None => break,
                 _ => {}
             }
@@ -2028,6 +2364,70 @@ mod tests {
             assert!(matches!(then_body[0], Statement::IfStmt { .. }));
         } else {
             panic!("Expected nested IfStmt");
+        }
+    }
+
+    #[test]
+    fn test_parse_add() {
+        let src = "ADD 5 TO #TOTAL";
+        let prog = parse_natural(src, "TEST").unwrap();
+        assert!(matches!(prog.statements[0], Statement::AddStmt { .. }));
+    }
+
+    #[test]
+    fn test_parse_subtract() {
+        let src = "SUBTRACT 3 FROM #TOTAL";
+        let prog = parse_natural(src, "TEST").unwrap();
+        assert!(matches!(prog.statements[0], Statement::SubtractStmt { .. }));
+    }
+
+    #[test]
+    fn test_parse_multiply() {
+        let src = "MULTIPLY 10 BY #A";
+        let prog = parse_natural(src, "TEST").unwrap();
+        assert!(matches!(prog.statements[0], Statement::MultiplyStmt { .. }));
+    }
+
+    #[test]
+    fn test_parse_divide() {
+        let src = "DIVIDE 100 INTO #RESULT";
+        let prog = parse_natural(src, "TEST").unwrap();
+        assert!(matches!(prog.statements[0], Statement::DivideStmt { .. }));
+    }
+
+    #[test]
+    fn test_parse_reset() {
+        let src = "RESET #A #B #C";
+        let prog = parse_natural(src, "TEST").unwrap();
+        if let Statement::ResetStmt { vars } = &prog.statements[0] {
+            assert_eq!(vars.len(), 3);
+        } else {
+            panic!("Expected ResetStmt");
+        }
+    }
+
+    #[test]
+    fn test_parse_stop() {
+        let src = "STOP";
+        let prog = parse_natural(src, "TEST").unwrap();
+        assert!(matches!(prog.statements[0], Statement::StopStmt));
+    }
+
+    #[test]
+    fn test_parse_terminate() {
+        let src = "TERMINATE";
+        let prog = parse_natural(src, "TEST").unwrap();
+        assert!(matches!(prog.statements[0], Statement::TerminateStmt { .. }));
+    }
+
+    #[test]
+    fn test_parse_include() {
+        let src = "INCLUDE COPYCODE1";
+        let prog = parse_natural(src, "TEST").unwrap();
+        if let Statement::IncludeStmt { copycode } = &prog.statements[0] {
+            assert_eq!(copycode, "COPYCODE1");
+        } else {
+            panic!("Expected IncludeStmt");
         }
     }
 }

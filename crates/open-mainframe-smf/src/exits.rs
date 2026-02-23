@@ -108,6 +108,88 @@ impl SmfExit for Iefu84Exit {
 }
 
 // ---------------------------------------------------------------------------
+//  IEFU85 — Cross-Memory Exit
+// ---------------------------------------------------------------------------
+
+/// IEFU85 exit — cross-memory record filter.
+///
+/// On real z/OS this exit is invoked for SMFEWTM(BRANCH=YES, MODE=XMEM) writes.
+/// In emulation it applies a user-defined predicate to filter records in a
+/// cross-memory-equivalent path.
+pub struct Iefu85Exit {
+    /// Predicate: returns true to suppress the record.
+    suppress_fn: Box<dyn Fn(&SmfRecord) -> bool + Send + Sync>,
+}
+
+impl Iefu85Exit {
+    /// Create a new IEFU85 exit with a suppression predicate.
+    pub fn new(suppress_fn: Box<dyn Fn(&SmfRecord) -> bool + Send + Sync>) -> Self {
+        Self { suppress_fn }
+    }
+}
+
+impl SmfExit for Iefu85Exit {
+    fn process(&self, record: &mut SmfRecord) -> SmfExitAction {
+        if (self.suppress_fn)(record) {
+            SmfExitAction::Suppress
+        } else {
+            SmfExitAction::Pass
+        }
+    }
+
+    fn name(&self) -> &str {
+        "IEFU85"
+    }
+}
+
+impl std::fmt::Debug for Iefu85Exit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Iefu85Exit").finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  IEFU86 — Extended Header Records Exit
+// ---------------------------------------------------------------------------
+
+/// IEFU86 exit — filter/modify records that carry an extended header.
+///
+/// On z/OS, IEFU86 is a unified exit for extended SMF records.  This emulation
+/// allows a callback that can inspect and optionally modify extended-header
+/// records (those with a non-empty subsystem ID or non-zero subtype).
+pub struct Iefu86Exit {
+    /// Callback: receives a mutable record reference and returns an action.
+    handler: Box<dyn Fn(&mut SmfRecord) -> SmfExitAction + Send + Sync>,
+}
+
+impl Iefu86Exit {
+    /// Create a new IEFU86 exit with a handler callback.
+    pub fn new(handler: Box<dyn Fn(&mut SmfRecord) -> SmfExitAction + Send + Sync>) -> Self {
+        Self { handler }
+    }
+}
+
+impl SmfExit for Iefu86Exit {
+    fn process(&self, record: &mut SmfRecord) -> SmfExitAction {
+        // IEFU86 only applies to records with extended headers.
+        if record.header.subsystem_id.is_empty() && record.header.subtype == 0 {
+            return SmfExitAction::Pass;
+        }
+        (self.handler)(record)
+    }
+
+    fn name(&self) -> &str {
+        "IEFU86"
+    }
+}
+
+impl std::fmt::Debug for Iefu86Exit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Iefu86Exit").finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
 //  Dynamic exit registration (IFASMFEX)
 // ---------------------------------------------------------------------------
 
@@ -334,5 +416,98 @@ mod tests {
         assert_eq!(action, SmfExitAction::Suppress);
         // Subsystem was not set because suppress short-circuited.
         assert_eq!(rec.header.subsystem_id, "");
+    }
+
+    // --- IEFU85 tests ---
+
+    #[test]
+    fn test_iefu85_pass() {
+        let exit = Iefu85Exit::new(Box::new(|_| false));
+        let mut rec = SmfRecord::new(30, vec![0; 10]);
+        assert_eq!(exit.process(&mut rec), SmfExitAction::Pass);
+    }
+
+    #[test]
+    fn test_iefu85_suppress() {
+        let exit = Iefu85Exit::new(Box::new(|r| r.header.record_type == 80));
+        let mut rec80 = SmfRecord::new(80, vec![0; 10]);
+        assert_eq!(exit.process(&mut rec80), SmfExitAction::Suppress);
+
+        let mut rec30 = SmfRecord::new(30, vec![0; 10]);
+        assert_eq!(exit.process(&mut rec30), SmfExitAction::Pass);
+    }
+
+    #[test]
+    fn test_iefu85_name() {
+        let exit = Iefu85Exit::new(Box::new(|_| false));
+        assert_eq!(exit.name(), "IEFU85");
+    }
+
+    // --- IEFU86 tests ---
+
+    #[test]
+    fn test_iefu86_skips_non_extended() {
+        let exit = Iefu86Exit::new(Box::new(|_| SmfExitAction::Suppress));
+        // Record with no subsystem_id and subtype=0 should be passed through.
+        let mut rec = SmfRecord::new(30, vec![0; 10]);
+        assert_eq!(exit.process(&mut rec), SmfExitAction::Pass);
+    }
+
+    #[test]
+    fn test_iefu86_processes_extended() {
+        let exit = Iefu86Exit::new(Box::new(|rec| {
+            rec.header.subsystem_id = "MOD1".to_string();
+            SmfExitAction::Modify
+        }));
+        let mut rec = SmfRecord::new(30, vec![0; 10]);
+        rec.header.subsystem_id = "ORIG".to_string();
+        let action = exit.process(&mut rec);
+        assert_eq!(action, SmfExitAction::Modify);
+        assert_eq!(rec.header.subsystem_id, "MOD1");
+    }
+
+    #[test]
+    fn test_iefu86_processes_subtype() {
+        let exit = Iefu86Exit::new(Box::new(|_| SmfExitAction::Suppress));
+        let mut rec = SmfRecord::new(30, vec![0; 10]);
+        rec.header.subtype = 1;
+        assert_eq!(exit.process(&mut rec), SmfExitAction::Suppress);
+    }
+
+    #[test]
+    fn test_iefu86_name() {
+        let exit = Iefu86Exit::new(Box::new(|_| SmfExitAction::Pass));
+        assert_eq!(exit.name(), "IEFU86");
+    }
+
+    #[test]
+    fn test_iefu85_in_registry() {
+        let mut registry = SmfExitRegistry::new();
+        registry.register(
+            Box::new(Iefu85Exit::new(Box::new(|r| r.header.record_type == 14))),
+            vec![],
+        );
+        let mut rec14 = SmfRecord::new(14, vec![0; 5]);
+        assert_eq!(registry.process(&mut rec14), SmfExitAction::Suppress);
+
+        let mut rec30 = SmfRecord::new(30, vec![0; 5]);
+        assert_eq!(registry.process(&mut rec30), SmfExitAction::Pass);
+    }
+
+    #[test]
+    fn test_iefu86_in_registry() {
+        let mut registry = SmfExitRegistry::new();
+        registry.register(
+            Box::new(Iefu86Exit::new(Box::new(|rec| {
+                rec.header.subsystem_id = "TAGGED".to_string();
+                SmfExitAction::Modify
+            }))),
+            vec![30],
+        );
+        let mut rec = SmfRecord::new(30, vec![0; 5]);
+        rec.header.subtype = 1; // extended header
+        let action = registry.process(&mut rec);
+        assert_eq!(action, SmfExitAction::Modify);
+        assert_eq!(rec.header.subsystem_id, "TAGGED");
     }
 }

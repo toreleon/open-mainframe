@@ -24,6 +24,10 @@ pub enum ReadCommand {
     ReadPhysicalSequentialAlt,
     /// L6 — Read records sorted by a descriptor.
     ReadSorted,
+    /// L9 — Read histogram (descriptor value distribution).
+    ReadHistogram,
+    /// LF — Read Field Definition Table.
+    ReadFdt,
 }
 
 impl ReadCommand {
@@ -36,6 +40,8 @@ impl ReadCommand {
             Self::ReadByIsnList => "L4",
             Self::ReadPhysicalSequentialAlt => "L5",
             Self::ReadSorted => "L6",
+            Self::ReadHistogram => "L9",
+            Self::ReadFdt => "LF",
         }
     }
 
@@ -48,6 +54,8 @@ impl ReadCommand {
             "L4" => Some(Self::ReadByIsnList),
             "L5" => Some(Self::ReadPhysicalSequentialAlt),
             "L6" => Some(Self::ReadSorted),
+            "L9" => Some(Self::ReadHistogram),
+            "LF" => Some(Self::ReadFdt),
             _ => None,
         }
     }

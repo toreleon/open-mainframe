@@ -1,7 +1,7 @@
 //! JES2 job queue with priority-based scheduling and class selection.
 
 use crate::error::Jes2Error;
-use crate::job::{Job, JobClass, JobClassDef, JobId, JobState};
+use crate::job::{Job, JobClass, JobClassDef, JobId, JobState, TypeRun};
 use crate::spool::SpoolManager;
 use std::collections::HashMap;
 
@@ -75,6 +75,31 @@ impl Jes2 {
     /// Submit a time-sharing user session (TSU).
     pub fn submit_tsu(&mut self, name: &str, priority: u8) -> JobId {
         self.submit_with_class(name, JobClass::Tsu, priority, false)
+    }
+
+    /// Submit a TYPRUN=SCAN job — syntax check only; skips execution.
+    ///
+    /// The job transitions through Input -> Conversion and then directly
+    /// to Purge (no Ready/Running/Output phases).
+    pub fn submit_scan(&mut self, name: &str, class: char, priority: u8) -> JobId {
+        let cls = JobClass::standard(class).unwrap_or(JobClass::Standard('A'));
+        let id = JobId(self.next_job_num);
+        self.next_job_num += 1;
+        let job = Job::new_with_typrun(id, name.to_string(), cls, priority, TypeRun::Scan);
+        self.jobs.insert(id.0, job);
+        id
+    }
+
+    /// Submit a TYPRUN=COPY job — copies JCL to the internal reader without execution.
+    ///
+    /// The job transitions through Input and then directly to Purge.
+    pub fn submit_copy(&mut self, name: &str, class: char, priority: u8) -> JobId {
+        let cls = JobClass::standard(class).unwrap_or(JobClass::Standard('A'));
+        let id = JobId(self.next_job_num);
+        self.next_job_num += 1;
+        let job = Job::new_with_typrun(id, name.to_string(), cls, priority, TypeRun::Copy);
+        self.jobs.insert(id.0, job);
+        id
     }
 
     fn submit_with_class(
@@ -481,5 +506,36 @@ mod tests {
 
         // Spool dataset should be gone
         assert!(jes.spool.get(key).is_none());
+    }
+
+    #[test]
+    fn submit_scan_job() {
+        let mut jes = Jes2::new();
+        let id = jes.submit_scan("SCANTEST", 'A', 5);
+
+        {
+            let job = jes.get_job(id).unwrap();
+            assert!(job.is_scan_only());
+            assert_eq!(job.state, JobState::Input);
+            assert_eq!(job.typrun, TypeRun::Scan);
+        }
+
+        // SCAN job progresses through Input -> Conversion
+        jes.advance(id).unwrap(); // -> Conversion
+        jes.advance(id).unwrap(); // -> Ready
+
+        // The typrun flag persists on the job
+        let job = jes.get_job(id).unwrap();
+        assert!(job.is_scan_only());
+    }
+
+    #[test]
+    fn submit_copy_job() {
+        let mut jes = Jes2::new();
+        let id = jes.submit_copy("COPYTEST", 'B', 3);
+        let job = jes.get_job(id).unwrap();
+        assert!(job.is_copy_only());
+        assert_eq!(job.state, JobState::Input);
+        assert_eq!(job.typrun, TypeRun::Copy);
     }
 }

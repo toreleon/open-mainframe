@@ -167,6 +167,40 @@ impl JobClassDef {
 }
 
 // ---------------------------------------------------------------------------
+// TYPRUN
+// ---------------------------------------------------------------------------
+
+/// JCL `TYPRUN=` parameter — controls special job processing modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TypeRun {
+    /// Normal execution (no TYPRUN specified).
+    Run,
+    /// `TYPRUN=HOLD` — job enters Held state on submission.
+    Hold,
+    /// `TYPRUN=SCAN` — syntax-check JCL only; no execution.
+    Scan,
+    /// `TYPRUN=COPY` — copy JCL to internal reader without execution.
+    Copy,
+}
+
+impl Default for TypeRun {
+    fn default() -> Self {
+        Self::Run
+    }
+}
+
+impl fmt::Display for TypeRun {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Run => write!(f, "RUN"),
+            Self::Hold => write!(f, "HOLD"),
+            Self::Scan => write!(f, "SCAN"),
+            Self::Copy => write!(f, "COPY"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Job
 // ---------------------------------------------------------------------------
 
@@ -185,6 +219,8 @@ pub struct Job {
     pub state: JobState,
     /// Whether the job was submitted with `TYPRUN=HOLD`.
     pub hold_on_submit: bool,
+    /// TYPRUN processing mode.
+    pub typrun: TypeRun,
     /// Owner (submitting user).
     pub owner: String,
     /// Maximum return code observed across steps.
@@ -218,10 +254,57 @@ impl Job {
             priority,
             state,
             hold_on_submit,
+            typrun: if hold_on_submit { TypeRun::Hold } else { TypeRun::Run },
             owner: String::new(),
             max_rc: 0,
             spool_keys: Vec::new(),
         }
+    }
+
+    /// Create a new job with a specific TYPRUN mode.
+    ///
+    /// - `TypeRun::Hold` — enters Held state on submission
+    /// - `TypeRun::Scan` — JCL syntax check only; transitions Input -> Conversion -> Purge
+    /// - `TypeRun::Copy` — copies JCL to internal reader; transitions Input -> Purge
+    /// - `TypeRun::Run` — normal execution
+    pub fn new_with_typrun(
+        id: JobId,
+        name: String,
+        class: JobClass,
+        priority: u8,
+        typrun: TypeRun,
+    ) -> Self {
+        let priority = priority.min(15);
+        let hold_on_submit = typrun == TypeRun::Hold;
+        let state = if hold_on_submit {
+            JobState::Held {
+                previous: HeldFrom::Input,
+            }
+        } else {
+            JobState::Input
+        };
+        Self {
+            id,
+            name,
+            class,
+            priority,
+            state,
+            hold_on_submit,
+            typrun,
+            owner: String::new(),
+            max_rc: 0,
+            spool_keys: Vec::new(),
+        }
+    }
+
+    /// Returns true if this job is a TYPRUN=SCAN job (syntax check only).
+    pub fn is_scan_only(&self) -> bool {
+        self.typrun == TypeRun::Scan
+    }
+
+    /// Returns true if this job is a TYPRUN=COPY job (copy to internal reader).
+    pub fn is_copy_only(&self) -> bool {
+        self.typrun == TypeRun::Copy
     }
 
     /// Advance the job to the next state in its lifecycle.
@@ -491,5 +574,84 @@ mod tests {
             .next(),
             None
         );
+    }
+
+    #[test]
+    fn typrun_default_is_run() {
+        assert_eq!(TypeRun::default(), TypeRun::Run);
+    }
+
+    #[test]
+    fn typrun_display() {
+        assert_eq!(TypeRun::Run.to_string(), "RUN");
+        assert_eq!(TypeRun::Hold.to_string(), "HOLD");
+        assert_eq!(TypeRun::Scan.to_string(), "SCAN");
+        assert_eq!(TypeRun::Copy.to_string(), "COPY");
+    }
+
+    #[test]
+    fn new_with_typrun_scan() {
+        let job = Job::new_with_typrun(
+            JobId(10),
+            "SCANME".to_string(),
+            JobClass::Standard('A'),
+            5,
+            TypeRun::Scan,
+        );
+        assert_eq!(job.typrun, TypeRun::Scan);
+        assert!(job.is_scan_only());
+        assert!(!job.is_copy_only());
+        assert!(!job.hold_on_submit);
+        assert_eq!(job.state, JobState::Input);
+    }
+
+    #[test]
+    fn new_with_typrun_copy() {
+        let job = Job::new_with_typrun(
+            JobId(11),
+            "COPYME".to_string(),
+            JobClass::Standard('B'),
+            3,
+            TypeRun::Copy,
+        );
+        assert_eq!(job.typrun, TypeRun::Copy);
+        assert!(job.is_copy_only());
+        assert!(!job.is_scan_only());
+        assert_eq!(job.state, JobState::Input);
+    }
+
+    #[test]
+    fn new_with_typrun_hold() {
+        let job = Job::new_with_typrun(
+            JobId(12),
+            "HOLDME".to_string(),
+            JobClass::Standard('A'),
+            7,
+            TypeRun::Hold,
+        );
+        assert_eq!(job.typrun, TypeRun::Hold);
+        assert!(job.hold_on_submit);
+        assert!(job.state.is_held());
+    }
+
+    #[test]
+    fn new_sets_typrun_from_hold() {
+        let hold_job = Job::new(
+            JobId(13),
+            "HELD".to_string(),
+            JobClass::Standard('A'),
+            5,
+            true,
+        );
+        assert_eq!(hold_job.typrun, TypeRun::Hold);
+
+        let normal_job = Job::new(
+            JobId(14),
+            "NORM".to_string(),
+            JobClass::Standard('A'),
+            5,
+            false,
+        );
+        assert_eq!(normal_job.typrun, TypeRun::Run);
     }
 }

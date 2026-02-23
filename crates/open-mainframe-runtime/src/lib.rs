@@ -20,6 +20,7 @@
 //! ```
 
 pub mod abend;
+pub mod bits;
 pub mod condition;
 pub mod date_time;
 pub mod decimal;
@@ -30,6 +31,7 @@ pub mod file_io;
 pub mod ilc;
 pub mod interpreter;
 pub mod io;
+pub mod locale;
 pub mod math;
 pub mod message;
 pub mod numeric_editing;
@@ -76,4 +78,6 @@ pub use ilc::{
     DataDescriptor, IlcCallFrame, IlcCondition, IlcManager, Language, ParameterDescriptor,
     PassingConvention,
 };
+pub use bits::{ceesiclr, ceesiset, ceesishf, ceesitst};
+pub use locale::{LocaleConventions, LocaleDefinition, LocaleManager};
 pub use value::{CobolValue, NumericValue};

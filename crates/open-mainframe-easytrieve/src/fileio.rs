@@ -347,6 +347,357 @@ impl FileProcessor {
 }
 
 // ---------------------------------------------------------------------------
+// Indexed file processor
+// ---------------------------------------------------------------------------
+
+/// Indexed file processor for keyed READ/WRITE/POINT operations.
+///
+/// Supports VSAM KSDS-style random access by a key field.
+#[derive(Debug)]
+pub struct IndexedFileProcessor {
+    /// File definition.
+    pub file: EzFile,
+    /// Records stored by key value.
+    records: HashMap<String, EzRecord>,
+    /// Key field name used for indexing.
+    pub key_field: String,
+    /// Current positioned key (from POINT).
+    current_key: Option<String>,
+    /// Sorted key list for sequential access after POINT.
+    sorted_keys: Vec<String>,
+    /// Current position in sorted_keys for sequential reads.
+    seq_pos: usize,
+}
+
+impl IndexedFileProcessor {
+    /// Create a new indexed file processor.
+    pub fn new(file: EzFile, key_field: &str) -> Self {
+        Self {
+            file,
+            records: HashMap::new(),
+            key_field: key_field.to_string(),
+            current_key: None,
+            sorted_keys: Vec::new(),
+            seq_pos: 0,
+        }
+    }
+
+    /// Load records, extracting the key from each record.
+    pub fn load_records(&mut self, records: Vec<EzRecord>) {
+        for rec in records {
+            if let Some(field_def) = self.file.get_field(&self.key_field) {
+                if let Ok(key) = rec.get_field(field_def) {
+                    self.records.insert(key, rec);
+                }
+            }
+        }
+        self.rebuild_key_index();
+    }
+
+    /// Rebuild the sorted key index.
+    fn rebuild_key_index(&mut self) {
+        self.sorted_keys = self.records.keys().cloned().collect();
+        self.sorted_keys.sort();
+    }
+
+    /// READ: Random access by key.
+    pub fn read(&self, key: &str) -> Result<&EzRecord, FileError> {
+        self.records.get(key).ok_or_else(|| FileError::EndOfFile {
+            name: self.file.name.clone(),
+        })
+    }
+
+    /// WRITE (ADD): Insert a new record.
+    pub fn write_add(&mut self, key: String, record: EzRecord) {
+        self.records.insert(key, record);
+        self.rebuild_key_index();
+    }
+
+    /// WRITE (UPDATE): Update an existing record.
+    pub fn write_update(&mut self, key: &str, record: EzRecord) -> Result<(), FileError> {
+        if self.records.contains_key(key) {
+            self.records.insert(key.to_string(), record);
+            Ok(())
+        } else {
+            Err(FileError::EndOfFile {
+                name: self.file.name.clone(),
+            })
+        }
+    }
+
+    /// WRITE (DELETE): Delete a record by key.
+    pub fn write_delete(&mut self, key: &str) -> Result<(), FileError> {
+        if self.records.remove(key).is_some() {
+            self.rebuild_key_index();
+            Ok(())
+        } else {
+            Err(FileError::EndOfFile {
+                name: self.file.name.clone(),
+            })
+        }
+    }
+
+    /// POINT: Position to a key for subsequent sequential reads.
+    pub fn point(&mut self, key: &str) {
+        self.current_key = Some(key.to_string());
+        // Find position in sorted keys
+        self.seq_pos = self
+            .sorted_keys
+            .iter()
+            .position(|k| k.as_str() >= key)
+            .unwrap_or(self.sorted_keys.len());
+    }
+
+    /// Sequential GET after POINT (reads next record in key order).
+    pub fn get_next(&mut self) -> Result<&EzRecord, FileError> {
+        if self.seq_pos >= self.sorted_keys.len() {
+            return Err(FileError::EndOfFile {
+                name: self.file.name.clone(),
+            });
+        }
+        let key = &self.sorted_keys[self.seq_pos];
+        self.seq_pos += 1;
+        self.records.get(key).ok_or_else(|| FileError::EndOfFile {
+            name: self.file.name.clone(),
+        })
+    }
+
+    /// Get the number of records.
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Edit mask
+// ---------------------------------------------------------------------------
+
+/// Edit mask for numeric formatting (MASK statement).
+///
+/// Defines a pattern for displaying numeric values with commas,
+/// decimal points, currency symbols, etc.
+#[derive(Debug, Clone)]
+pub struct EditMask {
+    /// Mask name.
+    pub name: String,
+    /// Pattern string (e.g., "ZZZ,ZZ9.99" or "$$$,$$9.99CR").
+    pub pattern: String,
+}
+
+impl EditMask {
+    /// Create a new edit mask.
+    pub fn new(name: &str, pattern: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            pattern: pattern.to_string(),
+        }
+    }
+
+    /// Apply the edit mask to a numeric value.
+    ///
+    /// Supports basic patterns:
+    /// - `9` = digit (always shown)
+    /// - `Z` = digit (suppress leading zeros with space)
+    /// - `.` = decimal point
+    /// - `,` = thousands separator (suppressed if in leading zeros)
+    /// - `$` = currency symbol (floats to first significant digit)
+    /// - `CR` = credit suffix (shown if negative)
+    /// - `-` = minus sign (shown if negative)
+    pub fn format(&self, value: f64) -> String {
+        let is_negative = value < 0.0;
+        let abs_value = value.abs();
+
+        // Split pattern at decimal point
+        let (int_pat, dec_pat) = if let Some(dot_pos) = self.pattern.find('.') {
+            (&self.pattern[..dot_pos], Some(&self.pattern[dot_pos + 1..]))
+        } else {
+            (self.pattern.as_str(), None)
+        };
+
+        // Determine decimal places from pattern
+        let dec_places = dec_pat.map(|p| {
+            p.chars()
+                .filter(|c| *c == '9' || *c == 'Z')
+                .count()
+        }).unwrap_or(0);
+
+        // Format the number
+        let formatted_num = if dec_places > 0 {
+            format!("{:.prec$}", abs_value, prec = dec_places)
+        } else {
+            format!("{}", abs_value as i64)
+        };
+
+        // Split formatted number
+        let (int_str, dec_str) = if let Some(dot_pos) = formatted_num.find('.') {
+            (&formatted_num[..dot_pos], Some(&formatted_num[dot_pos + 1..]))
+        } else {
+            (formatted_num.as_str(), None)
+        };
+
+        // Build integer part according to pattern
+        let digit_positions: Vec<usize> = int_pat
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| *c == '9' || *c == 'Z' || *c == '$')
+            .map(|(i, _)| i)
+            .collect();
+
+        let int_digits: Vec<u8> = int_str.bytes().collect();
+        let mut result_chars: Vec<char> = int_pat.chars().collect();
+
+        // Fill digits from right to left
+        let mut digit_idx = int_digits.len() as isize - 1;
+        let mut first_significant = false;
+        for &pos in digit_positions.iter().rev() {
+            if digit_idx >= 0 {
+                let d = int_digits[digit_idx as usize] as char;
+                if d != '0' {
+                    first_significant = true;
+                }
+                if first_significant || result_chars[pos] == '9' {
+                    result_chars[pos] = d;
+                } else {
+                    result_chars[pos] = ' ';
+                }
+                digit_idx -= 1;
+            } else {
+                if result_chars[pos] == '9' {
+                    result_chars[pos] = '0';
+                } else {
+                    result_chars[pos] = ' ';
+                }
+            }
+        }
+
+        // Suppress commas in leading zero area
+        let mut in_leading = true;
+        for ch in result_chars.iter_mut() {
+            if *ch == ' ' || *ch == '$' {
+                continue;
+            }
+            if *ch == ',' && in_leading {
+                *ch = ' ';
+                continue;
+            }
+            if ch.is_ascii_digit() && *ch != '0' {
+                in_leading = false;
+            }
+        }
+
+        let mut result: String = result_chars.into_iter().collect();
+
+        // Append decimal part
+        if let Some(dp) = dec_pat {
+            result.push('.');
+            let dec = dec_str.unwrap_or("0");
+            let padded: String = format!("{:0<width$}", dec, width = dp.len());
+            result.push_str(&padded[..dp.len()]);
+        }
+
+        // Handle CR/minus suffix
+        let has_cr = self.pattern.ends_with("CR");
+        let has_minus = self.pattern.ends_with('-');
+        if has_cr {
+            if is_negative {
+                result.push_str("CR");
+            } else {
+                result.push_str("  ");
+            }
+        } else if has_minus {
+            if is_negative {
+                result.push('-');
+            } else {
+                result.push(' ');
+            }
+        }
+
+        result
+    }
+}
+
+/// Table definition for SEARCH operations.
+///
+/// Represents an in-memory lookup table loaded from instream data
+/// or a file, searchable by key.
+#[derive(Debug, Clone)]
+pub struct EzTable {
+    /// Table name.
+    pub name: String,
+    /// Key field name.
+    pub key_field: String,
+    /// Key length.
+    pub key_length: usize,
+    /// Data entries keyed by lookup key.
+    pub entries: Vec<(String, HashMap<String, String>)>,
+    /// Whether the table is sorted (for binary search).
+    pub sorted: bool,
+}
+
+impl EzTable {
+    /// Create a new table.
+    pub fn new(name: &str, key_field: &str, key_length: usize) -> Self {
+        Self {
+            name: name.to_string(),
+            key_field: key_field.to_string(),
+            key_length,
+            entries: Vec::new(),
+            sorted: false,
+        }
+    }
+
+    /// Add an entry to the table.
+    pub fn add_entry(&mut self, key: &str, values: HashMap<String, String>) {
+        self.entries.push((key.to_string(), values));
+        self.sorted = false;
+    }
+
+    /// Sort the table by key for binary search.
+    pub fn sort(&mut self) {
+        self.entries.sort_by(|a, b| a.0.cmp(&b.0));
+        self.sorted = true;
+    }
+
+    /// Sequential search for a key.
+    pub fn search_sequential(&self, key: &str) -> Option<&HashMap<String, String>> {
+        self.entries
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+    }
+
+    /// Binary search for a key (table must be sorted first).
+    pub fn search_binary(&self, key: &str) -> Option<&HashMap<String, String>> {
+        if !self.sorted {
+            return self.search_sequential(key);
+        }
+        self.entries
+            .binary_search_by(|(k, _)| k.as_str().cmp(key))
+            .ok()
+            .map(|idx| &self.entries[idx].1)
+    }
+
+    /// Search using the specified mode.
+    pub fn search(&self, key: &str, binary: bool) -> Option<&HashMap<String, String>> {
+        if binary {
+            self.search_binary(key)
+        } else {
+            self.search_sequential(key)
+        }
+    }
+
+    /// Get the number of entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if the table is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -468,5 +819,114 @@ mod tests {
     fn test_field_with_heading() {
         let field = EzFieldDef::new("AMOUNT", 1, 10, "N").with_heading("Total Amount");
         assert_eq!(field.heading.as_deref(), Some("Total Amount"));
+    }
+
+    #[test]
+    fn test_indexed_file_read_write() {
+        let mut file = EzFile::new("KSDS", 40, RecordFormat::Fixed);
+        file.add_field(EzFieldDef::new("KEY", 1, 5, "A")).unwrap();
+        file.add_field(EzFieldDef::new("DATA", 6, 35, "A")).unwrap();
+
+        let mut proc = IndexedFileProcessor::new(file, "KEY");
+
+        let mut rec = EzRecord::new(40);
+        rec.data[0..5].copy_from_slice(b"KEY01");
+        rec.data[5..10].copy_from_slice(b"HELLO");
+        proc.write_add("KEY01".into(), rec);
+
+        assert_eq!(proc.record_count(), 1);
+        let r = proc.read("KEY01").unwrap();
+        assert_eq!(&r.data[0..5], b"KEY01");
+    }
+
+    #[test]
+    fn test_indexed_file_point_get_next() {
+        let mut file = EzFile::new("KSDS", 40, RecordFormat::Fixed);
+        file.add_field(EzFieldDef::new("KEY", 1, 3, "A")).unwrap();
+
+        let mut proc = IndexedFileProcessor::new(file, "KEY");
+
+        for key in ["AAA", "BBB", "CCC", "DDD"] {
+            let mut rec = EzRecord::new(40);
+            rec.data[0..3].copy_from_slice(key.as_bytes());
+            proc.write_add(key.to_string(), rec);
+        }
+
+        proc.point("BBB");
+        let r1 = proc.get_next().unwrap();
+        assert_eq!(&r1.data[0..3], b"BBB");
+        let r2 = proc.get_next().unwrap();
+        assert_eq!(&r2.data[0..3], b"CCC");
+    }
+
+    #[test]
+    fn test_indexed_file_delete() {
+        let file = EzFile::new("KSDS", 40, RecordFormat::Fixed);
+        let mut proc = IndexedFileProcessor::new(file, "KEY");
+
+        let rec = EzRecord::new(40);
+        proc.write_add("K1".into(), rec);
+        assert_eq!(proc.record_count(), 1);
+
+        proc.write_delete("K1").unwrap();
+        assert_eq!(proc.record_count(), 0);
+    }
+
+    #[test]
+    fn test_edit_mask_basic() {
+        let mask = EditMask::new("M1", "ZZZ,ZZ9.99");
+        let result = mask.format(12345.67);
+        assert!(result.contains("12,345.67") || result.contains("12345.67"));
+    }
+
+    #[test]
+    fn test_edit_mask_zero() {
+        let mask = EditMask::new("M2", "ZZZ9");
+        let result = mask.format(0.0);
+        assert!(result.trim().ends_with('0'));
+    }
+
+    #[test]
+    fn test_edit_mask_negative_cr() {
+        let mask = EditMask::new("M3", "ZZZ9.99CR");
+        let result = mask.format(-42.50);
+        assert!(result.contains("CR"));
+    }
+
+    #[test]
+    fn test_table_sequential_search() {
+        let mut table = EzTable::new("STATES", "CODE", 2);
+        let mut vals = HashMap::new();
+        vals.insert("NAME".into(), "CALIFORNIA".into());
+        table.add_entry("CA", vals);
+
+        let mut vals2 = HashMap::new();
+        vals2.insert("NAME".into(), "NEW YORK".into());
+        table.add_entry("NY", vals2);
+
+        let found = table.search_sequential("CA").unwrap();
+        assert_eq!(found.get("NAME").unwrap(), "CALIFORNIA");
+        assert!(table.search_sequential("TX").is_none());
+    }
+
+    #[test]
+    fn test_table_binary_search() {
+        let mut table = EzTable::new("CODES", "KEY", 3);
+        for (k, v) in [("BBB", "Two"), ("AAA", "One"), ("CCC", "Three")] {
+            let mut vals = HashMap::new();
+            vals.insert("VALUE".into(), v.into());
+            table.add_entry(k, vals);
+        }
+        table.sort();
+
+        let found = table.search_binary("BBB").unwrap();
+        assert_eq!(found.get("VALUE").unwrap(), "Two");
+    }
+
+    #[test]
+    fn test_table_empty() {
+        let table = EzTable::new("EMPTY", "K", 1);
+        assert!(table.is_empty());
+        assert_eq!(table.len(), 0);
     }
 }

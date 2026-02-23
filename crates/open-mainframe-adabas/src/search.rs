@@ -264,7 +264,7 @@ fn subtract_sorted(a: &[Isn], b: &[Isn]) -> Vec<Isn> {
 
 // ── SearchCommand ──────────────────────────────────────────────────
 
-/// Variants of the ADABAS search command (S1, S2, S4, S8).
+/// Variants of the ADABAS search command (S1, S2, S4, S8, S9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchCommand {
     /// S1 — Find first: execute search and return ISN list.
@@ -275,6 +275,8 @@ pub enum SearchCommand {
     FindAndSort,
     /// S8 — Search with multiple criteria (complex expression).
     MultiCriteria,
+    /// S9 — Sort an existing ISN list by a descriptor.
+    SortIsnList,
 }
 
 impl SearchCommand {
@@ -285,6 +287,7 @@ impl SearchCommand {
             Self::FindNext => "S2",
             Self::FindAndSort => "S4",
             Self::MultiCriteria => "S8",
+            Self::SortIsnList => "S9",
         }
     }
 }

@@ -15,6 +15,7 @@
 //! - **Object Code Generation** — OBJ format (ESD/TXT/RLD/END), GOFF basics, AMODE/RMODE
 
 pub mod conditional;
+pub mod directives;
 pub mod instruction;
 pub mod lexer;
 pub mod macros;
@@ -33,4 +34,7 @@ pub use object::{Amode, EsdItem, EsdType, ObjectModule, Rmode, RldEntry, TxtReco
 pub use symbol::{eval_expr_str, eval_expression, ExprError, Symbol, SymbolTable};
 pub use conditional::{
     CondAsmEngine, CondAsmError, CondAsmStmt, SetType, SetValue,
+};
+pub use directives::{
+    dc_byte_length, parse_dc_operand, DcOperand, DcType, Directive, UsingEntry, UsingTable,
 };

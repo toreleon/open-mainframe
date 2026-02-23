@@ -543,3 +543,135 @@ IEBCOPY, IEBCOMPR, IEBUPDTE, ICEGENER, IEBPTPCH, IEBDG, IEHMOVE, IEHPROGM, IEHLI
 | UTIL-110 (Framework) | S | 5 stories; infrastructure improvements for all utilities |
 
 **Overall complexity: L (Large)** — 11 epics, 81 stories covering 15+ distinct utility programs. The existing utility framework (UtilityRegistry, IEFBR14, IEBGENER, SORT) provides a strong foundation. IEBCOPY, DFSORT enhancements, and TSO/REXX batch processors are the highest-priority gaps.
+
+## Implementation Status
+
+**Review Date:** 2026-02-23
+**Reviewed by:** batch-21-agent (automated code review)
+
+Since the original gap analysis was written, the `open-mainframe-utilities` crate (`crates/open-mainframe-utilities/src/`) and `open-mainframe-sort` crate (`crates/open-mainframe-sort/src/`) have received extensive implementations. The utilities crate now contains ~7,000+ lines across 9 source modules with 229 passing tests. The sort crate contains ~13,000+ lines with 129 passing tests.
+
+### Crate Structure (open-mainframe-utilities)
+
+| Module | Lines | Contents |
+|--------|-------|----------|
+| `lib.rs` | 1193 | UtilityProgram trait, UtilityRegistry (16 programs), UtilityContext, DdAllocation, PdsData, IEFBR14 |
+| `iebgener.rs` | 789 | Full IEBGENER: simple copy, GENERATE/RECORD/FIELD parsing, member statement, field reformatting with literals |
+| `iebcopy.rs` | 1207 | Full IEBCOPY: COPY/SELECT/EXCLUDE, REPLACE, compress in place, UNLOAD/LOAD, multi-PDS merge |
+| `iebcompr.rs` | 742 | Full IEBCOMPR: sequential (PS) and PDS (PO) compare, mismatch reporting |
+| `iebupdte.rs` | 780 | Full IEBUPDTE: ./ ADD, REPL, CHANGE, DELETE, NUMBER, ENDUP |
+| `iebptpch.rs` | 721 | Full IEBPTPCH: PRINT/PUNCH, FIELD selection with hex (XE), MEMBER, STOPAFT |
+| `iebdg.rs` | 768 | Full IEBDG: DSD/FD/CREATE/END, WAVE/ROLL/RANDOM/FIXED patterns, AN/ZD/BI/PD formats |
+| `ieh.rs` | 848 | IEHPROGM (SCRATCH/RENAME/CATLG/UNCATLG), IEHLIST (LISTCTLG/LISTVTOC/LISTPDS), IEHMOVE (MOVE/COPY) |
+| `amaspzap.rs` | 921 | Full AMASPZAP: NAME/CCHHR addressing, VERIFY/REP safety, DUMP/DUMP region, hex dump |
+| `batch.rs` | 691 | IKJEFT01/1A/1B (Standard/Authorized/NonAuthorized), IRXJCL, BPXBATCH (SH/PGM modes) |
+
+### Feature-by-Feature Status
+
+| # | Feature Area | Original | Current | Notes |
+|---|-------------|----------|---------|-------|
+| 1 | IEBGENER — simple copy (SYSIN DUMMY) | YES | **YES** | lib.rs + iebgener.rs: SYSUT1→SYSUT2 copy |
+| 2 | IEBGENER — GENERATE/RECORD/FIELD reformatting | GAP | **IMPLEMENTED** | iebgener.rs: GENERATE (MAXFLDS/MAXLITS), RECORD FIELD= with position/literal sources |
+| 3 | IEBGENER — EXITS/LABELS/MEMBER | GAP | **PARTIAL** | iebgener.rs: MEMBER statement implemented; EXITS/LABELS still missing |
+| 4 | IEBGENER — FIELD conversions (PZ/ZP/HE/EH) | GAP | **GAP** | No data type conversion support yet |
+| 5 | IEBCOPY — COPY PDS members | GAP | **IMPLEMENTED** | iebcopy.rs: COPY with OUTDD/INDD, full PDS member operations |
+| 6 | IEBCOPY — SELECT/EXCLUDE member lists | GAP | **IMPLEMENTED** | iebcopy.rs: SELECT MEMBER=(...), EXCLUDE MEMBER=(...) |
+| 7 | IEBCOPY — UNLOAD/LOAD (PDSU sequential format) | GAP | **IMPLEMENTED** | iebcopy.rs: UNLOAD to sequential + LOAD from sequential via UnloadData format |
+| 8 | IEBCOPY — Compress in place | GAP | **IMPLEMENTED** | iebcopy.rs: same INDD/OUTDD triggers compress (dedup members) |
+| 9 | IEBCOPY — PDS to PDSE conversion | GAP | **GAP** | No separate PDSE concept in the data model |
+| 10 | IEBCOPY — Rename on copy | GAP | **GAP** | SELECT supports member list but not (oldname,newname) rename syntax |
+| 11 | IEBCOPY — COPYMOD/ALTERMOD (load modules) | GAP | **GAP** | No load module modification support |
+| 12 | IEBCOMPR — Sequential compare | GAP | **IMPLEMENTED** | iebcompr.rs: TYPORG=PS record-by-record comparison |
+| 13 | IEBCOMPR — PDS compare | GAP | **IMPLEMENTED** | iebcompr.rs: TYPORG=PO with member-level comparison |
+| 14 | IEBUPDTE — ./ ADD / ./ REPL members | GAP | **IMPLEMENTED** | iebupdte.rs: ADD (NAME=), REPL with full inline data support |
+| 15 | IEBUPDTE — ./ CHANGE with UPDATE=INPLACE | GAP | **IMPLEMENTED** | iebupdte.rs: CHANGE with sequence-number-based record replacement |
+| 16 | IEBUPDTE — ./ NUMBER / ./ DELETE sequence ops | GAP | **IMPLEMENTED** | iebupdte.rs: NUMBER (NEW1/INCR), DELETE (SEQ1/SEQ2 ranges) |
+| 17 | IEBUPDTE — ./ REPRO / ./ ENDUP | GAP | **PARTIAL** | iebupdte.rs: ENDUP implemented; REPRO not explicitly modeled |
+| 18 | IEFBR14 — Null utility | YES | **YES** | lib.rs: returns RC=0, fully tested |
+| 19 | DFSORT — SORT FIELDS | YES | **YES** | sort crate: full SORT FIELDS with CH/ZD/PD/BI/FI/FL formats |
+| 20 | DFSORT — MERGE FIELDS | YES | **YES** | sort crate: MERGE support |
+| 21 | DFSORT — INCLUDE/OMIT filtering | YES | **YES** | sort crate: INCLUDE/OMIT COND with all comparison operators |
+| 22 | DFSORT — INREC/OUTREC BUILD/OVERLAY | PARTIAL | **IMPLEMENTED** | sort crate: full BUILD, OVERLAY, IFTHEN, FINDREP in reformat.rs/ifthen.rs |
+| 23 | DFSORT — OUTFIL multiple outputs | GAP | **IMPLEMENTED** | sort crate outfil.rs: OUTFIL with FNAMES, BUILD, INCLUDE/OMIT, HEADER/TRAILER, SPLIT |
+| 24 | DFSORT — SUM FIELDS aggregation | YES | **YES** | sort crate: SUM FIELDS and SUM FIELDS=NONE |
+| 25 | DFSORT — SYMNAMES | GAP | **IMPLEMENTED** | sort crate symbols.rs: symbolic field name definitions |
+| 26 | DFSORT — IFTHEN conditional reformatting | GAP | **IMPLEMENTED** | sort crate ifthen.rs: WHEN=INIT/NONE/GROUP, WhenCondition, IfThenAction |
+| 27 | DFSORT — FINDREP find/replace | GAP | **IMPLEMENTED** | sort crate reformat.rs: FindRepSpec with IN/OUT byte patterns |
+| 28 | DFSORT — E15/E35/E18 user exits | GAP | **GAP** | No user exit callback mechanism |
+| 29 | ICEGENER — Fast sequential copy | GAP | **GAP** | Not registered as a separate utility alias in the registry |
+| 30 | ICETOOL — COPY/COUNT/DISPLAY operators | GAP | **IMPLEMENTED** | sort crate icetool.rs: IceToolOp enum with Sort, Copy, Display, Count, etc. |
+| 31 | ICETOOL — MODE/OCCUR/RANGE/SELECT | GAP | **IMPLEMENTED** | sort crate icetool.rs: Occur, Stats, Select, Unique operators |
+| 32 | ICETOOL — SORT/STATS/UNIQUE/VERIFY | GAP | **IMPLEMENTED** | sort crate icetool.rs: full operator set |
+| 33 | IEBPTPCH — PRINT statement | GAP | **IMPLEMENTED** | iebptpch.rs: PRINT with TYPORG=PS/PO, MAXFLDS/MAXLINE |
+| 34 | IEBPTPCH — PUNCH statement | GAP | **IMPLEMENTED** | iebptpch.rs: PUNCH mode with card image output |
+| 35 | IEBPTPCH — RECORD FIELD formatting | GAP | **IMPLEMENTED** | iebptpch.rs: FIELD selection with hex conversion (XE) |
+| 36 | IEBPTPCH — TITLE/MEMBER selection | GAP | **PARTIAL** | iebptpch.rs: MEMBER selection implemented; TITLE statement not yet supported |
+| 37 | IEBDG — DSD/FD/CREATE/REPEAT/END | GAP | **IMPLEMENTED** | iebdg.rs: DSD, FD (NAME/LENGTH/FORMAT/ACTION), CREATE (QUANTITY/NAME), END |
+| 38 | IEBDG — Actions (FX/RL/RO/SL/SR/TL/TR/WV) | GAP | **IMPLEMENTED** | iebdg.rs: WAVE, ROLL, RANDOM, FIXED patterns (simplified action set) |
+| 39 | IEBDG — Pattern fill and copy/modify | GAP | **PARTIAL** | iebdg.rs: PICTURE/FILL patterns implemented; copy/modify from INPUT not yet supported |
+| 40 | IEHMOVE — MOVE/COPY DSNAME | GAP | **IMPLEMENTED** | ieh.rs: MOVE/COPY DSNAME with FROM/TO volume (simulated with logging) |
+| 41 | IEHMOVE — MOVE/COPY DSGROUP | GAP | **IMPLEMENTED** | ieh.rs: DSGROUP pattern matching (simulated) |
+| 42 | IEHMOVE — MOVE VOLUME | GAP | **GAP** | Volume-level operations not implemented |
+| 43 | IEHMOVE — UNLOAD/LOAD tape | GAP | **GAP** | Tape I/O not applicable in this environment |
+| 44 | IEHPROGM — SCRATCH dataset/member | GAP | **IMPLEMENTED** | ieh.rs: SCRATCH with DSNAME/VOL/MEMBER parsing (simulated) |
+| 45 | IEHPROGM — RENAME dataset/member | GAP | **IMPLEMENTED** | ieh.rs: RENAME with DSNAME/VOL/NEWNAME (simulated) |
+| 46 | IEHPROGM — CATLG/UNCATLG | GAP | **IMPLEMENTED** | ieh.rs: CATLG/UNCATLG operations (simulated) |
+| 47 | IEHLIST — LISTVTOC | GAP | **IMPLEMENTED** | ieh.rs: LISTVTOC with VOL parameter (simulated listing) |
+| 48 | IEHLIST — LISTPDS | GAP | **IMPLEMENTED** | ieh.rs: LISTPDS with actual PDS directory listing from SYSUT1 |
+| 49 | IEHLIST — LISTCTLG | GAP | **IMPLEMENTED** | ieh.rs: LISTCTLG (simulated catalog listing) |
+| 50 | AMASPZAP — NAME/VER/REP patching | GAP | **IMPLEMENTED** | amaspzap.rs: NAME/CCHHR addressing, VERIFY byte comparison, REP with verify-before-rep safety |
+| 51 | AMASPZAP — BASE/SETSSI/DUMP/DUMPT | GAP | **PARTIAL** | amaspzap.rs: DUMP ALL and DUMP region implemented; SETSSI/DUMPT not yet |
+| 52 | AMASPZAP — IDRDATA | GAP | **GAP** | No IDRDATA support |
+| 53 | IDCAMS (JCL level) — DEFINE CLUSTER | PARTIAL | **PARTIAL** | Unchanged (in JCL executor) |
+| 54 | IDCAMS (JCL level) — DELETE | PARTIAL | **PARTIAL** | Unchanged (in JCL executor) |
+| 55 | IDCAMS (JCL level) — REPRO | PARTIAL | **PARTIAL** | Unchanged (in JCL executor) |
+| 56 | IDCAMS (full) — see Batch 19 | YES | **YES** | Unchanged (912-line dataset crate implementation) |
+| 57 | IKJEFT01 — TSO batch command execution | GAP | **IMPLEMENTED** | batch.rs: Ikjeft01 with Standard mode, SYSTSIN/SYSTSPRT, command loop |
+| 58 | IKJEFT1A — TSO batch with RC propagation | GAP | **IMPLEMENTED** | batch.rs: Ikjeft1a with Authorized mode, stops on non-zero RC |
+| 59 | IKJEFT1B — TSO batch with abend handling | GAP | **IMPLEMENTED** | batch.rs: Ikjeft1b with NonAuthorized mode, stops on non-zero RC |
+| 60 | IKJEFT01/1A/1B — SYSTSIN/SYSTSPRT DD names | GAP | **IMPLEMENTED** | batch.rs: full SYSTSIN input / SYSTSPRT output DD handling |
+| 61 | IKJEFT01/1A/1B — SYSEXEC/SYSPROC exec search | GAP | **GAP** | No SYSEXEC/SYSPROC library search path |
+| 62 | IRXJCL — REXX batch execution | GAP | **IMPLEMENTED** | batch.rs: Irxjcl with SYSTSIN/SYSTSPRT, % prefix support |
+| 63 | IRXJCL — SYSEXEC/SYSPROC search order | GAP | **GAP** | No exec library search path |
+| 64 | BPXBATCH — SH mode (shell command) | GAP | **IMPLEMENTED** | batch.rs: Bpxbatch SH mode from STDPARM parsing |
+| 65 | BPXBATCH — PGM mode (USS program) | GAP | **IMPLEMENTED** | batch.rs: Bpxbatch PGM mode |
+| 66 | BPXBATCH — STDIN/STDOUT/STDERR DD mapping | GAP | **IMPLEMENTED** | batch.rs: STDIN/STDOUT DD allocation support |
+| 67 | Utility registry — extensible framework | YES | **YES** | lib.rs: UtilityRegistry::with_builtins() registers all 16 programs |
+| 68 | SORT JCL integration — SORTIN/SORTOUT/SYSIN | YES | **YES** | Sort crate with full JCL-compatible control statement parsing |
+
+### Summary
+
+| Status | Count | Percentage |
+|--------|-------|------------|
+| YES (was present, still present) | 10 | 14.7% |
+| IMPLEMENTED (was GAP/PARTIAL, now implemented) | 40 | 58.8% |
+| PARTIAL (partially implemented) | 7 | 10.3% |
+| GAP (still missing) | 11 | 16.2% |
+| **Total** | **68** | **100%** |
+
+**Original assessment:** 10 present, 5 partial, 53 missing
+**Current assessment:** 10 present + 40 newly implemented = 50 present, 7 partial, 11 remaining gaps
+
+### Remaining Gaps
+
+The 11 features still missing or partially missing are:
+
+1. **#4 — IEBGENER FIELD conversions (PZ/ZP/HE/EH):** Data type conversion between packed/zoned/hex/EBCDIC formats
+2. **#9 — IEBCOPY PDS-to-PDSE conversion:** No separate PDSE data model in the crate
+3. **#10 — IEBCOPY rename on copy:** SELECT member list exists but `(oldname,newname)` rename syntax not parsed
+4. **#11 — IEBCOPY COPYMOD/ALTERMOD:** Load module modification not applicable without load module format
+5. **#28 — DFSORT E15/E35/E18 user exits:** No callback/exit mechanism in sort engine
+6. **#29 — ICEGENER alias registration:** ICEGENER not registered as a utility; could be trivially added as an alias
+7. **#42 — IEHMOVE MOVE VOLUME:** Volume-scope operations not implemented
+8. **#43 — IEHMOVE UNLOAD/LOAD tape:** Tape I/O not applicable
+9. **#52 — AMASPZAP IDRDATA:** User identification data insertion not implemented
+10. **#61 — IKJEFT01 SYSEXEC/SYSPROC search:** Exec library search path not implemented
+11. **#63 — IRXJCL SYSEXEC/SYSPROC search:** Same as #61, no library search
+
+### Build & Test Verification
+
+```
+cargo check -p open-mainframe-utilities -p open-mainframe-sort  # PASS (no errors)
+cargo test -p open-mainframe-utilities                          # 229 tests passed
+cargo test -p open-mainframe-sort                               # 129 tests passed
+```

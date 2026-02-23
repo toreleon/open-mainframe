@@ -270,6 +270,15 @@ async fn submit_job(
     let job_name = extract_job_name(&jcl).unwrap_or_else(|| "NONAME".to_string());
     let job_class = extract_class(&jcl).unwrap_or('A');
 
+    // Get the dataset base directory from the catalog for JCL execution.
+    let dataset_dir = {
+        let catalog = state
+            .catalog
+            .read()
+            .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
+        catalog.base_dir().to_path_buf()
+    };
+
     let mut jes = state
         .jes2
         .write()
@@ -286,6 +295,91 @@ async fn submit_job(
     let spool_key = jes.spool.allocate(job_id, "JESJCL", "JCL", 'A');
     for line in jcl.lines() {
         let _ = jes.spool.write(spool_key, line);
+    }
+
+    // --- Execute the JCL ---
+    // Transition job to Running state.
+    if let Some(job) = jes.get_job_mut(job_id) {
+        job.state = JobState::Running;
+    }
+
+    // Configure the JCL executor to use the same dataset directory as the catalog.
+    let exec_config = open_mainframe_jcl::ExecutionConfig {
+        program_dir: dataset_dir.join("..").join("bin"),
+        dataset_dir: dataset_dir.clone(),
+        work_dir: std::env::temp_dir().join(format!("openmainframe-work-{}", job_id.0)),
+        sysout_dir: std::env::temp_dir().join(format!("openmainframe-sysout-{}", job_id.0)),
+    };
+
+    // Parse and execute the JCL.
+    let exec_result = open_mainframe_jcl::run_with_config(&jcl, exec_config);
+
+    // Write execution output to spool and update job state.
+    let max_rc = match &exec_result {
+        Ok(result) => {
+            // Write JESMSGLG with step results
+            let msg_key = jes.spool.allocate(job_id, "JESMSGLG", "JES2", 'A');
+            let _ = jes.spool.write(msg_key, &format!(
+                " JOB {} {} -- {} STEPS EXECUTED",
+                format_job_id(job_id),
+                job_name,
+                result.steps.len()
+            ));
+            for step in &result.steps {
+                let step_name = step.name.as_deref().unwrap_or("?");
+                let _ = jes.spool.write(msg_key, &format!(
+                    " STEP {} RC={:04}",
+                    step_name, step.return_code
+                ));
+                // Write step stdout if non-empty
+                if !step.stdout.is_empty() {
+                    let out_key = jes.spool.allocate(
+                        job_id,
+                        "SYSPRINT",
+                        step_name,
+                        'A',
+                    );
+                    for line in step.stdout.lines() {
+                        let _ = jes.spool.write(out_key, line);
+                    }
+                }
+                // Write step stderr if non-empty
+                if !step.stderr.is_empty() {
+                    let err_key = jes.spool.allocate(
+                        job_id,
+                        "SYSOUT",
+                        step_name,
+                        'A',
+                    );
+                    for line in step.stderr.lines() {
+                        let _ = jes.spool.write(err_key, line);
+                    }
+                }
+            }
+            let _ = jes.spool.write(msg_key, &format!(
+                " JOB {} ENDED -- RC={:04}",
+                format_job_id(job_id),
+                result.return_code
+            ));
+            result.return_code
+        }
+        Err(e) => {
+            // Write error to spool
+            let msg_key = jes.spool.allocate(job_id, "JESMSGLG", "JES2", 'A');
+            let _ = jes.spool.write(msg_key, &format!(
+                " JOB {} {} -- JCL ERROR: {}",
+                format_job_id(job_id),
+                job_name,
+                e
+            ));
+            12 // JCL error return code
+        }
+    };
+
+    // Transition job to Output state with the return code.
+    if let Some(job) = jes.get_job_mut(job_id) {
+        job.state = JobState::Output;
+        job.max_rc = max_rc;
     }
 
     // Return full JobResponse (same as list/status) per real z/OSMF behavior.

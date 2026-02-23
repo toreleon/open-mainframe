@@ -336,7 +336,7 @@ fn is_keyword(word: &str) -> bool {
             | "OFF" | "ON" | "MAIN" | "NOFLUSH" | "FLUSH"
             | "LIST" | "NOLIST" | "CONLIST" | "NOCONLIST"
             | "SYMLIST" | "NOSYMLIST" | "MSG" | "NOMSG" | "PROMPT" | "NOPROMPT"
-            | "ASIS" | "CAPS"
+            | "ASIS" | "CAPS" | "NOEND"
     )
 }
 
@@ -508,6 +508,8 @@ pub enum ClistStatement {
     Data(String),
     /// TERMIN
     Termin,
+    /// SYSREF &vars (declare variables passed by reference in subprocedure)
+    SysRef(Vec<String>),
 }
 
 /// DO loop condition type.
@@ -624,6 +626,7 @@ fn parse_statement_text(
             "SYSCALL" => parse_syscall(&tokens),
             "GLOBAL" => parse_global(&tokens, true),
             "NGLOBAL" => parse_global(&tokens, false),
+            "SYSREF" => parse_sysref(&tokens),
             "EXEC" => parse_exec(&tokens),
             "LISTDSI" => parse_listdsi(&tokens),
             "ISPEXEC" => Ok(Some(ClistStatement::IspExec(
@@ -1120,6 +1123,18 @@ fn parse_global(tokens: &[ClistToken], is_global: bool) -> Result<Option<ClistSt
     } else {
         Ok(Some(ClistStatement::NLocal(vars)))
     }
+}
+
+fn parse_sysref(tokens: &[ClistToken]) -> Result<Option<ClistStatement>, ParseError> {
+    let vars: Vec<String> = tokens[1..]
+        .iter()
+        .filter_map(|t| match &t.kind {
+            ClistTokenKind::Variable(v) => Some(v.clone()),
+            ClistTokenKind::Identifier(s) => Some(s.to_uppercase()),
+            _ => None,
+        })
+        .collect();
+    Ok(Some(ClistStatement::SysRef(vars)))
 }
 
 fn parse_exec(tokens: &[ClistToken]) -> Result<Option<ClistStatement>, ParseError> {

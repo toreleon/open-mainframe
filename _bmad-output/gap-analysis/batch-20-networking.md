@@ -401,3 +401,140 @@ No z/OS Communications Server-specific networking exists. All missing components
 - [Introduction to z/OS Communications Server (2024)](https://www.ibm.com/support/pages/system/files/inline-files/2024-04-10-CS_Intro.pdf)
 - [z/OS Basic Skills — Sysplex Distributor](https://www.ibm.com/docs/en/zos-basic-skills?topic=sysplex-distributor)
 - [Enterprise Extender — Wikipedia](https://en.wikipedia.org/wiki/Enterprise_Extender)
+
+## Implementation Status
+
+Review performed against `crates/open-mainframe-networking/` (10 modules, 155 tests).
+
+### VTAM / SNA (NET-100, NET-101)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| ACB (Access Control Block) | YES | `vtam.rs` — Acb struct with applid, macrf, auth, state |
+| RPL (Request Parameter List) | YES (now implemented) | `vtam.rs` — Rpl struct with operation, return_code, post_flag |
+| NIB (Node Initialization Block) | YES (now implemented) | `vtam.rs` — Nib struct with lu_type, proc_mode, logmode |
+| EXLST (Exit List) | YES (now implemented) | `vtam.rs` — Exlst with register/deactivate/drive for Logon, Losterm, Tpend, etc. |
+| OPEN / CLOSE ACB | YES | `vtam.rs` — Acb::open() / Acb::close() |
+| OPNDST / CLSDST | YES | `vtam.rs` — accept_session() / close_session() |
+| SEND / RECEIVE | YES | `vtam.rs` — send() / receive() with session buffers |
+| SETLOGON | YES | `vtam.rs` — setlogon_start() / setlogon_stop() |
+| MODCB / SHOWCB / TESTCB | YES (now implemented) | `vtam.rs` — showcb() / testcb() functions with AcbField enum |
+| APPL definition | YES (now implemented) | `vtam.rs` — ApplDef::parse() for SYS1.VTAMLST entries |
+| PU / LU definitions | GAP | Low priority; hardware-level SNA topology not modeled |
+| SNA LU 0 | YES | `sna.rs` — Lu0Session for raw byte exchange |
+| SNA LU 1 | YES | `sna.rs` — Lu1PrinterSession with SCS control codes |
+| SNA LU 2 | YES | `sna.rs` — Lu2Session with full 3270 command set |
+| SNA LU 3 | YES (now implemented) | `sna.rs` — Lu3PrinterSession with 3270 printer data stream |
+| BIND parameters | YES | `sna.rs` — BindParameters with negotiate() |
+
+### APPC / LU 6.2 / CPI-C (NET-102)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| APPCCMD macro (ALLOCATE) | YES | `appc.rs` — AppcManager::allocate() |
+| SEND_DATA | YES | `appc.rs` — AppcManager::send_data() |
+| RECEIVE_AND_WAIT | YES | `appc.rs` — AppcManager::receive() with prepare_to_receive() |
+| DEALLOCATE | YES | `appc.rs` — AppcManager::deallocate() with Flush/SyncLevel/Abend |
+| CONFIRM / CONFIRMED | YES | `appc.rs` — confirm() / confirmed() with state machine |
+| CPI-C | YES | `appc.rs` — CpiC struct with cm_init_and_alloc, cm_send, cm_receive, cm_deallocate |
+| Conversation state machine | YES | `appc.rs` — ConversationState enum (Reset/Send/Receive/Confirm/Deallocated) |
+| CNOS negotiation | YES (now implemented) | `appc.rs` — cnos_negotiate() with ModeDef |
+| TP registration | YES (now implemented) | `appc.rs` — TpRegistry with TpDefinition, TpType |
+| Mode definitions | YES (now implemented) | `appc.rs` — ModeDef struct with max_sessions, max_ru_size, pacing |
+| Conversation types | YES (now implemented) | `appc.rs` — ConversationType::Basic / Mapped |
+
+### APPN / HPR / Enterprise Extender (NET-103)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| APPN | GAP | Full APPN topology not modeled (low priority for emulation) |
+| HPR | GAP | High Performance Routing not implemented |
+| Enterprise Extender | GAP | HPR-over-UDP not implemented |
+| DLUR / DLUS | GAP | Dependent LU support not modeled |
+| Connection network | GAP | IP-as-APPN abstraction not modeled |
+| SNA topology | GAP | Network/end/LEN node types not modeled |
+
+### TCP/IP Stack (NET-104)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| TCPIP PROFILE | YES | `tcpip.rs` — TcpIpProfile::parse() with PORT, TCPCONFIG, AUTOLOG, etc. |
+| TCPIP.DATA | YES (now implemented) | `tcpip.rs` — TcpIpData::parse() for resolver config |
+| PORT statement | YES | `tcpip.rs` — PortReservation with protocol and daemon_name |
+| AUTOLOG | YES | `tcpip.rs` — AutologEntry with instance_count |
+| C sockets API | YES | `sockets.rs` — Full POSIX socket API (socket/bind/listen/accept/connect/send/recv) |
+| Assembler sockets (EZASMI) | GAP | z/OS-specific macro interface; low priority |
+| REXX sockets | GAP | Depends on REXX integration (Batch 1) |
+| CINET | YES (now implemented) | `tcpip.rs` — CinetConfig with multi-stack support |
+| IPv4 support | YES | `sockets.rs` — AF_INET, full TCP/UDP |
+| IPv6 support | YES | `sockets.rs` — AF_INET6, IPv6 socket creation and binding |
+
+### AT-TLS (NET-105)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Policy Agent configuration | YES | `tls.rs` — PolicyAgent with TlsRule matching |
+| TTLSRule / TTLSGroupAction / TTLSEnvironmentAction | YES | `tls.rs` — TlsRule with direction, version range, cipher suites |
+| Transparent TLS encryption | YES | `tls.rs` — perform_handshake() simulates AT-TLS interception |
+| System SSL integration | YES | `tls.rs` — TLS version negotiation (1.0-1.3) |
+| RACF keyring integration | YES | `tls.rs` — Keyring, KeyringStore, Certificate structs |
+| TLS 1.2 / 1.3 support | YES | `tls.rs` — TlsVersion enum with negotiation |
+| Client certificate auth | YES | `tls.rs` — HandshakeRole::ServerWithClientAuth, validate_client_cert() |
+
+### Application Services (NET-106, NET-107)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| TN3270E server | YES | `ssh.rs` — Tn3270Server with multi-session, device types, structured fields |
+| FTP server/client | YES | `ftp.rs` — FtpServer with auth, USS/MVS transfer, JES2 submission; FtpClient |
+| FTPS (FTP over TLS) | GAP | TLS layer exists but not integrated into FTP |
+| SSH (OpenSSH) | YES | `ssh.rs` — SshServer with password/pubkey auth, shell access |
+| NFS server | GAP | Not implemented |
+| NFS client | GAP | Not implemented |
+| DNS (BIND) | GAP | Not implemented (resolver config exists in TCPIP.DATA) |
+| SNMP agent | GAP | Not implemented |
+| SMTP | GAP | Not implemented |
+| HTTP server (IHS) | GAP | Health endpoint exists in deploy crate, not in networking |
+
+### Sysplex Networking (NET-108)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Static VIPA | YES | `sysplex.rs` — StaticVipa with VipaManager |
+| Dynamic VIPA | YES | `sysplex.rs` — DynamicVipa with failover() |
+| Sysplex Distributor | YES | `sysplex.rs` — SysplexDistributor with WLM-weighted routing |
+| Dynamic XCF | GAP | Cross-system coupling not modeled |
+| Connection routing | YES | `sysplex.rs` — route_connection() with WLM weight scoring |
+
+### Security & Policy (NET-109)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| IPSec | YES | `security.rs` — SecurityAssociation with IKE auth, ESP/AH algorithms |
+| IP filtering | YES | `security.rs` — IpFilterRule with CIDR matching, permit/deny/ipsec |
+| IDS (Intrusion Detection) | GAP | Not implemented |
+| Policy Agent | YES | `tls.rs` — PolicyAgent for AT-TLS (security policy partially in DefenseManager) |
+| RACF certificate management | YES | `tls.rs` — Keyring/KeyringStore/Certificate with CA validation |
+| Defense Manager | YES | `security.rs` — DefenseManager with rule loading, dynamic updates, SA management |
+
+### Summary
+
+| Category | Total Features | Implemented | Newly Implemented | GAP |
+|----------|---------------|-------------|-------------------|-----|
+| VTAM/SNA | 16 | 15 | 5 (RPL, NIB, EXLST, MODCB/SHOWCB/TESTCB, APPL def, LU 3) | 1 (PU/LU defs) |
+| APPC/LU 6.2 | 11 | 11 | 4 (CNOS, TP registry, Mode defs, ConversationType) | 0 |
+| APPN/HPR/EE | 6 | 0 | 0 | 6 |
+| TCP/IP Stack | 10 | 8 | 2 (TCPIP.DATA, CINET) | 2 (EZASMI, REXX sockets) |
+| AT-TLS | 7 | 7 | 0 | 0 |
+| Application Services | 10 | 4 | 0 | 6 (FTPS, NFS, DNS, SNMP, SMTP, IHS) |
+| Sysplex Networking | 5 | 4 | 0 | 1 (Dynamic XCF) |
+| Security & Policy | 5 | 4 | 0 | 1 (IDS) |
+| **Totals** | **70** | **53** | **11** | **17** |
+
+**Test count:** 155 passing (was 132 before this review, +23 new tests)
+
+**Key gaps remaining:**
+- APPN/HPR/Enterprise Extender: Full SNA topology/routing protocol stack (6 features) -- low priority for emulation; real-world z/OS networking is shifting to TCP/IP
+- NFS/DNS/SNMP/SMTP: Protocol servers that can be added incrementally
+- EZASMI/REXX sockets: z/OS-specific socket calling conventions dependent on assembler/REXX runtime
+- Dynamic XCF / IDS: Advanced sysplex and security features

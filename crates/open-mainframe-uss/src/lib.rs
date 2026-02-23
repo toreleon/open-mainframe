@@ -14,11 +14,15 @@
 //! - **Core UNIX Utilities** — grep, sort, sed, awk, find, wc, head, tail, test, expr
 //! - **BPXPRMxx Configuration** — PARMLIB parser, RACF OMVS segments, security
 //! - **Daemon Infrastructure** — inetd, cron, syslogd, codepage auto-conversion
+//! - **Memory-Mapped Files** — mmap, munmap, mprotect, msync (BPX1MMP/BPX4MMP)
+//! - **BPXWDYN Dynamic Allocation** — SVC 99 text interface for dataset/USS path allocation
 
+pub mod bpxwdyn;
 pub mod config;
 pub mod daemons;
 pub mod directory;
 pub mod ipc;
+pub mod mmap;
 pub mod process;
 pub mod shell;
 pub mod signal;
@@ -40,9 +44,16 @@ pub use daemons::{
 pub use directory::{
     DirEntry, DirHandle, DirectoryError, DirectoryManager, FileMetadata, TimeValue,
 };
+pub use bpxwdyn::{
+    AllocRequest, Allocation, BpxwdynError, BpxwdynManager, Disposition, FileDataType,
+    PathMode, PathOpt,
+};
 pub use ipc::{
     Fifo, IpcError, IpcRegistry, Message, MessageQueue, MqAttr, Pipe, PipeFds,
     Semaphore, SharedMemory,
+};
+pub use mmap::{
+    MapFlags, MemoryMapping, MmapError, MmapManager, MsyncFlags, ProtFlags,
 };
 pub use process::{
     FileDescriptor, ForkResult, OmvsSegment, OpenFlags, ProcessError, ProcessManager,
@@ -58,12 +69,12 @@ pub use signal::{
     SignalDeliveryResult, SignalError, SignalSet, SignalState,
 };
 pub use socket::{
-    AddressFamily, PollEvent, PollFlags, Socket, SocketAddress, SocketError,
+    AddressFamily, PollEvent, PollFlags, ShutdownHow, Socket, SocketAddress, SocketError,
     SocketManager, SocketOption, SocketState, SocketType,
 };
 pub use threads::{
     PThread, PthreadCond, PthreadMutex, PthreadRwLock, MutexType, ThreadError,
-    ThreadKey, ThreadManager, ThreadState,
+    ThreadKey, ThreadManager, ThreadSecurity, ThreadState,
 };
 pub use utilities::{
     AwkProgram, FindOptions, FindResult, GrepMatch, GrepOptions, LsEntry, LsOptions,

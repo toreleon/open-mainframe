@@ -542,6 +542,28 @@ impl Interpreter {
                 self.data_stack.queue(val);
                 Ok(Flow::Normal)
             }
+            ClauseBody::Interpret(expr) => {
+                let code = self.eval_expr(expr)?;
+                // Lex, parse, and execute the dynamic code.
+                let tokens = crate::lexer::lex(&code)
+                    .map_err(|e| self.error(&format!("INTERPRET lex error: {e}")))?;
+                let program = crate::parser::parse(&tokens)
+                    .map_err(|e| self.error(&format!("INTERPRET parse error: {e}")))?;
+                let sub_labels = build_label_table(&program.clauses);
+                return self.exec_clauses(&program.clauses, &sub_labels);
+            }
+            ClauseBody::Upper(vars) => {
+                for v in vars {
+                    let upper = v.to_uppercase();
+                    let val = self.vars().get(&upper);
+                    self.vars_mut().set(&upper, val.to_uppercase());
+                }
+                Ok(Flow::Normal)
+            }
+            ClauseBody::Options(_) => {
+                // OPTIONS is accepted but has no effect in this implementation.
+                Ok(Flow::Normal)
+            }
             ClauseBody::Command(expr) => {
                 let cmd = self.eval_expr(expr)?;
                 let env = self.address_env.clone();
@@ -1008,6 +1030,78 @@ impl Interpreter {
                 } else {
                     Some(Ok(s.to_string()))
                 };
+            }
+            "ADDRESS" if args.is_empty() => {
+                return Some(Ok(self.address_env.clone()));
+            }
+            "DIGITS" => {
+                return Some(Ok(self.numeric.digits.to_string()));
+            }
+            "FORM" => {
+                return Some(Ok(match self.numeric.form {
+                    NumericForm::Scientific => "SCIENTIFIC",
+                    NumericForm::Engineering => "ENGINEERING",
+                }.to_string()));
+            }
+            "FUZZ" => {
+                return Some(Ok(self.numeric.fuzz.to_string()));
+            }
+            "LINESIZE" => {
+                return Some(Ok("80".to_string()));
+            }
+            "SOURCELINE" => {
+                // Without source tracking, return 0.
+                return Some(Ok("0".to_string()));
+            }
+            "TRACE" => {
+                return Some(Ok("N".to_string()));
+            }
+            "USERID" => {
+                return Some(Ok("IBMUSER".to_string()));
+            }
+            "VALUE" => {
+                let var_name = args.first().map(|a| a.as_str()).unwrap_or("");
+                let new_val = args.get(1);
+                let upper = var_name.to_uppercase();
+                let old_val = self.vars().get(&upper);
+                if let Some(nv) = new_val {
+                    self.vars_mut().set(&upper, nv.clone());
+                }
+                return Some(Ok(old_val));
+            }
+            "ARG" if !args.is_empty() => {
+                let n = args.first().and_then(|a| a.parse::<usize>().ok());
+                let option = args.get(1).map(|a| a.to_uppercase());
+                let arg_val = self.vars().get("ARG");
+                let arg_parts: Vec<&str> = arg_val.split(',').collect();
+                match (n, option.as_deref()) {
+                    (None, _) => return Some(Ok(arg_parts.len().to_string())),
+                    (Some(0), _) => return Some(Ok(arg_parts.len().to_string())),
+                    (Some(idx), None) => {
+                        let val = arg_parts.get(idx - 1).unwrap_or(&"").to_string();
+                        return Some(Ok(val));
+                    }
+                    (Some(idx), Some("E")) => {
+                        let exists = idx <= arg_parts.len() && !arg_parts[idx - 1].is_empty();
+                        return Some(Ok(if exists { "1" } else { "0" }.to_string()));
+                    }
+                    (Some(idx), Some("O")) => {
+                        let omitted = idx > arg_parts.len() || arg_parts[idx - 1].is_empty();
+                        return Some(Ok(if omitted { "1" } else { "0" }.to_string()));
+                    }
+                    _ => return Some(Ok("".to_string())),
+                }
+            }
+            "CONDITION" => {
+                // Condition trap info -- stub returning empty.
+                let option = args.first().map(|a| a.to_uppercase()).unwrap_or_else(|| "I".into());
+                let result = match option.as_str() {
+                    "C" | "I" => "",
+                    "D" => "",
+                    "S" => "OFF",
+                    _ => "",
+                };
+                return Some(Ok(result.to_string()));
             }
             _ => {}
         }

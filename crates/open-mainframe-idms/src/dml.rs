@@ -11,6 +11,25 @@ use crate::codasyl::{CodasylSchema, FieldType};
 use crate::currency::CurrencyTable;
 
 // ---------------------------------------------------------------------------
+//  Usage mode for READY
+// ---------------------------------------------------------------------------
+
+/// Area usage mode for the READY statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageMode {
+    /// Read-only access, shared with other run-units.
+    Retrieval,
+    /// Read-write access, shared with other retrieval users.
+    Update,
+    /// Read-write access, exclusive to this run-unit.
+    Exclusive,
+    /// Read-only access, no other updates allowed.
+    ProtectedRetrieval,
+    /// Read-write access, no other updates allowed.
+    ProtectedUpdate,
+}
+
+// ---------------------------------------------------------------------------
 //  Find mode
 // ---------------------------------------------------------------------------
 
@@ -185,8 +204,12 @@ pub struct DmlEngine {
     pub currency: CurrencyTable,
     /// Next dbkey to assign.
     next_dbkey: u64,
-    /// Open areas.
-    open_areas: Vec<String>,
+    /// Open areas with their usage modes.
+    open_areas: HashMap<String, UsageMode>,
+    /// Whether a run-unit is bound.
+    bound: bool,
+    /// Subschema name for the bound run-unit.
+    subschema_name: Option<String>,
 }
 
 impl DmlEngine {
@@ -198,7 +221,9 @@ impl DmlEngine {
             set_members: HashMap::new(),
             currency: CurrencyTable::new(),
             next_dbkey: 1,
-            open_areas: Vec::new(),
+            open_areas: HashMap::new(),
+            bound: false,
+            subschema_name: None,
         }
     }
 
@@ -207,17 +232,139 @@ impl DmlEngine {
         &self.schema_name
     }
 
-    /// Open an area for access.
+    /// BIND RUN-UNIT: establish a connection to the database.
+    pub fn bind_run_unit(&mut self, subschema: &str) -> DmlResult {
+        self.bound = true;
+        self.subschema_name = Some(subschema.to_uppercase());
+        self.currency.reset();
+        DmlResult::success()
+    }
+
+    /// Check whether a run-unit is bound.
+    pub fn is_bound(&self) -> bool {
+        self.bound
+    }
+
+    /// READY: open an area for access with a usage mode.
+    pub fn ready(&mut self, area: &str, mode: UsageMode) -> DmlResult {
+        let upper = area.to_uppercase();
+        self.open_areas.insert(upper, mode);
+        DmlResult::success()
+    }
+
+    /// Open an area for access (convenience, defaults to Update mode).
     pub fn open_area(&mut self, area: &str) {
         let upper = area.to_uppercase();
-        if !self.open_areas.contains(&upper) {
-            self.open_areas.push(upper);
-        }
+        self.open_areas.entry(upper).or_insert(UsageMode::Update);
     }
 
     /// Check if an area is open.
     pub fn is_area_open(&self, area: &str) -> bool {
-        self.open_areas.contains(&area.to_uppercase())
+        self.open_areas.contains_key(&area.to_uppercase())
+    }
+
+    /// Return the usage mode of an open area.
+    pub fn area_usage_mode(&self, area: &str) -> Option<UsageMode> {
+        self.open_areas.get(&area.to_uppercase()).copied()
+    }
+
+    /// FINISH: close all areas and reset currency.
+    pub fn finish(&mut self) -> DmlResult {
+        self.open_areas.clear();
+        self.currency.reset();
+        self.bound = false;
+        self.subschema_name = None;
+        DmlResult::success()
+    }
+
+    /// COMMIT: commit current transaction (keep run-unit bound).
+    pub fn commit(&mut self) -> DmlResult {
+        // In a real system, this would write journal records.
+        // Here we just acknowledge the commit.
+        DmlResult::success()
+    }
+
+    /// ROLLBACK: rollback current transaction (keep run-unit bound).
+    pub fn rollback(&mut self) -> DmlResult {
+        // In a real system, this would restore before-images.
+        self.currency.reset();
+        DmlResult::success()
+    }
+
+    /// ACCEPT: retrieve the current database key.
+    pub fn accept_dbkey(&self) -> DmlResult {
+        match self.currency.current_of_run_unit() {
+            Some(dbkey) => DmlResult::success_with_dbkey(dbkey),
+            None => DmlResult::failure(StatusCode::NoCurrency),
+        }
+    }
+
+    /// IF: test if the current record is a member of a set occurrence.
+    pub fn if_member(&self, set_name: &str, owner_dbkey: u64) -> bool {
+        let set_upper = set_name.to_uppercase();
+        let current = match self.currency.current_of_run_unit() {
+            Some(dbk) => dbk,
+            None => return false,
+        };
+        self.set_members
+            .get(&set_upper)
+            .and_then(|owners| owners.get(&owner_dbkey))
+            .map_or(false, |members| members.contains(&current))
+    }
+
+    /// IF: test if the current record is an owner of a set occurrence.
+    pub fn if_owner(&self, set_name: &str) -> bool {
+        let set_upper = set_name.to_uppercase();
+        let current = match self.currency.current_of_run_unit() {
+            Some(dbk) => dbk,
+            None => return false,
+        };
+        self.set_members
+            .get(&set_upper)
+            .map_or(false, |owners| owners.contains_key(&current))
+    }
+
+    /// OBTAIN: combined FIND + GET (locate and retrieve data in one operation).
+    pub fn obtain(
+        &mut self,
+        record_type: &str,
+        set_name: &str,
+        owner_dbkey: u64,
+        mode: &FindMode,
+    ) -> DmlResult {
+        let find_result = self.find(record_type, set_name, owner_dbkey, mode);
+        if find_result.status != StatusCode::Success {
+            return find_result;
+        }
+        self.get()
+    }
+
+    /// FIND OWNER: navigate to the owner record of a set occurrence.
+    pub fn find_owner(&mut self, set_name: &str) -> DmlResult {
+        let set_upper = set_name.to_uppercase();
+        let current = match self.currency.current_of_run_unit() {
+            Some(dbk) => dbk,
+            None => return DmlResult::failure(StatusCode::NoCurrency),
+        };
+
+        // Search all set occurrences for the one containing the current record.
+        if let Some(owner_map) = self.set_members.get(&set_upper) {
+            for (&owner_dbkey, members) in owner_map {
+                if members.contains(&current) || owner_dbkey == current {
+                    // Found the owner.
+                    if self.records.contains_key(&owner_dbkey) {
+                        self.currency.set_current_of_run_unit(owner_dbkey);
+                        if let Some(rec) = self.records.get(&owner_dbkey) {
+                            self.currency
+                                .set_current_of_record(&rec.record_type, owner_dbkey);
+                        }
+                        self.currency.set_current_of_set(&set_upper, owner_dbkey);
+                        return DmlResult::success_with_dbkey(owner_dbkey);
+                    }
+                }
+            }
+        }
+        DmlResult::failure(StatusCode::RecordNotFound)
     }
 
     /// STORE: store a new record, assigning a dbkey.

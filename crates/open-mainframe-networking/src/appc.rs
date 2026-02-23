@@ -311,6 +311,115 @@ impl CpiC {
 }
 
 // ---------------------------------------------------------------------------
+// NET-102.6 — CNOS (Change Number of Sessions)
+// ---------------------------------------------------------------------------
+
+/// Mode definition controlling session properties.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModeDef {
+    pub mode_name: String,
+    pub max_sessions: u32,
+    pub max_conwinners: u32,
+    pub max_ru_size: u16,
+    pub pacing: u8,
+}
+
+impl ModeDef {
+    pub fn new(mode_name: impl Into<String>, max_sessions: u32) -> Self {
+        Self {
+            mode_name: mode_name.into(),
+            max_sessions,
+            max_conwinners: max_sessions / 2,
+            max_ru_size: 4096,
+            pacing: 4,
+        }
+    }
+}
+
+/// CNOS negotiation result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CnosResult {
+    pub mode_name: String,
+    pub negotiated_sessions: u32,
+    pub negotiated_conwinners: u32,
+}
+
+/// CNOS — negotiate the number of parallel sessions for a mode.
+pub fn cnos_negotiate(local: &ModeDef, remote: &ModeDef) -> Result<CnosResult, AppcError> {
+    if local.mode_name != remote.mode_name {
+        return Err(AppcError::AllocateFailed(format!(
+            "CNOS mode mismatch: {} vs {}",
+            local.mode_name, remote.mode_name
+        )));
+    }
+    let negotiated = local.max_sessions.min(remote.max_sessions);
+    let conwinners = local.max_conwinners.min(remote.max_conwinners);
+    Ok(CnosResult {
+        mode_name: local.mode_name.clone(),
+        negotiated_sessions: negotiated,
+        negotiated_conwinners: conwinners,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// NET-102.7 — TP (Transaction Program) Registration
+// ---------------------------------------------------------------------------
+
+/// A registered Transaction Program definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TpDefinition {
+    pub tp_name: String,
+    pub tp_type: TpType,
+    pub sync_level: SyncLevel,
+    pub conversation_type: ConversationType,
+}
+
+/// Transaction program type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TpType {
+    /// Standard application TP.
+    Application,
+    /// Service TP (SNA-defined, e.g. CNOS).
+    Service,
+}
+
+/// Conversation type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationType {
+    Basic,
+    Mapped,
+}
+
+/// TP registry for managing registered transaction programs.
+#[derive(Debug, Default)]
+pub struct TpRegistry {
+    tps: HashMap<String, TpDefinition>,
+}
+
+impl TpRegistry {
+    pub fn new() -> Self {
+        Self {
+            tps: HashMap::new(),
+        }
+    }
+
+    /// Register a transaction program.
+    pub fn register(&mut self, tp: TpDefinition) {
+        self.tps.insert(tp.tp_name.clone(), tp);
+    }
+
+    /// Look up a TP by name.
+    pub fn find(&self, tp_name: &str) -> Option<&TpDefinition> {
+        self.tps.get(tp_name)
+    }
+
+    /// Number of registered TPs.
+    pub fn count(&self) -> usize {
+        self.tps.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests — NET-102.6
 // ---------------------------------------------------------------------------
 
@@ -451,5 +560,44 @@ mod tests {
         // Receive returns last-in (from the Vec pop)
         let data = cpic.cm_receive(id).unwrap().unwrap();
         assert_eq!(data, b"msg2");
+    }
+
+    // CNOS tests
+    #[test]
+    fn cnos_negotiate_success() {
+        let local = ModeDef::new("LU62MODE", 10);
+        let remote = ModeDef::new("LU62MODE", 8);
+        let result = cnos_negotiate(&local, &remote).unwrap();
+        assert_eq!(result.mode_name, "LU62MODE");
+        assert_eq!(result.negotiated_sessions, 8);
+    }
+
+    #[test]
+    fn cnos_negotiate_mode_mismatch() {
+        let local = ModeDef::new("MODE_A", 10);
+        let remote = ModeDef::new("MODE_B", 8);
+        assert!(cnos_negotiate(&local, &remote).is_err());
+    }
+
+    // TP registry tests
+    #[test]
+    fn tp_registry_register_and_find() {
+        let mut reg = TpRegistry::new();
+        reg.register(TpDefinition {
+            tp_name: "CICSISC".to_string(),
+            tp_type: TpType::Application,
+            sync_level: SyncLevel::Confirm,
+            conversation_type: ConversationType::Mapped,
+        });
+        assert_eq!(reg.count(), 1);
+        let tp = reg.find("CICSISC").unwrap();
+        assert_eq!(tp.tp_type, TpType::Application);
+        assert_eq!(tp.conversation_type, ConversationType::Mapped);
+    }
+
+    #[test]
+    fn tp_registry_not_found() {
+        let reg = TpRegistry::new();
+        assert!(reg.find("MISSING").is_none());
     }
 }

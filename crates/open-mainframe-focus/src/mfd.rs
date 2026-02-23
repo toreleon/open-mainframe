@@ -34,6 +34,8 @@ pub enum MfdError {
 pub enum FocusDataType {
     /// Alphanumeric — `An` where n is length.
     Alpha(usize),
+    /// Variable-length alphanumeric — `AnV`.
+    AlphaVariable(usize),
     /// Integer — `I` with optional length.
     Integer(usize),
     /// Floating point — `F` or `Fn.d`.
@@ -44,8 +46,12 @@ pub enum FocusDataType {
     Packed(usize, usize),
     /// Date — `YYMD`, `YMD`, `MDY`, etc.
     Date(String),
+    /// Date-time — `In.m` (nanosecond precision).
+    DateTime(usize, usize),
     /// Text — large text field.
     Text(usize),
+    /// Smart Date — `Sm.n` (year, quarter, month, day granularity).
+    SmartDate(usize, usize),
 }
 
 impl FocusDataType {
@@ -55,6 +61,22 @@ impl FocusDataType {
         if s.is_empty() {
             return Err(MfdError::UnknownDataType(s.to_string()));
         }
+        let upper = s.to_uppercase();
+        // Check for variable-length alpha: AnV
+        if (upper.starts_with('A')) && upper.ends_with('V') && upper.len() > 2 {
+            let mid = &s[1..s.len() - 1];
+            if let Ok(len) = mid.parse::<usize>() {
+                return Ok(FocusDataType::AlphaVariable(len));
+            }
+        }
+        // Check for Smart Date: Sm.n
+        if upper.starts_with('S') && !upper.starts_with("SE") {
+            let rest = &s[1..];
+            if rest.contains('.') || rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                let (w, d) = parse_width_decimal(rest);
+                return Ok(FocusDataType::SmartDate(w, d));
+            }
+        }
         let first = s.chars().next().unwrap();
         match first {
             'A' | 'a' => {
@@ -62,7 +84,13 @@ impl FocusDataType {
                 Ok(FocusDataType::Alpha(len))
             }
             'I' | 'i' => {
-                let len: usize = s[1..].parse().unwrap_or(4);
+                // Check if it looks like a date-time format (In.m where n > 0)
+                let rest = &s[1..];
+                if rest.contains('.') {
+                    let (w, d) = parse_width_decimal(rest);
+                    return Ok(FocusDataType::DateTime(w, d));
+                }
+                let len: usize = rest.parse().unwrap_or(4);
                 Ok(FocusDataType::Integer(len))
             }
             'F' | 'f' => {
@@ -118,9 +146,13 @@ pub struct FieldDef {
 impl FieldDef {
     pub fn new(name: &str, data_type: FocusDataType) -> Self {
         let length = match &data_type {
-            FocusDataType::Alpha(n) | FocusDataType::Text(n) => *n,
+            FocusDataType::Alpha(n) | FocusDataType::AlphaVariable(n) | FocusDataType::Text(n) => *n,
             FocusDataType::Integer(n) => *n,
-            FocusDataType::Float(w, _) | FocusDataType::Double(w, _) | FocusDataType::Packed(w, _) => *w,
+            FocusDataType::Float(w, _)
+            | FocusDataType::Double(w, _)
+            | FocusDataType::Packed(w, _)
+            | FocusDataType::DateTime(w, _)
+            | FocusDataType::SmartDate(w, _) => *w,
             FocusDataType::Date(_) => 10,
         };
         Self {
@@ -475,10 +507,13 @@ mod tests {
     #[test]
     fn test_data_type_parsing() {
         assert_eq!(FocusDataType::parse("A20").unwrap(), FocusDataType::Alpha(20));
+        assert_eq!(FocusDataType::parse("A30V").unwrap(), FocusDataType::AlphaVariable(30));
         assert_eq!(FocusDataType::parse("I4").unwrap(), FocusDataType::Integer(4));
+        assert_eq!(FocusDataType::parse("I20.9").unwrap(), FocusDataType::DateTime(20, 9));
         assert_eq!(FocusDataType::parse("F8.2").unwrap(), FocusDataType::Float(8, 2));
         assert_eq!(FocusDataType::parse("D16.4").unwrap(), FocusDataType::Double(16, 4));
         assert_eq!(FocusDataType::parse("P10.2").unwrap(), FocusDataType::Packed(10, 2));
+        assert_eq!(FocusDataType::parse("S8.2").unwrap(), FocusDataType::SmartDate(8, 2));
         assert!(matches!(FocusDataType::parse("YYMD").unwrap(), FocusDataType::Date(_)));
     }
 

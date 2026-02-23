@@ -143,7 +143,10 @@ fn get_system_variables() -> HashMap<String, String> {
     vars.insert("LASTCC".to_string(), "0".to_string());
     vars.insert("MAXCC".to_string(), "0".to_string());
     vars.insert("SYSDATE".to_string(), "02/23/26".to_string());
+    vars.insert("SYSSDATE".to_string(), "26/02/23".to_string());
+    vars.insert("SYSJDATE".to_string(), "26.054".to_string());
     vars.insert("SYSTIME".to_string(), "12:00:00".to_string());
+    vars.insert("SYSSTIME".to_string(), "12:00".to_string());
     vars.insert("SYSUID".to_string(), "USER01".to_string());
     vars.insert("SYSPREF".to_string(), "USER01".to_string());
     vars.insert("SYSENV".to_string(), "FORE".to_string());
@@ -162,6 +165,10 @@ fn get_system_variables() -> HashMap<String, String> {
     vars.insert("SYSLTERM".to_string(), "24".to_string());
     vars.insert("SYSWTERM".to_string(), "80".to_string());
     vars.insert("SYSNODE".to_string(), "LOCAL".to_string());
+    vars.insert("SYSNAME".to_string(), "LOCAL".to_string());
+    vars.insert("SYSPROC".to_string(), String::new());
+    vars.insert("SYSPROMPT".to_string(), "ON".to_string());
+    vars.insert("SYSHSM".to_string(), "AVAILABLE".to_string());
     vars.insert("SYSJES".to_string(), "JES2".to_string());
     vars.insert("SYSLRACF".to_string(), "AVAILABLE".to_string());
     vars.insert("SYSAPPCLU".to_string(), String::new());
@@ -505,6 +512,8 @@ impl ClistInterpreter {
                         "MAIN" => self.control.main = true,
                         "NOFLUSH" => self.control.flush = false,
                         "FLUSH" => self.control.flush = true,
+                        "NOEND" => self.control.noend = true,
+                        "END" => self.control.noend = false,
                         _ => {}
                     }
                 }
@@ -608,6 +617,13 @@ impl ClistInterpreter {
                     self.last_cc = rc;
                     self.update_cc(rc);
                 }
+                Ok(StmtResult::Continue)
+            }
+
+            ClistStatement::SysRef(_vars) => {
+                // SYSREF declares that variables are passed by reference
+                // in a subprocedure. This is a declaration-only statement;
+                // actual reference semantics are handled by SYSCALL.
                 Ok(StmtResult::Continue)
             }
 

@@ -46,6 +46,8 @@ pub struct ControlOptions {
     pub main: bool,
     /// FLUSH / NOFLUSH — flush input stack on error
     pub flush: bool,
+    /// NOEND — prevent END subcommand from terminating CLIST
+    pub noend: bool,
 }
 
 impl Default for ControlOptions {
@@ -59,6 +61,7 @@ impl Default for ControlOptions {
             asis: false,
             main: false,
             flush: true,
+            noend: false,
         }
     }
 }

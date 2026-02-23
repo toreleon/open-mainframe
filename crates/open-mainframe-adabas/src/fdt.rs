@@ -24,6 +24,10 @@ pub enum FieldType {
     Binary,
     /// Wide (Unicode / UTF-16).
     Wide,
+    /// Fixed-point (binary integer, 2 or 4 bytes).
+    FixedPoint,
+    /// Floating-point (single or double precision).
+    Float,
 }
 
 impl std::fmt::Display for FieldType {
@@ -35,12 +39,45 @@ impl std::fmt::Display for FieldType {
             Self::Unpacked => "U",
             Self::Binary => "B",
             Self::Wide => "W",
+            Self::FixedPoint => "F",
+            Self::Float => "G",
         };
         f.write_str(s)
     }
 }
 
 // ── FieldDef ───────────────────────────────────────────────────────
+
+/// Options that can be applied to a field in the FDT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FieldOption {
+    /// DE — Descriptor (create inverted list).
+    Descriptor,
+    /// UQ — Unique descriptor (no duplicate values).
+    Unique,
+    /// NU — Null suppression (don't index null values).
+    NullSuppression,
+    /// FI — Fixed storage (always stored at defined length).
+    FixedStorage,
+    /// MU — Multiple-value field.
+    MultipleValue,
+    /// PE — Periodic group.
+    PeriodicGroup,
+    /// LA — Long alpha field (LOB-like).
+    LongAlpha,
+    /// LB — Large object field.
+    LargeObject,
+    /// NB — No blank compression.
+    NoBlankCompression,
+    /// NC — No character compression.
+    NoCharCompression,
+    /// NN — Not null constraint.
+    NotNull,
+    /// HF — High-order first (big-endian) for binary.
+    HighOrderFirst,
+    /// XI — Exclude from replication.
+    ExcludeReplication,
+}
 
 /// A single field definition in the FDT.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +98,8 @@ pub struct FieldDef {
     pub is_multiple_value: bool,
     /// Whether this field belongs to a periodic group.
     pub is_periodic: bool,
+    /// Set of field options applied to this field.
+    pub options: Vec<FieldOption>,
 }
 
 impl FieldDef {
@@ -75,6 +114,7 @@ impl FieldDef {
             is_descriptor: false,
             is_multiple_value: false,
             is_periodic: false,
+            options: Vec::new(),
         }
     }
 
@@ -100,6 +140,19 @@ impl FieldDef {
     pub fn with_format(mut self, fmt: impl Into<String>) -> Self {
         self.format = Some(fmt.into());
         self
+    }
+
+    /// Add a field option.
+    pub fn with_option(mut self, option: FieldOption) -> Self {
+        if !self.options.contains(&option) {
+            self.options.push(option);
+        }
+        self
+    }
+
+    /// Check whether a specific option is set.
+    pub fn has_option(&self, option: FieldOption) -> bool {
+        self.options.contains(&option)
     }
 }
 

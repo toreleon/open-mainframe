@@ -88,6 +88,19 @@ pub struct ReportOutput {
 // Table engine
 // ---------------------------------------------------------------------------
 
+/// Aggregation operation for TABLE verbs.
+#[derive(Debug, Clone, PartialEq)]
+enum AggOp {
+    Sum,
+    Count,
+    Avg,
+    Max,
+    Min,
+    Pct,
+    First,
+    Last,
+}
+
 /// Executes TABLE requests against in-memory data.
 pub struct TableEngine;
 
@@ -113,12 +126,37 @@ impl TableEngine {
         // 4. Execute based on verb
         let rows = match request.verb {
             TableVerb::Print => Self::execute_print(&enriched, &columns, &request.by_dims)?,
-            TableVerb::Sum => Self::execute_sum(
-                &enriched,
-                &request.fields,
-                &request.computes,
-                &request.by_dims,
-                &request.across_dims,
+            TableVerb::Sum => Self::execute_agg(
+                &enriched, &request.fields, &request.computes,
+                &request.by_dims, &request.across_dims, AggOp::Sum,
+            )?,
+            TableVerb::Count => Self::execute_agg(
+                &enriched, &request.fields, &request.computes,
+                &request.by_dims, &request.across_dims, AggOp::Count,
+            )?,
+            TableVerb::Avg => Self::execute_agg(
+                &enriched, &request.fields, &request.computes,
+                &request.by_dims, &request.across_dims, AggOp::Avg,
+            )?,
+            TableVerb::Max => Self::execute_agg(
+                &enriched, &request.fields, &request.computes,
+                &request.by_dims, &request.across_dims, AggOp::Max,
+            )?,
+            TableVerb::Min => Self::execute_agg(
+                &enriched, &request.fields, &request.computes,
+                &request.by_dims, &request.across_dims, AggOp::Min,
+            )?,
+            TableVerb::Pct => Self::execute_agg(
+                &enriched, &request.fields, &request.computes,
+                &request.by_dims, &request.across_dims, AggOp::Pct,
+            )?,
+            TableVerb::First => Self::execute_agg(
+                &enriched, &request.fields, &request.computes,
+                &request.by_dims, &request.across_dims, AggOp::First,
+            )?,
+            TableVerb::Last => Self::execute_agg(
+                &enriched, &request.fields, &request.computes,
+                &request.by_dims, &request.across_dims, AggOp::Last,
             )?,
         };
 
@@ -217,13 +255,41 @@ impl TableEngine {
         Ok(rows)
     }
 
-    /// SUM verb: aggregation with optional BY and ACROSS.
-    fn execute_sum(
+    /// Aggregation operation type.
+    fn aggregate_values(values: &[f64], op: &AggOp, grand_total: f64) -> f64 {
+        match op {
+            AggOp::Sum => values.iter().sum(),
+            AggOp::Count => values.len() as f64,
+            AggOp::Avg => {
+                if values.is_empty() {
+                    0.0
+                } else {
+                    values.iter().sum::<f64>() / values.len() as f64
+                }
+            }
+            AggOp::Max => values.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            AggOp::Min => values.iter().cloned().fold(f64::INFINITY, f64::min),
+            AggOp::Pct => {
+                let sum: f64 = values.iter().sum();
+                if grand_total.abs() < f64::EPSILON {
+                    0.0
+                } else {
+                    (sum / grand_total) * 100.0
+                }
+            }
+            AggOp::First => values.first().copied().unwrap_or(0.0),
+            AggOp::Last => values.last().copied().unwrap_or(0.0),
+        }
+    }
+
+    /// Generic aggregation verb: SUM, COUNT, AVG, MAX, MIN, PCT, FIRST, LAST.
+    fn execute_agg(
         data: &[DataRecord],
         fields: &[String],
         computes: &[ComputedField],
         by_dims: &[String],
         across_dims: &[String],
+        agg_op: AggOp,
     ) -> Result<Vec<ReportRow>, TableError> {
         let mut rows = Vec::new();
         let measure_fields: Vec<String> = fields
@@ -232,15 +298,21 @@ impl TableEngine {
             .cloned()
             .collect();
 
+        // Compute grand total for PCT calculations
+        let grand_total_for_pct: f64 = measure_fields.iter().map(|f| {
+            data.iter().map(|r| r.get(f).map_or(0.0, |v| v.as_num())).sum::<f64>()
+        }).sum();
+
         if by_dims.is_empty() && across_dims.is_empty() {
             // Grand total
             let mut cells = Vec::new();
             for f in &measure_fields {
-                let total: f64 = data
+                let values: Vec<f64> = data
                     .iter()
                     .map(|r| r.get(f).map_or(0.0, |v| v.as_num()))
-                    .sum();
-                cells.push((f.clone(), CellValue::Num(total)));
+                    .collect();
+                let result = Self::aggregate_values(&values, &agg_op, grand_total_for_pct);
+                cells.push((f.clone(), CellValue::Num(result)));
             }
             rows.push(ReportRow {
                 row_type: RowType::Total,
@@ -253,19 +325,18 @@ impl TableEngine {
 
             for (key, group_recs) in &groups {
                 let mut cells = Vec::new();
-                // Add dimension values
                 for (i, dim) in by_dims.iter().enumerate() {
                     let dim_val = key.get(i).cloned().unwrap_or_default();
                     cells.push((dim.clone(), CellValue::Str(dim_val)));
                 }
-                // Add summed measures
                 for (j, f) in measure_fields.iter().enumerate() {
-                    let total: f64 = group_recs
+                    let values: Vec<f64> = group_recs
                         .iter()
                         .map(|r| r.get(f).map_or(0.0, |v| v.as_num()))
-                        .sum();
-                    grand_totals[j] += total;
-                    cells.push((f.clone(), CellValue::Num(total)));
+                        .collect();
+                    let result = Self::aggregate_values(&values, &agg_op, grand_total_for_pct);
+                    grand_totals[j] += values.iter().sum::<f64>();
+                    cells.push((f.clone(), CellValue::Num(result)));
                 }
                 rows.push(ReportRow {
                     row_type: RowType::Subtotal,
@@ -288,7 +359,6 @@ impl TableEngine {
         } else {
             // ACROSS (pivot) — cross-tabulation
             let across_field = &across_dims[0];
-            // Collect unique across values
             let mut across_values: Vec<String> = Vec::new();
             for rec in data {
                 let v = rec.get(across_field).map_or(String::new(), |v| v.as_str());
@@ -312,12 +382,13 @@ impl TableEngine {
                         })
                         .collect();
                     for f in &measure_fields {
-                        let total: f64 = matching
+                        let values: Vec<f64> = matching
                             .iter()
                             .map(|r| r.get(f).map_or(0.0, |v| v.as_num()))
-                            .sum();
+                            .collect();
+                        let result = Self::aggregate_values(&values, &agg_op, grand_total_for_pct);
                         let col_name = format!("{f}_{av}");
-                        cells.push((col_name, CellValue::Num(total)));
+                        cells.push((col_name, CellValue::Num(result)));
                     }
                 }
                 rows.push(ReportRow {

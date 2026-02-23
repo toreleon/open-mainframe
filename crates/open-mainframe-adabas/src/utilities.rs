@@ -272,6 +272,8 @@ impl Ddm {
                 FieldType::Numeric | FieldType::Unpacked => 'N',
                 FieldType::Packed => 'P',
                 FieldType::Binary => 'B',
+                FieldType::FixedPoint => 'F',
+                FieldType::Float => 'G',
             };
             ddm.add_field(
                 &field.name,

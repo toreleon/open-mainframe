@@ -88,6 +88,37 @@ pub enum InsnFormat {
     SSE,
     /// 6-byte, D1(B1),D2(B2),R3 storage-storage with register.
     SSF,
+
+    // ─── Vector facility formats (z13+) ───
+
+    /// 6-byte, VRR-a: V1,V2,M3,M4,M5.
+    VRRa,
+    /// 6-byte, VRR-b: V1,V2,V3,M4,M5.
+    VRRb,
+    /// 6-byte, VRR-c: V1,V2,V3,M4,M5,M6.
+    VRRc,
+    /// 6-byte, VRR-d: V1,V2,V3,V4,M5.
+    VRRd,
+    /// 6-byte, VRR-e: V1,V2,V3,V4,M5,M6.
+    VRRe,
+    /// 6-byte, VRI-a: V1,I2,M3.
+    VRIa,
+    /// 6-byte, VRI-b: V1,I2,I3,M4.
+    VRIb,
+    /// 6-byte, VRI-c: V1,V3,I2,M4.
+    VRIc,
+    /// 6-byte, VRS-a: V1,V3,D2(B2),M4.
+    VRSa,
+    /// 6-byte, VRS-b: V1,R3,D2(B2),M4.
+    VRSb,
+    /// 6-byte, VRS-c: R1,V3,D2(B2),M4.
+    VRSc,
+    /// 6-byte, VRV: V1,V2,D2(B2),M3.
+    VRV,
+    /// 6-byte, VRX: V1,D2(X2,B2),M3.
+    VRX,
+    /// 6-byte, VSI: V1,D2(B2),I3.
+    VSI,
 }
 
 impl InsnFormat {
@@ -101,7 +132,12 @@ impl InsnFormat {
             InsnFormat::RXE | InsnFormat::RXY | InsnFormat::RSY | InsnFormat::RIEa
             | InsnFormat::RIEb | InsnFormat::RIEc | InsnFormat::RIEd | InsnFormat::RIEf
             | InsnFormat::RIL | InsnFormat::SIY | InsnFormat::SIL | InsnFormat::SSa
-            | InsnFormat::SSb | InsnFormat::SSE | InsnFormat::SSF => 6,
+            | InsnFormat::SSb | InsnFormat::SSE | InsnFormat::SSF
+            | InsnFormat::VRRa | InsnFormat::VRRb | InsnFormat::VRRc
+            | InsnFormat::VRRd | InsnFormat::VRRe
+            | InsnFormat::VRIa | InsnFormat::VRIb | InsnFormat::VRIc
+            | InsnFormat::VRSa | InsnFormat::VRSb | InsnFormat::VRSc
+            | InsnFormat::VRV | InsnFormat::VRX | InsnFormat::VSI => 6,
         }
     }
 }
@@ -153,6 +189,19 @@ pub struct InsnOperands {
     pub l2: u8,
     /// Single length for SSa.
     pub length: u8,
+    /// Vector register fields (0-31).
+    pub v1: u8,
+    pub v2: u8,
+    pub v3: u8,
+    pub v4: u8,
+    /// Mask fields for vector instructions.
+    pub m3_v: u8,
+    pub m4_v: u8,
+    pub m5: u8,
+    pub m6: u8,
+    /// Immediate fields for VRI.
+    pub i2_v: u16,
+    pub i3_v: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +258,7 @@ impl InsnCatalog {
         catalog.register_s_instructions();
         catalog.register_e_instructions();
         catalog.register_extended_branches();
+        catalog.register_vector_instructions();
         catalog
     }
 
@@ -570,6 +620,108 @@ impl InsnCatalog {
         }
     }
 
+    // -- Vector facility instructions (z13+) ----------------------------------
+    fn register_vector_instructions(&mut self) {
+        // VRR-a: opcode(8) | V1(4) V2(4) | ___ | M5(4) M4(4) | M3(4) _(4) | opcode2(8)
+        //   V1,V2[,M3[,M4[,M5]]]
+        self.add("VCLZ",  0xE7, Some(0x53), InsnFormat::VRRa, None); // count leading zeros
+        self.add("VCTZ",  0xE7, Some(0x52), InsnFormat::VRRa, None); // count trailing zeros
+        self.add("VLC",   0xE7, Some(0xDE), InsnFormat::VRRa, None); // complement
+        self.add("VLP",   0xE7, Some(0xDF), InsnFormat::VRRa, None); // load positive
+        self.add("VPOPCT",0xE7, Some(0x50), InsnFormat::VRRa, None); // population count
+        self.add("VSEG",  0xE7, Some(0x5F), InsnFormat::VRRa, None); // sign extend
+        self.add("VUPH",  0xE7, Some(0xD7), InsnFormat::VRRa, None); // unpack high
+        self.add("VUPL",  0xE7, Some(0xD6), InsnFormat::VRRa, None); // unpack low
+        self.add("VUPLH", 0xE7, Some(0xD5), InsnFormat::VRRa, None); // unpack logical high
+        self.add("VUPLL", 0xE7, Some(0xD4), InsnFormat::VRRa, None); // unpack logical low
+
+        // VRR-b: opcode(8) | V1(4) V2(4) | V3(4) _(4) | _(4) M5(4) | _(4) M4(4) | opcode2(8)
+        //   V1,V2,V3[,M4[,M5]]
+        self.add("VFS",   0xE7, Some(0xE2), InsnFormat::VRRb, None); // FP subtract
+        self.add("VFA",   0xE7, Some(0xE3), InsnFormat::VRRb, None); // FP add
+
+        // VRR-c: opcode(8) | V1(4) V2(4) | V3(4) _(4) | M6(4) M5(4) | M4(4) _(4) | opcode2(8)
+        //   V1,V2,V3[,M4[,M5[,M6]]]
+        self.add("VA",    0xE7, Some(0xF3), InsnFormat::VRRc, None); // add
+        self.add("VS",    0xE7, Some(0xF7), InsnFormat::VRRc, None); // subtract
+        self.add("VN",    0xE7, Some(0x68), InsnFormat::VRRc, None); // AND
+        self.add("VO",    0xE7, Some(0x6A), InsnFormat::VRRc, None); // OR
+        self.add("VX",    0xE7, Some(0x6D), InsnFormat::VRRc, None); // XOR
+        self.add("VNN",   0xE7, Some(0x6E), InsnFormat::VRRc, None); // NAND
+        self.add("VNO",   0xE7, Some(0x6B), InsnFormat::VRRc, None); // NOR
+        self.add("VNX",   0xE7, Some(0x6C), InsnFormat::VRRc, None); // NOT XOR
+        self.add("VOC",   0xE7, Some(0x6F), InsnFormat::VRRc, None); // OR with complement
+        self.add("VAVG",  0xE7, Some(0xF2), InsnFormat::VRRc, None); // average
+        self.add("VAVGL", 0xE7, Some(0xF0), InsnFormat::VRRc, None); // average logical
+        self.add("VCEQ",  0xE7, Some(0xF8), InsnFormat::VRRc, None); // compare equal
+        self.add("VCH",   0xE7, Some(0xFB), InsnFormat::VRRc, None); // compare high
+        self.add("VCHL",  0xE7, Some(0xF9), InsnFormat::VRRc, None); // compare high logical
+        self.add("VMX",   0xE7, Some(0xFF), InsnFormat::VRRc, None); // maximum
+        self.add("VMXL",  0xE7, Some(0xFD), InsnFormat::VRRc, None); // maximum logical
+        self.add("VMN",   0xE7, Some(0xFE), InsnFormat::VRRc, None); // minimum
+        self.add("VMNL",  0xE7, Some(0xFC), InsnFormat::VRRc, None); // minimum logical
+        self.add("VMH",   0xE7, Some(0xA3), InsnFormat::VRRc, None); // multiply high
+        self.add("VMLH",  0xE7, Some(0xA1), InsnFormat::VRRc, None); // multiply logical high
+        self.add("VML",   0xE7, Some(0xA2), InsnFormat::VRRc, None); // multiply low
+        self.add("VME",   0xE7, Some(0xA6), InsnFormat::VRRc, None); // multiply even
+        self.add("VMLE",  0xE7, Some(0xA4), InsnFormat::VRRc, None); // multiply logical even
+        self.add("VMO",   0xE7, Some(0xA7), InsnFormat::VRRc, None); // multiply odd
+        self.add("VMLO",  0xE7, Some(0xA5), InsnFormat::VRRc, None); // multiply logical odd
+        self.add("VMRH",  0xE7, Some(0x61), InsnFormat::VRRc, None); // merge high
+        self.add("VMRL",  0xE7, Some(0x60), InsnFormat::VRRc, None); // merge low
+        self.add("VPKS",  0xE7, Some(0x97), InsnFormat::VRRc, None); // pack signed
+        self.add("VPKLS", 0xE7, Some(0x95), InsnFormat::VRRc, None); // pack logical signed
+
+        // VRR-d: opcode(8) | V1(4) V2(4) | V3(4) M5(4) | _(4) _(4) | V4(4) _(4) | opcode2(8)
+        self.add("VSEL",  0xE7, Some(0x8D), InsnFormat::VRRd, None); // select
+
+        // VRR-e: opcode(8) | V1(4) V2(4) | V3(4) M6(4) | _(4) M5(4) | V4(4) _(4) | opcode2(8)
+        self.add("VFMA",  0xE7, Some(0x8F), InsnFormat::VRRe, None); // FP multiply and add
+        self.add("VFMS",  0xE7, Some(0x8E), InsnFormat::VRRe, None); // FP multiply and subtract
+
+        // VRX: opcode(8) | V1(4) X2(4) | B2(4) D2(12) | M3(4) _(4) | opcode2(8)
+        self.add("VL",    0xE7, Some(0x06), InsnFormat::VRX, None); // load
+        self.add("VST",   0xE7, Some(0x0E), InsnFormat::VRX, None); // store
+        self.add("VLBB",  0xE7, Some(0x07), InsnFormat::VRX, None); // load to block boundary
+        self.add("VLEB",  0xE7, Some(0x00), InsnFormat::VRX, None); // load element (byte)
+        self.add("VLEH",  0xE7, Some(0x01), InsnFormat::VRX, None); // load element (halfword)
+        self.add("VLEF",  0xE7, Some(0x03), InsnFormat::VRX, None); // load element (fullword)
+        self.add("VLEG",  0xE7, Some(0x02), InsnFormat::VRX, None); // load element (doubleword)
+
+        // VRS-a: opcode(8) | V1(4) V3(4) | B2(4) D2(12) | M4(4) _(4) | opcode2(8)
+        self.add("VERLL", 0xE7, Some(0x33), InsnFormat::VRSa, None); // element rotate left logical
+        self.add("VESL",  0xE7, Some(0x30), InsnFormat::VRSa, None); // element shift left
+        self.add("VESRA", 0xE7, Some(0x3A), InsnFormat::VRSa, None); // element shift right arith
+        self.add("VESRL", 0xE7, Some(0x38), InsnFormat::VRSa, None); // element shift right logical
+        self.add("VLM",   0xE7, Some(0x36), InsnFormat::VRSa, None); // load multiple
+        self.add("VSTM",  0xE7, Some(0x3E), InsnFormat::VRSa, None); // store multiple
+
+        // VRS-b: opcode(8) | V1(4) R3(4) | B2(4) D2(12) | M4(4) _(4) | opcode2(8)
+        self.add("VLVG",  0xE7, Some(0x22), InsnFormat::VRSb, None); // load VR from GR element
+
+        // VRS-c: opcode(8) | R1(4) V3(4) | B2(4) D2(12) | M4(4) _(4) | opcode2(8)
+        self.add("VLGV",  0xE7, Some(0x21), InsnFormat::VRSc, None); // load GR from VR element
+
+        // VRI-a: opcode(8) | V1(4) _(4) | I2(16) | M3(4) _(4) | opcode2(8)
+        self.add("VREPI", 0xE7, Some(0x45), InsnFormat::VRIa, None); // replicate immediate
+        self.add("VLEI",  0xE7, Some(0x40), InsnFormat::VRIa, None); // load element immediate (approx)
+
+        // VRI-c: opcode(8) | V1(4) V3(4) | I2(16) | M4(4) _(4) | opcode2(8)
+        self.add("VREP",  0xE7, Some(0x4D), InsnFormat::VRIc, None); // replicate
+
+        // String instructions (VRR-b)
+        self.add("VFAE",  0xE7, Some(0x82), InsnFormat::VRRb, None); // find any element equal
+        self.add("VFEE",  0xE7, Some(0x80), InsnFormat::VRRb, None); // find element equal
+        self.add("VFENE", 0xE7, Some(0x81), InsnFormat::VRRb, None); // find element not equal
+        self.add("VISTR", 0xE7, Some(0x5C), InsnFormat::VRRa, None); // isolate string
+
+        // VRR-c type — additional
+        self.add("VSCBI", 0xE7, Some(0xF5), InsnFormat::VRRc, None); // subtract with borrow indication
+        self.add("VACC",  0xE7, Some(0xF1), InsnFormat::VRRc, None); // add with carry
+        self.add("VFM",   0xE7, Some(0xE7), InsnFormat::VRRb, None); // FP multiply
+        self.add("VFD",   0xE7, Some(0xE5), InsnFormat::VRRb, None); // FP divide
+    }
+
     /// Look up an instruction definition by mnemonic.
     pub fn lookup(&self, mnemonic: &str) -> Option<&InsnDef> {
         self.instructions.get(&mnemonic.to_uppercase())
@@ -615,6 +767,20 @@ pub fn encode_instruction(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, 
         InsnFormat::SSb => encode_ssb(def, ops),
         InsnFormat::SSE => encode_sse(def, ops),
         InsnFormat::SSF => encode_ssf(def, ops),
+        InsnFormat::VRRa => encode_vrra(def, ops),
+        InsnFormat::VRRb => encode_vrrb(def, ops),
+        InsnFormat::VRRc => encode_vrrc(def, ops),
+        InsnFormat::VRRd => encode_vrrd(def, ops),
+        InsnFormat::VRRe => encode_vrre(def, ops),
+        InsnFormat::VRIa => encode_vria(def, ops),
+        InsnFormat::VRIb => encode_vrib(def, ops),
+        InsnFormat::VRIc => encode_vric(def, ops),
+        InsnFormat::VRSa => encode_vrsa(def, ops),
+        InsnFormat::VRSb => encode_vrsb(def, ops),
+        InsnFormat::VRSc => encode_vrsc(def, ops),
+        InsnFormat::VRV => encode_vrv(def, ops),
+        InsnFormat::VRX => encode_vrx(def, ops),
+        InsnFormat::VSI => encode_vsi(def, ops),
     }
 }
 
@@ -913,6 +1079,240 @@ fn encode_ssf(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError>
         d1 as u8,
         (ops.b2 << 4) | ((d2 >> 8) as u8 & 0x0F),
         d2 as u8,
+    ])
+}
+
+// ---------------------------------------------------------------------------
+//  Vector instruction encoders
+// ---------------------------------------------------------------------------
+
+/// Helper: RXB (register extension bits) for vector registers V1..V4.
+/// Bit 0 = high bit of V1, bit 1 = high bit of V2, bit 2 = high bit of V3, bit 3 = high bit of V4.
+fn rxb(v1: u8, v2: u8, v3: u8, v4: u8) -> u8 {
+    let b0 = if v1 > 15 { 0x08 } else { 0 };
+    let b1 = if v2 > 15 { 0x04 } else { 0 };
+    let b2 = if v3 > 15 { 0x02 } else { 0 };
+    let b3 = if v4 > 15 { 0x01 } else { 0 };
+    b0 | b1 | b2 | b3
+}
+
+// VRR-a: [op(8) | V1(4) V2(4) | _(8) | M5(4) M4(4) | M3(4) RXB(4) | op2(8)]
+fn encode_vrra(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, ops.v2, 0, 0);
+    Ok(vec![
+        def.opcode as u8,
+        ((ops.v1 & 0x0F) << 4) | (ops.v2 & 0x0F),
+        0x00,
+        (ops.m5 << 4) | (ops.m4_v & 0x0F),
+        (ops.m3_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRR-b: [op(8) | V1(4) V2(4) | V3(4) _(4) | _(4) M5(4) | _(4) M4(4) RXB(4) | op2(8)]
+fn encode_vrrb(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, ops.v2, ops.v3, 0);
+    Ok(vec![
+        def.opcode as u8,
+        ((ops.v1 & 0x0F) << 4) | (ops.v2 & 0x0F),
+        ((ops.v3 & 0x0F) << 4),
+        ops.m5 & 0x0F,
+        (ops.m4_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRR-c: [op(8) | V1(4) V2(4) | V3(4) _(4) | M6(4) M5(4) | M4(4) RXB(4) | op2(8)]
+fn encode_vrrc(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, ops.v2, ops.v3, 0);
+    Ok(vec![
+        def.opcode as u8,
+        ((ops.v1 & 0x0F) << 4) | (ops.v2 & 0x0F),
+        ((ops.v3 & 0x0F) << 4),
+        (ops.m6 << 4) | (ops.m5 & 0x0F),
+        (ops.m4_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRR-d: [op(8) | V1(4) V2(4) | V3(4) M5(4) | _(8) | V4(4) RXB(4) | op2(8)]
+fn encode_vrrd(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, ops.v2, ops.v3, ops.v4);
+    Ok(vec![
+        def.opcode as u8,
+        ((ops.v1 & 0x0F) << 4) | (ops.v2 & 0x0F),
+        ((ops.v3 & 0x0F) << 4) | (ops.m5 & 0x0F),
+        0x00,
+        ((ops.v4 & 0x0F) << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRR-e: [op(8) | V1(4) V2(4) | V3(4) M6(4) | _(4) M5(4) | V4(4) RXB(4) | op2(8)]
+fn encode_vrre(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, ops.v2, ops.v3, ops.v4);
+    Ok(vec![
+        def.opcode as u8,
+        ((ops.v1 & 0x0F) << 4) | (ops.v2 & 0x0F),
+        ((ops.v3 & 0x0F) << 4) | (ops.m6 & 0x0F),
+        ops.m5 & 0x0F,
+        ((ops.v4 & 0x0F) << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRI-a: [op(8) | V1(4) _(4) | I2(16) | M3(4) RXB(4) | op2(8)]
+fn encode_vria(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, 0, 0, 0);
+    Ok(vec![
+        def.opcode as u8,
+        (ops.v1 & 0x0F) << 4,
+        (ops.i2_v >> 8) as u8,
+        ops.i2_v as u8,
+        (ops.m3_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRI-b: [op(8) | V1(4) _(4) | I2(8) I3(8) | M4(4) RXB(4) | op2(8)]
+fn encode_vrib(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, 0, 0, 0);
+    Ok(vec![
+        def.opcode as u8,
+        (ops.v1 & 0x0F) << 4,
+        ops.i2_v as u8,
+        ops.i3_v,
+        (ops.m4_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRI-c: [op(8) | V1(4) V3(4) | I2(16) | M4(4) RXB(4) | op2(8)]
+fn encode_vric(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, 0, ops.v3, 0);
+    Ok(vec![
+        def.opcode as u8,
+        ((ops.v1 & 0x0F) << 4) | (ops.v3 & 0x0F),
+        (ops.i2_v >> 8) as u8,
+        ops.i2_v as u8,
+        (ops.m4_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRS-a: [op(8) | V1(4) V3(4) | B2(4) D2(12) | M4(4) RXB(4) | op2(8)]
+fn encode_vrsa(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let d = ops.d2;
+    if d > 0xFFF {
+        return Err(EncodeError::DisplacementRange(d as i64));
+    }
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, 0, ops.v3, 0);
+    Ok(vec![
+        def.opcode as u8,
+        ((ops.v1 & 0x0F) << 4) | (ops.v3 & 0x0F),
+        (ops.b2 << 4) | ((d >> 8) as u8 & 0x0F),
+        d as u8,
+        (ops.m4_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRS-b: [op(8) | V1(4) R3(4) | B2(4) D2(12) | M4(4) RXB(4) | op2(8)]
+fn encode_vrsb(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let d = ops.d2;
+    if d > 0xFFF {
+        return Err(EncodeError::DisplacementRange(d as i64));
+    }
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, 0, 0, 0);
+    Ok(vec![
+        def.opcode as u8,
+        ((ops.v1 & 0x0F) << 4) | (ops.r3 & 0x0F),
+        (ops.b2 << 4) | ((d >> 8) as u8 & 0x0F),
+        d as u8,
+        (ops.m4_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRS-c: [op(8) | R1(4) V3(4) | B2(4) D2(12) | M4(4) RXB(4) | op2(8)]
+fn encode_vrsc(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let d = ops.d2;
+    if d > 0xFFF {
+        return Err(EncodeError::DisplacementRange(d as i64));
+    }
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(0, 0, ops.v3, 0);
+    Ok(vec![
+        def.opcode as u8,
+        (ops.r1 << 4) | (ops.v3 & 0x0F),
+        (ops.b2 << 4) | ((d >> 8) as u8 & 0x0F),
+        d as u8,
+        (ops.m4_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRV: [op(8) | V1(4) V2(4) | B2(4) D2(12) | M3(4) RXB(4) | op2(8)]
+fn encode_vrv(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let d = ops.d2;
+    if d > 0xFFF {
+        return Err(EncodeError::DisplacementRange(d as i64));
+    }
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, ops.v2, 0, 0);
+    Ok(vec![
+        def.opcode as u8,
+        ((ops.v1 & 0x0F) << 4) | (ops.v2 & 0x0F),
+        (ops.b2 << 4) | ((d >> 8) as u8 & 0x0F),
+        d as u8,
+        (ops.m3_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VRX: [op(8) | V1(4) X2(4) | B2(4) D2(12) | M3(4) RXB(4) | op2(8)]
+fn encode_vrx(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let d = ops.d2;
+    if d > 0xFFF {
+        return Err(EncodeError::DisplacementRange(d as i64));
+    }
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, 0, 0, 0);
+    Ok(vec![
+        def.opcode as u8,
+        ((ops.v1 & 0x0F) << 4) | (ops.x2 & 0x0F),
+        (ops.b2 << 4) | ((d >> 8) as u8 & 0x0F),
+        d as u8,
+        (ops.m3_v << 4) | rxb_val,
+        op2,
+    ])
+}
+
+// VSI: [op(8) | I3(8) | B2(4) D2(12) | V1(4) RXB(4) | op2(8)]
+fn encode_vsi(def: &InsnDef, ops: &InsnOperands) -> Result<Vec<u8>, EncodeError> {
+    let d = ops.d2;
+    if d > 0xFFF {
+        return Err(EncodeError::DisplacementRange(d as i64));
+    }
+    let op2 = def.opcode2.unwrap_or(0);
+    let rxb_val = rxb(ops.v1, 0, 0, 0);
+    Ok(vec![
+        def.opcode as u8,
+        ops.i3_v,
+        (ops.b2 << 4) | ((d >> 8) as u8 & 0x0F),
+        d as u8,
+        ((ops.v1 & 0x0F) << 4) | rxb_val,
+        op2,
     ])
 }
 

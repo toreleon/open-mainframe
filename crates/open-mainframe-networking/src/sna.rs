@@ -226,6 +226,49 @@ impl Lu1PrinterSession {
 }
 
 // ---------------------------------------------------------------------------
+// NET-101.3b — LU Type 3 (DSC/3270 Printer)
+// ---------------------------------------------------------------------------
+
+/// An LU 3 printer session supporting 3270 printer data streams (DSC).
+#[derive(Debug)]
+pub struct Lu3PrinterSession {
+    pub lu_name: String,
+    pub output: Vec<u8>,
+    pub page_count: u32,
+    pub max_print_line: u16,
+}
+
+impl Lu3PrinterSession {
+    pub fn new(lu_name: impl Into<String>) -> Self {
+        Self {
+            lu_name: lu_name.into(),
+            output: Vec::new(),
+            page_count: 0,
+            max_print_line: 132,
+        }
+    }
+
+    /// Process a 3270 printer data stream (Write command + data).
+    pub fn process_print_command(&mut self, cmd: Command3270, data: &[u8]) {
+        match cmd {
+            Command3270::Write | Command3270::EraseWrite => {
+                self.output.extend_from_slice(data);
+            }
+            Command3270::EraseWriteAlternate | Command3270::EraseAllUnprotected => {
+                self.page_count += 1;
+                self.output.clear();
+            }
+            _ => {}
+        }
+    }
+
+    /// Drain the accumulated print output.
+    pub fn drain_output(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.output)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // NET-101.4 — Session BIND Parameters
 // ---------------------------------------------------------------------------
 
@@ -395,5 +438,39 @@ mod tests {
         let primary = BindParameters::new(LuType::Lu2, 3840).unwrap();
         let secondary = BindParameters::new(LuType::Lu0, 2048).unwrap();
         assert!(BindParameters::negotiate(&primary, &secondary).is_err());
+    }
+
+    // NET-101.3b — LU 3 tests
+    #[test]
+    fn lu3_printer_write() {
+        let mut printer = Lu3PrinterSession::new("PRT3270");
+        printer.process_print_command(Command3270::Write, b"Report line 1");
+        assert_eq!(printer.output, b"Report line 1");
+    }
+
+    #[test]
+    fn lu3_printer_erase_write() {
+        let mut printer = Lu3PrinterSession::new("PRT3270");
+        printer.process_print_command(Command3270::Write, b"old data");
+        printer.process_print_command(Command3270::EraseWrite, b"new data");
+        assert_eq!(printer.output, b"old datanew data");
+    }
+
+    #[test]
+    fn lu3_printer_page_eject() {
+        let mut printer = Lu3PrinterSession::new("PRT3270");
+        printer.process_print_command(Command3270::Write, b"page 1");
+        printer.process_print_command(Command3270::EraseAllUnprotected, &[]);
+        assert_eq!(printer.page_count, 1);
+        assert!(printer.output.is_empty());
+    }
+
+    #[test]
+    fn lu3_printer_drain() {
+        let mut printer = Lu3PrinterSession::new("PRT3270");
+        printer.process_print_command(Command3270::Write, b"data");
+        let out = printer.drain_output();
+        assert_eq!(out, b"data");
+        assert!(printer.output.is_empty());
     }
 }

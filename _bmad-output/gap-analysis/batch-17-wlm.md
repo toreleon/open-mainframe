@@ -477,3 +477,227 @@ Job class (A-Z, 0-9) is parsed as a JCL JOB parameter but is not used for WLM cl
 - [IBM z/OS WLM overview (IBM Documentation)](https://www.ibm.com/docs/en/zos/2.5.0?topic=management-workload-overview)
 - [Workload Management on z/OS — IBM Redbook SG24-6472](https://www.redbooks.ibm.com/abstracts/sg246472.html)
 - [z/OS WLM Health API (z/OS 2.4+)](https://www.ibm.com/docs/en/zos/2.5.0?topic=services-health-api)
+
+## Implementation Status
+
+**Reviewed:** 2026-02-23
+**Crate:** `open-mainframe-wlm` (12 source files, 176 passing tests)
+**Compiler:** `cargo check` passes; `cargo test` passes (after minor fix to `health.rs` test import)
+
+### Fix Applied During Review
+
+- **health.rs** test module: Added missing `use crate::operator::WlmMode;` import so that tests referencing `WlmMode::Goal` and `WlmMode::Compat` compile correctly.
+
+### Service Definition & Policy (WLM-100)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| Service policy (named, activate/deactivate) | YES | `service.rs:109-186` — `ServicePolicy` with `new`, `activate`, `define_class`, `modify_class`, `remove_class`, `list_classes` |
+| Service class definition | YES | `service.rs:59-102` — `ServiceClass` with name, description, periods, cpu/storage critical flags |
+| Multi-period service class (up to 8 periods) | YES | `service.rs:90-96` — `add_period()` with goal, importance, duration; `goals.rs:204-238` — `WorkUnitTracker` for period transitions |
+| Report class | YES | `policy.rs:57-73` — `ReportClass` struct with name and description |
+| Workload grouping | YES | `policy.rs:17-49` — `Workload` with `add_class`, `remove_class` |
+| Service coefficients (CPU/MSO/IOC/SRB) | YES | `goals.rs:13-43` — `ServiceUnits` with cpu, mso, ioc, srb fields and `total()` |
+| Service unit calculation | YES | `goals.rs:32-42` — `total()` and `add()` methods |
+| Resource group definition | YES | `policy.rs:89-144` — `ResourceGroup` with CPU cap, memory limit, minimum, cap type |
+| Service definition composition | YES | `policy.rs:152-266` — `ServiceDefinition` wrapping policy + workloads + report classes + resource groups |
+| Service definition validation | YES | `policy.rs:215-253` — `validate()` checks workload/RG references and duplicate assignments |
+| JSON serialization/deserialization | YES | `policy.rs:256-265` — `to_json()` / `from_json()` |
+| Service definition ISPF panels | GAP | Not implemented (ISPF admin application) |
+| Batch utility IWMARIN0 | YES | `persistence.rs:142-163` — `export_all()` / `import_all()` equivalent |
+
+### Goal Types & Performance Index (WLM-102)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| Response time — average | YES | `service.rs:17-22` — `GoalType::ResponseTime { target_seconds, percentile }` |
+| Response time — percentile | YES | `service.rs:17-22` — percentile field in ResponseTime variant |
+| Execution velocity (1-99) | YES | `service.rs:24` — `GoalType::Velocity(u8)` |
+| Discretionary | YES | `service.rs:26` — `GoalType::Discretionary` |
+| Performance Index (PI) | YES | `goals.rs:52-108` — `PerformanceIndex` with `response_time()`, `velocity()`, `discretionary()`, `from_goal()` |
+| Goal adjustment algorithm | GAP | Dynamic dispatching priority adjustment not implemented |
+| Importance levels (1-5) | YES | `service.rs:30-37` — `Importance(u8)` with Ord |
+| Sliding window aggregation | YES | `goals.rs:127-198` — `SlidingWindow` with configurable duration, `add_sample`, `average`, `max_pi`, `expire` |
+| Importance-based prioritization | YES | `goals.rs:258-277` — `rank_by_urgency()` sorts by unmet goal, importance, PI |
+| Period transition tracking | YES | `goals.rs:204-238` — `WorkUnitTracker` with cumulative SU thresholds |
+
+### Classification Rules (WLM-101)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| Hierarchical rule tree | YES | `classify.rs:136-171` — `ClassificationRule` with priority ordering, AND-logic qualifiers |
+| Subsystem type — JES (batch) | YES | `classify.rs:214,234` — JES/JES2/JES3 parsing; qualifiers: JobClass, UserId, TransactionName |
+| Subsystem type — STC | YES | `classify.rs:222,240` — STC with ProcedureName, TransactionName |
+| Subsystem type — TSO | YES | `classify.rs:216,235` — TSO with UserId, PerformanceGroup, Accounting |
+| Subsystem type — OMVS | YES | `classify.rs:224,242` — OMVS with UserId, TransactionName |
+| Subsystem type — CICS | YES | `classify.rs:218,237` — CICS with TransactionName, LuName, SubsystemName |
+| Subsystem type — IMS | YES | `classify.rs:219,237` — IMS with TransactionName, LuName, SubsystemName |
+| Subsystem type — DB2 | YES | `classify.rs:220,238` — DB2 with TransactionName, SubsystemName, UserId |
+| Subsystem type — DDF | YES | `classify.rs:226,244` — DDF with TransactionName, UserId |
+| Subsystem type — MQ | YES | `classify.rs:221,239` — MQ with SubsystemName, TransactionName |
+| Subsystem type — ASCH | YES | `classify.rs:223,241` — ASCH with TransactionName, UserId |
+| Subsystem type — CB (WebSphere) | YES | `classify.rs:225,243` — CB with SubsystemName, TransactionName |
+| Subsystem type — IWEB | YES | `classify.rs:228,246` — IWEB with SubsystemName, TransactionName |
+| Default service class | YES | `classify.rs:264-271` — `Classifier::new(default_class)` with global default |
+| Subsystem-type default | YES | `classify.rs:288-296` — `set_subsystem_default()` / `subsystem_default()` |
+| Service class override | YES | `classify.rs:307-311` — checks `service_class_override` first |
+| Wildcard matching | YES | `classify.rs:124-131` — `*` for match-all, prefix `*` for starts-with |
+| Qualifier types (9 types) | YES | `classify.rs:76-95` — SubsystemType, SubsystemName, TransactionName, UserId, JobClass, Accounting, ProcedureName, LuName, PerformanceGroup |
+| LDAP classification | GAP | LDAP subsystem type not in enum (server name, client IP) |
+| TCP classification | GAP | TCP subsystem type not in enum (service name, port number) |
+
+### Resource Groups (WLM-103)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| CPU cap — percentage | YES | `policy.rs:96-97` — `cpu_limit: Option<f64>`, `set_cpu_limit()` |
+| CPU cap type (hard/soft) | YES | `policy.rs:78-84` — `CpuCapType::Hard` / `CpuCapType::Soft` |
+| Memory limit | YES | `policy.rs:100` — `memory_limit_mb: Option<u64>`, `set_memory_limit()` |
+| Minimum capacity guarantee | YES | `policy.rs:102` — `cpu_minimum: Option<f64>`, `set_cpu_minimum()` |
+| CPU cap — MSU | GAP | MSU (million service units) cap type not modeled separately |
+| CPU cap — CP count | GAP | Logical processor count limit not modeled |
+| Type 1-4 resource groups | GAP | Resource group types (single-system, sysplex-wide, tenant) not modeled |
+| Capping enforcement engine | YES | `capping.rs:86-245` — `CappingEngine` with throttle evaluation |
+| Throttle decisions | YES | `capping.rs:30-38` — `ThrottleAction::Allow`, `Throttle`, `AllowTemporary` |
+| Linux cgroup enforcement | YES | `capping.rs:198-216` — `CgroupCpuLimit`, `CgroupMemoryLimit` actions |
+| Kubernetes resource quotas | YES | `capping.rs:218-232` — `K8sResourceQuota` actions |
+| Utilization tracking | YES | `capping.rs:14-27` — `GroupUtilization` with CPU%, memory, HWM, work units |
+
+### WLM-Managed Initiators (WLM-104)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| Dynamic initiator start/stop | YES | `scheduling.rs:482-544` — `InitiatorScheduler::evaluate()` with start/stop decisions |
+| Job queue analysis | YES | `scheduling.rs:469-479` — `analyze_queue()` with distribution and goals-at-risk |
+| Job-class affinity | YES | `scheduling.rs:78-80` — `ManagedInitiator::supports_class()` |
+| SCHENV matching | YES | `scheduling.rs:449-453,516-519` — `is_schenv_available()` check before start |
+| Idle timeout management | YES | `scheduling.rs:439-441,490-498` — configurable idle timeout with stop decisions |
+| Initiator lifecycle | YES | `scheduling.rs:547-616` — `start_initiator`, `activate_initiator`, `idle_initiator`, `stop_initiator` |
+| CP/zIIP capacity analysis | GAP | Engine type distinction not modeled |
+| JES2 integration | GAP | No direct JES2 job queue integration (interface only) |
+
+### Enclaves (WLM-105)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| Create/delete enclave | YES | `enclave.rs:115-151,207-212` — `EnclaveManager::create()`, `complete()` |
+| Join/leave enclave | YES | `enclave.rs:154-184` — `join()` by correlator |
+| CPU time tracking | YES | `enclave.rs:187-203` — `record_cpu()` per participant |
+| Get correlator | YES | `enclave.rs:219-223` — `get_by_correlator()` |
+| Cross-address-space span | YES | `enclave.rs:176-183` — multiple participants from different subsystems |
+| Independent enclave classification | YES | `enclave.rs:138` — enclave has its own `service_class` |
+| Total service unit tracking | YES | `enclave.rs:70-76` — `total_service_units()` aggregates across participants |
+| Active enclave counts | YES | `enclave.rs:226-242` — `active_count()`, `active_by_subsystem()` |
+| Register/deregister participant | GAP | No explicit IWMEREG/IWMEDREG (join/leave covers core functionality) |
+| Query CPU time (IWMEQTME) | YES | `enclave.rs:65-67` — `total_cpu_seconds()` |
+| Enclave SRB dispatching | GAP | SRB dispatching model not implemented |
+
+### IWM Services API (WLM-106)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| IWMCLSFY | YES | `iwm.rs:104-116` — classify + report class lookup |
+| IWMCONN / IWMDISC | YES | `iwm.rs:121-153` — connect/disconnect subsystems with tokens |
+| IWMSSEL | YES | `iwm.rs:158-165` — select least-loaded available server |
+| IWMRPT | YES | `iwm.rs:170-178` — report transaction and compute PI sample |
+| IWMQRYS | YES | `iwm.rs:190-213` — query all service class info with PI |
+| IWMSRSRG / IWMSRSDG | YES | `iwm.rs:218-243` — register/deregister servers |
+| IWMWREG / IWMWDREG | GAP | Work manager register/deregister not modeled |
+| IWMSRSUP | GAP | Server status update not separately modeled |
+| IWMSCDEL | GAP | Signal delay (waiting for resource) not modeled |
+| IWMSCHDT | GAP | Schedule work to application environment not modeled |
+
+### Scheduling & Application Environments (WLM-107)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| Scheduling environment definition | YES | `scheduling.rs:154-216` — `SchedulingEnvironment` with resource list |
+| Resource state matching | YES | `scheduling.rs:191-198` — `is_available()` checks all resources |
+| Resource state tracking | YES | `scheduling.rs:201-206` — `set_resource_state()` |
+| Application environment | YES | `scheduling.rs:248-323` — `ApplicationEnvironment` with start procedure, start limit |
+| Server start/stop management | YES | `scheduling.rs:296-323` — `start_server()`, `server_ready()`, `stop_server()` |
+| Start-on-demand evaluation | YES | `scheduling.rs:368-390` — `AppEnvironmentManager::evaluate_start_on_demand()` |
+| Resource definition | YES | `scheduling.rs:127-145` — `ResourceDefinition` with Available/Unavailable/Unknown states |
+
+### Service Definition Persistence & Policy Activation (WLM-108)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| Policy store (couple dataset equivalent) | YES | `persistence.rs:19-170` — `PolicyStore` with store/load/list/remove |
+| VARY WLM,POLICY= activation | YES | `persistence.rs:103-132` — `activate()` with atomic swap |
+| Validation before activation | YES | `persistence.rs:110-115` — validates, keeps current on failure |
+| Export/import (IWMARIN0 equivalent) | YES | `persistence.rs:142-163` — `export_all()` / `import_all()` |
+| Deactivation (COMPAT mode) | YES | `persistence.rs:135-139` — `deactivate()` |
+| Cannot remove active policy | YES | `persistence.rs:62-66` — protection check |
+
+### Operator Commands & Monitoring (WLM-109)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| D WLM (display) | YES | `operator.rs:44-114` — `DisplayWlmResponse` with formatted console output |
+| VARY WLM,POLICY= | YES | `operator.rs:140-172` — `VaryWlmCommand::parse()` with VARY/V short forms |
+| VARY WLM,COMPAT | YES | `operator.rs:145,166-168` — `VaryWlmCommand::Compat` |
+| VARY WLM,APPLENV= | GAP | Application environment VARY command not parsed |
+| Prometheus metrics | YES | `operator.rs:204-275` — PI, work units, CPU%, memory, throttled, initiator/enclave counts |
+| SMF type 72 records | YES | `operator.rs:336-349` — `generate_type72()` workload activity |
+| SMF type 99 records | YES | `operator.rs:352-367` — `generate_type99()` policy changes |
+| RMF Workload Activity Report | YES | `operator.rs` — Prometheus metrics serve as RMF equivalent |
+
+### WLM Health API (WLM-110)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| GET /api/wlm/policy | YES | `health.rs:19-33,106-115` — `PolicyResponse` + builder |
+| GET /api/wlm/classes | YES | `health.rs:36-55,118-132` — `ClassesResponse` with PI, goal, importance |
+| GET /api/wlm/resource-groups | YES | `health.rs:58-77,135-149` — `ResourceGroupsResponse` |
+| GET /api/wlm/initiators | YES | `health.rs:80-92,152-166` — `InitiatorResponse` with state counts |
+| GET /api/wlm/enclaves | YES | `health.rs:95-101,169-177` — `EnclaveResponse` with by-subsystem breakdown |
+| JSON serialization | YES | `health.rs:182-184` — generic `to_json()` |
+
+### Couple Dataset & Sysplex
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| WLM couple dataset | YES | `persistence.rs` — `PolicyStore` serves as couple dataset equivalent |
+| Sysplex-wide policy activation | GAP | No multi-system sysplex coordination |
+| Cross-system resource groups | GAP | Resource groups are single-system only |
+
+### Subsystem Integration Hooks (WLM-111)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| CICS classification hook | GAP | No integration with open-mainframe-cics crate |
+| DB2 classification hook | GAP | No integration with open-mainframe-db2 crate |
+| IMS classification hook | GAP | No integration with open-mainframe-ims crate |
+| MQ classification hook | GAP | No integration with open-mainframe-mq crate |
+| JES2 initiator management hook | GAP | No integration with JES2 crate |
+
+### Summary
+
+| Category | Implemented | Gap | Total |
+|----------|------------|-----|-------|
+| Service Definition & Policy (WLM-100) | 12 | 1 | 13 |
+| Goal Types & Performance Index (WLM-102) | 9 | 1 | 10 |
+| Classification Rules (WLM-101) | 16 | 2 | 18 |
+| Resource Groups (WLM-103) | 9 | 3 | 12 |
+| WLM-Managed Initiators (WLM-104) | 6 | 2 | 8 |
+| Enclaves (WLM-105) | 8 | 2 | 10 |
+| IWM Services API (WLM-106) | 6 | 4 | 10 |
+| Scheduling & App Environments (WLM-107) | 7 | 0 | 7 |
+| Persistence & Activation (WLM-108) | 6 | 0 | 6 |
+| Operator Commands & Monitoring (WLM-109) | 6 | 1 | 7 |
+| Health API (WLM-110) | 6 | 0 | 6 |
+| Couple Dataset & Sysplex | 1 | 2 | 3 |
+| Subsystem Integration (WLM-111) | 0 | 5 | 5 |
+| **TOTAL** | **92** | **23** | **115** |
+
+**Implementation coverage: ~80%** of analyzed features are implemented in the `open-mainframe-wlm` crate with 176 passing tests.
+
+**Remaining gaps** are primarily:
+1. **Subsystem integration hooks** (WLM-111) — wiring WLM classification into CICS, DB2, IMS, MQ, JES2 crates
+2. **Sysplex coordination** — multi-system policy sharing and cross-system resource groups
+3. **Advanced IWM services** — IWMWREG, IWMSRSUP, IWMSCDEL, IWMSCHDT
+4. **LDAP/TCP subsystem types** — not included in classifier enum
+5. **MSU/CP-count caps and resource group types 1-4** — not modeled
+6. **Dynamic dispatching priority adjustment** — the goal adjustment algorithm
+7. **ISPF admin application** — UI for editing service definitions

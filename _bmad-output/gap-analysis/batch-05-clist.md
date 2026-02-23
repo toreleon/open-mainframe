@@ -305,3 +305,38 @@ CLIST's implementation depends heavily on TSO/E, which is also not implemented. 
 - [TSO Extensions CLISTs Implementation and Reference (SC28-1304)](http://bitsavers.trailing-edge.com/pdf/ibm/370/TSO_Extensions/SC28-1304-1_TSO_Extensions_CLISTS_Implementation_and_Reference_Dec85.pdf)
 - [CLIST — Wikipedia](https://en.wikipedia.org/wiki/CLIST)
 - [TSO CLIST Programming in z/OS (training material)](https://www.trainersfriend.com/A650-FirstSection.pdf)
+
+## Implementation Status
+
+> **Note**: The original gap analysis stated "No CLIST implementation exists." This is no longer accurate.
+> The `open-mainframe-clist` crate now contains a comprehensive implementation across 5 modules
+> (`parser.rs`, `interpreter.rs`, `functions.rs`, `io.rs`, `tso_bridge.rs`) with 90 passing tests.
+
+| # | Feature | Status |
+|---|---------|--------|
+| 1 | CLIST parser/interpreter (~25 statements) | YES |
+| 2 | Symbolic variables (&-prefix, substitution) | YES |
+| 3 | ~37 system control variables | YES (now implemented: added SYSSDATE, SYSJDATE, SYSSTIME, SYSNAME, SYSPROC, SYSPROMPT, SYSHSM) |
+| 4 | ~15 built-in functions (EVAL, SUBSTR, LENGTH, SYSINDEX, SYSCAPS, SYSLC, DATATYPE, STR, NRSTR, SYSNSUB, SYSDSN) | YES |
+| 5 | PROC statement (positional and keyword parameters) | YES |
+| 6 | SET (assignment, arithmetic via expression parser) | YES |
+| 7 | Control flow (IF/THEN/ELSE, DO WHILE/UNTIL, SELECT/WHEN/OTHERWISE, GOTO) | YES |
+| 8 | Terminal I/O (READ, READDVAL, WRITE, WRITENR, TERMIN) | YES |
+| 9 | File I/O (OPENFILE, GETFILE, PUTFILE, CLOSFILE) | YES |
+| 10 | CONTROL statement (13+ options: LIST/NOLIST, CONLIST/NOCONLIST, SYMLIST/NOSYMLIST, MSG/NOMSG, PROMPT/NOPROMPT, ASIS/CAPS, MAIN, FLUSH/NOFLUSH, NOEND) | YES (now implemented: added NOEND option) |
+| 11 | ERROR/ATTN handling (DO/END, OFF, RETURN) | YES |
+| 12 | DATA/ENDDATA sequences | YES |
+| 13 | Subprocedures (SYSCALL, SYSREF, GLOBAL, NGLOBAL) | YES (now implemented: added SYSREF statement) |
+| 14 | ISPF integration (ISPEXEC, ISREDIT via TsoEnvironment trait) | YES |
+| 15 | LISTDSI (dataset info retrieval with DatasetAttributes struct) | YES |
+| 16 | TSO command execution (TsoEnvironment trait + MockTsoEnvironment) | YES |
+| 17 | Nested CLIST invocation (EXEC statement) | YES |
+
+### Summary
+
+All 17 features from the gap analysis are now implemented. The crate compiles cleanly (`cargo check`)
+and all 90 unit tests pass (`cargo test`). During this review, the following small gaps were filled:
+
+- **SYSREF statement**: Added proper AST variant and parser/interpreter handling (was recognized as keyword but fell through to TsoCommand)
+- **NOEND control option**: Added to ControlOptions struct and CONTROL statement handler
+- **Missing system variables**: Added SYSSDATE, SYSJDATE, SYSSTIME, SYSNAME, SYSPROC, SYSPROMPT, SYSHSM

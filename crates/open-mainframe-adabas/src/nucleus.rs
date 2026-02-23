@@ -133,6 +133,78 @@ impl ProtectionLog {
     }
 }
 
+// ── CommandLog ─────────────────────────────────────────────────────
+
+/// Command log (CLOG): audit trail of all executed commands.
+#[derive(Debug, Clone)]
+pub struct CommandLog {
+    /// Log entries.
+    entries: Vec<CommandLogEntry>,
+    /// Whether the log is active.
+    pub active: bool,
+}
+
+/// A single command log entry.
+#[derive(Debug, Clone)]
+pub struct CommandLogEntry {
+    /// Sequence number.
+    pub sequence: u64,
+    /// Command code that was executed.
+    pub command_code: String,
+    /// File number.
+    pub file_number: u16,
+    /// ISN involved.
+    pub isn: Isn,
+    /// Response code returned.
+    pub response_code: u16,
+}
+
+impl CommandLog {
+    /// Create a new command log.
+    pub fn new(active: bool) -> Self {
+        Self {
+            entries: Vec::new(),
+            active,
+        }
+    }
+
+    /// Record a command execution.
+    pub fn record(
+        &mut self,
+        command_code: &str,
+        file_number: u16,
+        isn: Isn,
+        response_code: u16,
+    ) {
+        if !self.active {
+            return;
+        }
+        let seq = self.entries.len() as u64 + 1;
+        self.entries.push(CommandLogEntry {
+            sequence: seq,
+            command_code: command_code.to_string(),
+            file_number,
+            isn,
+            response_code,
+        });
+    }
+
+    /// Return all log entries.
+    pub fn entries(&self) -> &[CommandLogEntry] {
+        &self.entries
+    }
+
+    /// Return the number of entries.
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Clear the log.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
 // ── CommandQueue ───────────────────────────────────────────────────
 
 /// Queue for incoming ACB commands.
@@ -260,6 +332,8 @@ pub struct AdabasNucleus {
     pub protection_log: ProtectionLog,
     /// Command queue.
     pub command_queue: CommandQueue,
+    /// Command log (audit trail).
+    pub command_log: CommandLog,
     /// Work pool.
     pub work_pool: WorkPool,
     /// Whether the nucleus is running.
@@ -281,6 +355,7 @@ impl AdabasNucleus {
             transactions: TransactionManager::new(max_holds),
             protection_log: ProtectionLog::new(plog_active),
             command_queue: CommandQueue::new(cq_size),
+            command_log: CommandLog::new(true),
             work_pool: WorkPool::new(buf_size),
             running: false,
         }
@@ -361,6 +436,11 @@ impl AdabasNucleus {
             AcbCommand::Bt => self.execute_bt(acb),
             AcbCommand::Op => AcbResult::success(),
             AcbCommand::Cl => AcbResult::success(),
+            AcbCommand::Lf => AcbResult::success(), // LF: FDT data returned via record buffer
+            AcbCommand::Rc => AcbResult::success(), // RC: release resources
+            AcbCommand::Hi => self.execute_hi(acb),
+            AcbCommand::Ri => self.execute_ri(acb),
+            AcbCommand::Re => AcbResult::success(), // RE: ET data (simplified)
             _ => AcbResult::error(22), // Invalid command for this context
         }
     }
@@ -444,6 +524,24 @@ impl AdabasNucleus {
             Ok(_) => AcbResult::success(),
             Err(_) => AcbResult::error(9), // Transaction error
         }
+    }
+
+    fn execute_hi(&mut self, acb: &Acb) -> AcbResult {
+        match self
+            .transactions
+            .hold_queue
+            .hold(acb.file_number, acb.isn)
+        {
+            Ok(()) => AcbResult::success().with_isn(acb.isn),
+            Err(_) => AcbResult::error(145), // Hold queue overflow
+        }
+    }
+
+    fn execute_ri(&mut self, acb: &Acb) -> AcbResult {
+        self.transactions
+            .hold_queue
+            .release(acb.file_number, acb.isn);
+        AcbResult::success().with_isn(acb.isn)
     }
 
     fn execute_bt(&mut self, acb: &Acb) -> AcbResult {

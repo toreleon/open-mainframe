@@ -171,6 +171,111 @@ impl TaskScheduler {
 }
 
 // ---------------------------------------------------------------------------
+//  Program management (LINK / XCTL / TRANSFER CONTROL)
+// ---------------------------------------------------------------------------
+
+/// Result of a DC program transfer operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransferResult {
+    /// Program was found and control transferred.
+    Ok,
+    /// Program not found.
+    ProgramNotFound,
+}
+
+/// Program-to-program communication and task information.
+///
+/// Provides LINK, XCTL, TRANSFER CONTROL, ATTACH, and various ACCEPT
+/// operations for DC applications.
+#[derive(Debug, Default)]
+pub struct DcRuntime {
+    /// Call stack for LINK (programs that expect return).
+    link_stack: Vec<String>,
+    /// Current program name.
+    pub current_program: Option<String>,
+    /// Current task code.
+    pub task_code: Option<String>,
+    /// Current terminal ID.
+    pub terminal_id: Option<String>,
+    /// Current user ID.
+    pub user_id: Option<String>,
+    /// System log entries.
+    pub log: Vec<String>,
+    /// Snap dump entries.
+    pub snaps: Vec<String>,
+}
+
+impl DcRuntime {
+    /// Create a new DC runtime.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// LINK: call a subroutine program, pushing current onto the stack.
+    pub fn link(&mut self, program: &str) -> TransferResult {
+        if let Some(ref current) = self.current_program {
+            self.link_stack.push(current.clone());
+        }
+        self.current_program = Some(program.to_uppercase());
+        TransferResult::Ok
+    }
+
+    /// Return from a LINKed program to the caller.
+    pub fn return_from_link(&mut self) -> TransferResult {
+        if let Some(caller) = self.link_stack.pop() {
+            self.current_program = Some(caller);
+            TransferResult::Ok
+        } else {
+            TransferResult::ProgramNotFound
+        }
+    }
+
+    /// XCTL: transfer control to another program (no return expected).
+    pub fn xctl(&mut self, program: &str) -> TransferResult {
+        self.current_program = Some(program.to_uppercase());
+        // XCTL does not push the stack -- no return expected.
+        TransferResult::Ok
+    }
+
+    /// TRANSFER CONTROL: transfer to another system/program.
+    pub fn transfer_control(&mut self, program: &str) -> TransferResult {
+        self.current_program = Some(program.to_uppercase());
+        self.link_stack.clear();
+        TransferResult::Ok
+    }
+
+    /// SNAP: write a diagnostic snapshot.
+    pub fn snap(&mut self, message: &str) {
+        self.snaps.push(message.to_string());
+    }
+
+    /// WRITE TO LOG: write a message to the system log.
+    pub fn write_to_log(&mut self, message: &str) {
+        self.log.push(message.to_string());
+    }
+
+    /// ACCEPT TASK CODE: retrieve the current task code.
+    pub fn accept_task_code(&self) -> Option<&str> {
+        self.task_code.as_deref()
+    }
+
+    /// ACCEPT TERMINAL ID: retrieve the terminal identifier.
+    pub fn accept_terminal_id(&self) -> Option<&str> {
+        self.terminal_id.as_deref()
+    }
+
+    /// ACCEPT USER ID: retrieve the authenticated user.
+    pub fn accept_user_id(&self) -> Option<&str> {
+        self.user_id.as_deref()
+    }
+
+    /// Return the depth of the LINK call stack.
+    pub fn link_depth(&self) -> usize {
+        self.link_stack.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
 //  Scratch area
 // ---------------------------------------------------------------------------
 

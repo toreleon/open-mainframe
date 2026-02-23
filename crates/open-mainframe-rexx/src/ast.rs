@@ -86,6 +86,12 @@ pub enum ClauseBody {
     Procedure { expose: Vec<String> },
     /// NUMERIC instruction (DIGITS, FUZZ, FORM).
     Numeric { setting: String, value: Expr },
+    /// INTERPRET instruction — dynamically execute REXX code from a string.
+    Interpret(Expr),
+    /// UPPER instruction (TSO/E extension) — convert variables to uppercase.
+    Upper(Vec<String>),
+    /// OPTIONS instruction — set language processor options.
+    Options(String),
     /// Host command (unrecognized instruction → sent to ADDRESS).
     Command(Expr),
 }

@@ -528,3 +528,127 @@ The `open-mainframe` codebase has **no direct SMF implementation** but contains 
 - IBM SMF Tools (GitHub) — https://github.com/IBM/IBM-Z-zOS/tree/main/SMF-Tools
 - Watson Walker SMF Reference — https://watsonwalker.com/wp-content/uploads/2020/11/SMF-Reference-20201107.pdf
 - Wikipedia: IBM System Management Facilities — https://en.wikipedia.org/wiki/IBM_System_Management_Facilities
+
+## Implementation Status
+
+Reviewed against crate `open-mainframe-smf` (`crates/open-mainframe-smf/src/`). All 164 tests pass after implementation changes.
+
+### SMF Record Infrastructure
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Standard header (18 bytes) | ✅ YES | `SmfHeader` in `record.rs` — SMFLEN, SMFSEG, SMFFLG, SMFRTY, SMFTME, SMFDTE, SMFSID |
+| Extended header (SMFSSID + SMFSTYP) | ✅ YES | `SmfHeader.subsystem_id` + `SmfHeader.subtype` fields |
+| Self-defining sections (triplets) | ✅ YES | `SmfTriplet` in `writer.rs` — offset/length/number with ser/deser |
+| Record type registry (0-255) | ✅ YES | `SmfRecordType` enum + `SmfRecordRegistry` with parser registration |
+| DT1 date format | ✅ YES | `SmfHeader::set_date()` encodes 0CYYDDDF packed decimal |
+| Time format (1/100ths since midnight) | ✅ YES | `SmfHeader::set_time()` encodes hundredths of seconds |
+| Record serialization | ✅ YES | `SmfHeader::to_bytes()`, `SmfRecord::to_bytes()` |
+| Record deserialization/parsing | ✅ YES | `SmfHeader::from_bytes()`, `SmfRecord::from_bytes()` |
+
+### SMF Configuration (SMFPRMxx)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| SMFPRMxx parmlib member | ✅ YES | `SmfPrmConfig::parse()` in `config.rs` |
+| SYS(TYPE/NOTYPE) parameters | ✅ YES | TYPE/NOTYPE parsing with range support (e.g. `70:79`) |
+| SYS(EXITS) parameters | ✅ YES | EXITS parsing with exit name list |
+| SYS(INTERVAL) parameter | ✅ YES | INTERVAL(SMF,HHMM) parsing |
+| SUBSYS() parameters | ✅ YES (now implemented) | `SubsysConfig` with per-subsystem TYPE filtering |
+| RECORDING(LOGSTREAM\|DATASET) | ✅ YES | `RecordingMode` enum with parsing |
+| DSNAME configuration | ✅ YES (now implemented) | `SmfPrmConfig.dataset_names` parsed from DSNAME() |
+| LSNAME/DEFAULTLSNAME | ✅ YES (now implemented) | `LsnameConfig` + `SmfPrmConfig.default_lsname` |
+| SET SMF=xx command | GAP | Dynamic reconfiguration not implemented |
+| D SMF,O command | GAP | Display command not implemented |
+
+### SMF Writing APIs
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| SMFWTM macro | ✅ YES | `SmfWriter::smfwtm()` with NOTYPE suppression |
+| SMFEWTM macro | ✅ YES | `SmfWriter::smfewtm()` with subsystem identification |
+| Record validation | ✅ YES | `SmfWriter::validate()` — size and type checks |
+| Buffer management | ✅ YES | Configurable `max_buffer_size`, auto-flush, manual flush |
+| User record types (128-255) | ✅ YES | `SmfRecordType::User(n)`, tested with type 200 |
+| File recording | ✅ YES | `SmfWriter::write_to_file()` + `to_dataset()` |
+
+### SMF Exit Framework
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| IEFU83 exit (SVC-path filter) | ✅ YES | `Iefu83Exit` — predicate-based record suppression |
+| IEFU84 exit (branch-entry) | ✅ YES | `Iefu84Exit` — stamps subsystem ID |
+| IEFU85 exit (cross-memory) | ✅ YES (now implemented) | `Iefu85Exit` — cross-memory filter with suppression predicate |
+| IEFU86 exit (extended header) | ✅ YES (now implemented) | `Iefu86Exit` — processes extended-header records only |
+| IFASMFEX dynamic registration | ✅ YES | `SmfExitRegistry` — register/deregister by name, type filtering |
+| Dynamic exit facility | ✅ YES | Pipeline execution with type filters, short-circuit on suppress |
+
+### SMF Dump/Processing Utilities
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| IFASMFDP (dataset dump) | ✅ YES | `SmfDumpProgram` in `dump.rs` — dump from bytes/records |
+| IFASMFDL (log stream dump) | GAP | No separate log-stream dump implementation |
+| IFAURP (usage reporting) | GAP | No type 89 usage reporting |
+| DATE/TIME/TYPE filters | ✅ YES | `DumpFilter` with include/exclude types, time range, date, system ID |
+| Job name filtering | ✅ YES | `DumpFilter.job_name_pattern` with wildcard support |
+| Record splitting by type | GAP | No split-to-separate-files feature |
+| Report formatting | ✅ YES | `SmfDumpProgram::format_report()` — human-readable output |
+| Binary output | ✅ YES | `SmfDumpProgram::to_binary_output()` with length-prefix format |
+
+### Type-Specific Record Implementations
+
+| Record Type | Status | Notes |
+|-------------|--------|-------|
+| Type 0 (IPL) | GAP | Not implemented |
+| Type 4 (Step termination) | ✅ YES | `SmfType4` in `record.rs` |
+| Type 5 (Job termination) | ✅ YES | `SmfType5` in `record.rs` |
+| Type 14 (Input dataset) | ✅ YES | `DatasetIoRecord::input()` in `dataset.rs` |
+| Type 15 (Output dataset) | ✅ YES | `DatasetIoRecord::output()` in `dataset.rs` |
+| Type 17 (Dataset scratch) | ✅ YES | `DatasetScratchRecord` in `dataset.rs` |
+| Type 18 (Dataset rename) | ✅ YES | `DatasetRenameRecord` in `dataset.rs` |
+| Type 26 (JES2 purge) | GAP | Not implemented |
+| Type 30 (Address space work) | ✅ YES | `SmfType30` + `Type30Record` with subtypes 1-5, `JobLifecycleCollector` |
+| Type 32 (TSO accounting) | GAP | Not implemented |
+| Type 42 (DFSMS statistics) | GAP | Enum entry exists but no record struct |
+| Type 62 (VSAM activity) | GAP | Not implemented |
+| Type 70 (CPU activity) | ✅ YES | `Type70Record` in `performance.rs` with utilization calc |
+| Type 71 (Paging activity) | ✅ YES | `Type71Record` in `performance.rs` |
+| Type 72 (Workload activity) | ✅ YES | `Type72Record` + `ServiceClassMetrics` in `performance.rs` |
+| Type 73 (Channel activity) | GAP | Not implemented |
+| Type 74 (Device activity) | ✅ YES | `Type74Record` + `VolumeDeviceMetrics` in `performance.rs` |
+| Type 75-79 (Page/swap, enqueue, etc.) | GAP | Not implemented |
+| Type 80 (RACF security) | ✅ YES | `Type80Record` in `type80.rs` — events, severity, filter |
+| Type 89 (Usage data) | GAP | Not implemented |
+| Type 92 (USS activity) | GAP | Not implemented |
+| Type 100/101 (DB2) | ✅ YES (partial) | `Db2AccountingRecord` (Type 101) in `subsystem.rs`; Type 100/102 missing |
+| Type 110 (CICS) | ✅ YES | `CicsTransactionRecord` in `subsystem.rs` |
+| Type 115/119 (MQ) | ✅ YES (partial) | `MqStatisticsRecord` mapped to Type 116; Type 115 missing |
+| Type 116 (TCP/IP) | ✅ YES (partial) | `TcpIpConnectionRecord` mapped to Type 119; true Type 116 missing |
+
+### Observability Bridge
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| SMF -> Prometheus (Type 30) | ✅ YES | `SmfToPrometheus::from_type30()` in `bridge.rs` |
+| SMF -> Prometheus (Type 72) | ✅ YES | `SmfToPrometheus::from_type72()` — WLM performance index |
+| SMF -> OpenTelemetry spans | ✅ YES | `SmfToOtel::from_type30_lifecycle()` — job lifecycle to traces |
+| Prometheus -> SMF reverse bridge | ✅ YES | `PrometheusToSmf::to_smf_record()` — metrics to Type 200 user records |
+| Prometheus text exposition | ✅ YES | `PrometheusMetric::to_prometheus_text()` |
+
+### Summary
+
+| Category | Total Features | Implemented | Gaps |
+|----------|---------------|-------------|------|
+| Record Infrastructure | 8 | 8 | 0 |
+| Configuration (SMFPRMxx) | 10 | 8 | 2 |
+| Writing APIs | 6 | 6 | 0 |
+| Exit Framework | 6 | 6 | 0 |
+| Dump Utilities | 7 | 5 | 2 |
+| Type-Specific Records | 26 | 17 | 9 |
+| Observability Bridge | 5 | 5 | 0 |
+| **Total** | **68** | **55** | **13** |
+
+**New implementations in this review**: IEFU85 exit, IEFU86 exit, SUBSYS() config parsing, DSNAME config, LSNAME/DEFAULTLSNAME config (5 features).
+
+**Remaining gaps**: SET SMF=xx command, D SMF,O command, IFASMFDL log stream dump, IFAURP usage reporting, record splitting by type, and several type-specific records (Types 0, 26, 32, 42, 62, 73, 75-79, 89, 92, plus missing subtypes for DB2/MQ/TCP/IP).

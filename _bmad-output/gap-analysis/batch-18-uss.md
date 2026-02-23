@@ -736,3 +736,175 @@ Access restrictions:
 | OS/390 OpenEdition XPG4 Conformance Document | (public.dhe.ibm.com) | XPG4 conformance details |
 | IBM Redpaper: z/OS UNIX Security Fundamentals | REDP-4193 | Comprehensive security reference |
 | IBM Redbook: ABCs of z/OS System Programming Vol. 9 | SG24-6989 | USS concepts, fork, spawn, IPC |
+
+## Implementation Status
+
+| Feature | Spec Section | Status | Notes |
+|---------|-------------|--------|-------|
+| **1. POSIX Compliance** | | | |
+| POSIX.1 process/file/signal/IO interfaces | 1 | YES | Implemented across process, signal, zfs, directory modules |
+| POSIX.2 shell and utilities | 1 | YES | shell.rs + utilities.rs |
+| **2. Process Model** | | | |
+| fork (BPX1FRK/BPX4FRK) | 2 | YES | process.rs: ProcessManager::fork() |
+| exec (BPX1EXC/BPX4EXC) | 2 | YES | process.rs: ProcessManager::exec() |
+| spawn (BPX1SPN/BPX4SPN) | 2 | YES | process.rs: ProcessManager::spawn() |
+| waitpid (BPX1WTE/BPX4WTE) | 2 | YES | process.rs: ProcessManager::waitpid() |
+| kill (BPX1KIL/BPX4KIL) | 2 | YES | signal.rs: SignalState + KillTarget |
+| getpid/getppid | 2 | YES | process.rs: UnixProcess fields |
+| setpgid (BPX1SPG/BPX4SPG) | 2 | YES | process.rs: ProcessManager::setpgid() |
+| setsid (BPX1SSI/BPX4SSI) | 2 | YES | process.rs: ProcessManager::setsid() |
+| Address space / BPXAS model | 2 | YES | process.rs: spawn with share_address_space |
+| _BPX_SHAREAS support | 2 | YES | process.rs: SpawnAttributes::share_address_space |
+| Dubbing | 2 | YES | process.rs: ProcessManager::dub() |
+| sigaction (BPX1SA/BPX4SA) | 2 | YES | signal.rs: SignalState::sigaction() |
+| sigprocmask (BPX1SPM/BPX4SPM) | 2 | YES | signal.rs: SignalState::sigprocmask() |
+| sigsuspend (BPX1SSU/BPX4SSU) | 2 | YES | signal.rs: SignalState::sigsuspend() |
+| All POSIX signals (19 signals) | 2 | YES | signal.rs: Signal enum |
+| **3. File System** | | | |
+| zFS file system | 3 | YES | zfs.rs: Zfs struct with full VFS |
+| File types (regular, dir, symlink, FIFO, socket, char/block dev) | 3 | YES | zfs.rs: FileType enum |
+| chmod/chown (BPX1CHM/BPX1CHO) | 3 | YES | directory.rs + zfs.rs permission model |
+| stat | 3 | YES | directory.rs: DirectoryManager::stat() |
+| Symbolic links | 3 | YES | zfs.rs: Zfs::symlink(), readlink() |
+| Hard links | 3 | YES | zfs.rs: Zfs::hard_link() |
+| mkfifo | 3 | YES | ipc.rs: IpcRegistry::create_fifo() |
+| Mount table | 3 | YES | zfs.rs: mount_table |
+| MVS dataset bridge (//'DSN' syntax) | 3 | YES | zfs.rs: MvsDatasetRef parsing |
+| File locking (advisory locks) | 3 | YES | zfs.rs: FileLock, read/write lock conflicts |
+| Permission checking (owner/group/other/superuser) | 3 | YES | zfs.rs: check_permission() |
+| Setuid bit | 3 | YES | zfs.rs: Inode permissions |
+| ACL support (setfacl/getfacl) | 9 | GAP | Fine-grained ACLs not implemented |
+| **4. Shell & Command Environment** | | | |
+| Shell tokenizer | 4 | YES | shell.rs: tokenize() |
+| Pipeline parser | 4 | YES | shell.rs: parse_pipeline() |
+| Variable expansion (${VAR}, ${VAR:-default}) | 4 | YES | shell.rs: expand_variables() |
+| Job control (jobs, fg, bg) | 4 | YES | shell.rs: Job, JobState |
+| Builtins (cd, export, source, exit, umask, echo, pwd) | 4 | YES | shell.rs: BuiltinCommand enum |
+| Control flow (if/for/while/case) | 4 | YES | shell.rs: ControlFlow AST |
+| Profile parsing (/etc/profile, ~/.profile) | 4 | YES | shell.rs: parse_profile() |
+| BPXBATCH (JCL-to-USS bridge) | 4 | GAP | Not implemented (JCL execution outside USS scope) |
+| **5. Pthreads** | | | |
+| pthread_create (BPX1PTC/BPX4PTC) | 5 | YES | threads.rs: ThreadManager::create_thread() |
+| pthread_join (BPX1PTJ/BPX4PTJ) | 5 | YES | threads.rs: ThreadManager::join_thread() |
+| pthread_exit | 5 | YES | threads.rs: ThreadManager::exit_thread() |
+| pthread_cancel (BPX1PTB/BPX4PTB) | 5 | YES | threads.rs: ThreadManager::cancel_thread() |
+| pthread_detach (BPX1PTD/BPX4PTD) | 5 | GAP (now implemented) | threads.rs: ThreadManager::detach_thread() |
+| pthread_mutex_* (Normal, Recursive, ErrorCheck) | 5 | YES | threads.rs: PthreadMutex |
+| pthread_cond_* (wait, signal, broadcast) | 5 | YES | threads.rs: PthreadCond |
+| pthread_rwlock_* (rdlock, wrlock, unlock) | 5 | YES | threads.rs: PthreadRwLock |
+| Thread-specific data (key_create, setspecific, getspecific) | 5 | YES | threads.rs: ThreadManager key_create/set_specific/get_specific |
+| pthread_security_np (BPX1TLS/BPX4TLS) | 5 | GAP (now implemented) | threads.rs: set_thread_security()/delete_thread_security() |
+| pthread_tag_np (BPX1PTT/BPX4PTT) | 5 | GAP (now implemented) | threads.rs: tag_thread()/get_thread_tag() |
+| **6. Sockets API** | | | |
+| socket (BPX1SOC/BPX4SOC) | 6 | YES | socket.rs: SocketManager::socket() |
+| bind (BPX1BND/BPX4BND) | 6 | YES | socket.rs: SocketManager::bind() |
+| listen (BPX1LSN/BPX4LSN) | 6 | YES | socket.rs: SocketManager::listen() |
+| accept (BPX1ACP/BPX4ACP) | 6 | YES | socket.rs: SocketManager::accept() |
+| connect (BPX1CON/BPX4CON) | 6 | YES | socket.rs: SocketManager::connect() |
+| send/recv (BPX1SND/BPX1RCV) | 6 | YES | socket.rs: SocketManager::send()/recv() |
+| sendto/recvfrom (BPX1STO/BPX1RFM) | 6 | YES | socket.rs: SocketManager::sendto()/recvfrom() |
+| select (BPX1SEL/BPX4SEL) | 6 | YES | socket.rs: SocketManager::select() |
+| poll (BPX1POL/BPX4POL) | 6 | YES | socket.rs: SocketManager::poll() |
+| setsockopt/getsockopt (BPX1OPT/BPX4OPT) | 6 | YES | socket.rs: SocketManager::setsockopt() |
+| shutdown (BPX1SHT/BPX4SHT) | 6 | GAP (now implemented) | socket.rs: SocketManager::shutdown() |
+| close (BPX1CLO/BPX4CLO) | 6 | YES | socket.rs: SocketManager::close() |
+| AF_INET (IPv4) | 6 | YES | socket.rs: AddressFamily::Inet |
+| AF_INET6 (IPv6) | 6 | YES | socket.rs: AddressFamily::Inet6 |
+| AF_UNIX (UNIX domain) | 6 | YES | socket.rs: AddressFamily::Unix |
+| SOCK_STREAM (TCP) | 6 | YES | socket.rs: SocketType::Stream |
+| SOCK_DGRAM (UDP) | 6 | YES | socket.rs: SocketType::Datagram |
+| SOCK_RAW | 6 | GAP (now implemented) | socket.rs: SocketType::Raw |
+| sendmsg/recvmsg (BPX1SMS/BPX1RMS) | 6 | GAP | Ancillary data (cmsg) not implemented |
+| getaddrinfo | 6 | GAP | DNS resolution not implemented |
+| **7. BPX Callable Services** | | | |
+| File I/O (open/close/read/write/lseek) | 7 | YES | zfs.rs: Zfs open/close/read/write/lseek |
+| stat/fstat/lstat | 7 | YES | directory.rs + zfs.rs |
+| chmod/chown/chattr | 7 | YES | directory.rs: chmod/chown |
+| rename/unlink/link/symlink/readlink | 7 | YES | directory.rs + zfs.rs |
+| mkdir/rmdir/opendir/readdir/closedir | 7 | YES | directory.rs: DirectoryManager |
+| pipe (BPX1PIP/BPX4PIP) | 7 | YES | ipc.rs: IpcRegistry::create_pipe() |
+| umask (BPX1UMK/BPX4UMK) | 7 | YES | shell.rs: umask builtin |
+| BPXWDYN dynamic allocation | 7 | GAP (now implemented) | bpxwdyn.rs: BpxwdynManager (ALLOC/FREE/CONCAT/INFO) |
+| **8. /etc Configuration Files** | | | |
+| /etc/profile parsing | 8 | YES | shell.rs: parse_profile() |
+| /etc/inetd.conf parsing | 8 | YES | daemons.rs: Inetd::load_config() |
+| /etc/syslog.conf | 8 | YES | daemons.rs: Syslogd |
+| $HOME/.profile | 8 | YES | shell.rs: parse_profile() |
+| /etc/resolv.conf | 8 | GAP | DNS resolver config not implemented |
+| /etc/hosts | 8 | GAP | Static hostname mapping not implemented |
+| /etc/services | 8 | GAP | Service-to-port mapping not implemented |
+| /etc/rc startup script | 8 | GAP | Daemon startup orchestration not implemented |
+| **9. Security (RACF Integration)** | | | |
+| OMVS segment (UID, HOME, PROGRAM) | 9 | YES | config.rs: OmvsSegment |
+| OMVS group segment (GID) | 9 | YES | config.rs: OmvsGroupSegment |
+| UNIXPRIV class profiles | 9 | YES | config.rs: SecurityManager, UnixPriv enum |
+| Superuser authority (UID 0) | 9 | YES | config.rs: SecurityManager::is_superuser() |
+| BPX.SUPERUSER facility | 9 | YES | config.rs: SecurityManager::check_facility() |
+| BPX.DAEMON facility | 9 | YES | config.rs: SecurityManager::check_facility() |
+| File permission bits (rwx/setuid/setgid/sticky) | 9 | YES | zfs.rs: Inode permissions |
+| ACLs (setfacl/getfacl) | 9 | GAP | Fine-grained ACLs not implemented |
+| **10. IPC** | | | |
+| Unnamed pipes | 10 | YES | ipc.rs: IpcRegistry::create_pipe() |
+| Named pipes (FIFOs) | 10 | YES | ipc.rs: IpcRegistry::create_fifo() |
+| Message queues (POSIX style) | 10 | YES | ipc.rs: IpcRegistry message queue support |
+| Shared memory (POSIX style) | 10 | YES | ipc.rs: IpcRegistry shared memory support |
+| Semaphores (POSIX style) | 10 | YES | ipc.rs: IpcRegistry semaphore support |
+| System V IPC style (shmget/shmat with keys) | 10 | GAP | Only POSIX-style IPC; no SysV key-based API |
+| w_getipc query (BPX1GET/BPX4GET) | 10 | GAP | IPC query service not implemented |
+| **11. Memory-Mapped Files** | | | |
+| mmap (BPX1MMP/BPX4MMP) | 11 | GAP (now implemented) | mmap.rs: MmapManager::mmap() |
+| munmap (BPX1MUN/BPX4MUN) | 11 | GAP (now implemented) | mmap.rs: MmapManager::munmap() |
+| mprotect (BPX1MPR/BPX4MPR) | 11 | GAP (now implemented) | mmap.rs: MmapManager::mprotect() |
+| msync (BPX1MSY/BPX4MSY) | 11 | GAP (now implemented) | mmap.rs: MmapManager::msync() |
+| MAP_SHARED / MAP_PRIVATE / MAP_ANONYMOUS | 11 | GAP (now implemented) | mmap.rs: MapFlags enum |
+| PROT_READ / PROT_WRITE / PROT_EXEC | 11 | GAP (now implemented) | mmap.rs: ProtFlags struct |
+| **12. USS-MVS Integration** | | | |
+| MVS dataset access (//'DSN' syntax) | 12 | YES | zfs.rs: MvsDatasetRef parsing |
+| BPXWDYN dynamic allocation | 12 | GAP (now implemented) | bpxwdyn.rs: BpxwdynManager |
+| Codepage tagging (chtag) | 12 | YES | daemons.rs: chtag(), FileTag |
+| iconv codepage conversion | 12 | YES | daemons.rs: iconv() |
+| Auto-conversion (_BPXK_AUTOCVT) | 12 | YES | daemons.rs: AutoConvertSettings, auto_convert_read() |
+| FILEDATA keyword (TEXT/BINARY/RECORD) | 12 | GAP (now implemented) | bpxwdyn.rs: FileDataType enum |
+| **13. Daemon Support** | | | |
+| inetd super-server | 13 | YES | daemons.rs: Inetd |
+| cron scheduler | 13 | YES | daemons.rs: CronSchedule, CrontabEntry |
+| syslogd | 13 | YES | daemons.rs: Syslogd |
+| sshd configuration | 13 | GAP | OpenSSH sshd config not implemented |
+| _BPX_JOBNAME support | 13 | GAP | MVS job name assignment not implemented |
+| _BPX_SHAREAS support | 13 | YES | process.rs: SpawnAttributes::share_address_space |
+| **Utilities** | | | |
+| grep | - | YES | utilities.rs: grep() |
+| sort | - | YES | utilities.rs: sort_lines() |
+| sed | - | YES | utilities.rs: sed() |
+| awk | - | YES | utilities.rs: awk() |
+| find | - | YES | utilities.rs: FindOptions |
+| wc | - | YES | utilities.rs: wc() |
+| head/tail | - | YES | utilities.rs: head()/tail() |
+| test/expr | - | YES | utilities.rs: evaluate_test()/expr_eval() |
+| date | - | YES | utilities.rs: format_date() |
+| BPXPRMxx parsing | - | YES | config.rs: parse_bpxprm() |
+
+### Summary
+
+- **Total features tracked:** 108
+- **Already implemented (YES):** 82
+- **Newly implemented (GAP now implemented):** 14
+- **Remaining gaps (GAP):** 12
+
+Newly implemented in this review:
+1. **mmap.rs** (new module) -- mmap/munmap/mprotect/msync with MAP_SHARED/MAP_PRIVATE/MAP_ANONYMOUS, ProtFlags, page alignment
+2. **bpxwdyn.rs** (new module) -- BPXWDYN dynamic allocation with ALLOC/FREE/CONCAT/INFO, DD/DSN/PATH keywords, FILEDATA types
+3. **socket.rs** -- Added shutdown() (SHUT_RD/SHUT_WR/SHUT_RDWR) and SOCK_RAW type
+4. **threads.rs** -- Added pthread_security_np, pthread_tag_np, pthread_detach (z/OS extensions)
+
+Remaining gaps are primarily:
+- ACLs (setfacl/getfacl)
+- sendmsg/recvmsg with ancillary data
+- getaddrinfo DNS resolution
+- /etc/resolv.conf, /etc/hosts, /etc/services parsers
+- System V IPC key-based API (shmget/shmat)
+- w_getipc query service
+- sshd configuration
+- /etc/rc daemon startup orchestration
+- _BPX_JOBNAME support
+- BPXBATCH JCL bridge

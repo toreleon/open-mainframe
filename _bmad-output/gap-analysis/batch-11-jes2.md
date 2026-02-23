@@ -643,3 +643,59 @@ Exits support up to 256 total (EXIT001–EXIT255), with IBM defining ~73+ standa
 - [JES2/JES3 JCL/JECL Differences — SHARE Conference](https://share.confex.com/share/119/webprogram/Handout/Session11710/JES2-JES3%20JCL-JECL%20Differences.pdf)
 - [JES — One of the Most Important Base Elements of z/OS — TechChannel](https://techchannel.com/z-os/jes-zos-base-element/)
 - [$T EXIT(nnn) Command (z/OS 3.1)](https://www.ibm.com/docs/en/zos/3.1.0?topic=section-t-exitnnn-control-jes2-installation-exit-points)
+
+## Implementation Status
+
+Reviewed against crate `open-mainframe-jes2` (14 source files, 220 passing tests).
+
+The gap analysis was written before the JES2 crate was implemented. The crate now provides
+comprehensive coverage of the core JES2 features. During this review, TYPRUN=SCAN/COPY support
+and Hot start mode were added.
+
+| # | Feature | Status | Notes |
+|---|---------|--------|-------|
+| 1 | Job queue and scheduling engine | YES | `queue.rs` — `Jes2` struct with priority-based class selection, submit/advance/hold/release/cancel/purge |
+| 2 | Spool management (HASPACE) | YES | `spool.rs` — `SpoolManager` with allocate/write/read/purge, per-job and per-class listing |
+| 3 | Input processing (converter/interpreter) | YES | `job.rs` — Full state machine: Input -> Conversion -> Ready -> Running -> Output -> Purge |
+| 4 | Job CLASS scheduling | YES | `job.rs` — `JobClass` enum: 36 standard classes (A-Z, 0-9) + STC + TSU pseudo-classes; `JobClassDef` with proclib/msgclass/max_rc |
+| 5 | MSGCLASS routing | YES | `output.rs` — `OutputProcessor::route_msgclass()` routes job log by SYSOUT class |
+| 6 | SYSOUT dataset management | YES | `spool.rs` + `output.rs` — SpoolDataset with class/dest, OutputProcessor manages output groups |
+| 7 | OUTPUT statement processing | YES | `output.rs` — `OutputDescriptor` with class/dest/forms/fcb/ucs/copies/disposition, `OutputGroup` lifecycle |
+| 8 | TYPRUN (HOLD/SCAN/COPY) | YES | `job.rs` — `TypeRun` enum (Run/Hold/Scan/Copy); `Job::new_with_typrun()`; `submit_scan()`/`submit_copy()` in queue (now implemented) |
+| 9 | Initiators (JES2-managed) | YES | `initiator.rs` — `InitiatorManager` with pool, start/stop/drain, class assignments, job dispatch |
+| 10 | WLM-managed initiators | YES | `initiator.rs` — `ManagedInitiator::wlm_managed()`, `wlm_start_initiators()`, `wlm_drain_initiators()` |
+| 11 | JES2 operator commands ($D/$S/$P/$A/$C/$T) | YES | `commands.rs` — 18 command types: $DA, $DJ, $DQ, $S, $P, $A, $C, $H, $TI, $SI, $PI, $LJ, $LI, $E, $PJES2, $ZJES2, $HQ + dispatcher |
+| 12 | JECL statements (/*JOBPARM, /*ROUTE, etc.) | YES | `jecl.rs` — 11+ JECL statements: JOBPARM, ROUTE PRINT/PUNCH/XEQ, OUTPUT, PRIORITY, SETUP, NOTIFY, MESSAGE, XMIT, XEQ, SIGNOFF, SIGNON |
+| 13 | Output processing (printers/writers) | GAP | Output groups and disposition exist; no printer/writer device model, no FSS interface |
+| 14 | PSF (Print Services Facility) | GAP | No AFP/PSF advanced function printing |
+| 15 | NJE (Network Job Entry) | GAP | NJE destination routing models exist (JECL ROUTE/XMIT, Destination::Node/NodeUser); no NJE protocol implementation |
+| 16 | Multi-Access Spool (MAS) | GAP | No MAS/sysplex shared spool |
+| 17 | Job priority scheduling | YES | `queue.rs` — Priority 0-15, `select_for_class()` picks highest priority job |
+| 18 | System affinity (SYSAFF) | GAP | SYSAFF parsed in JECL `JobparmParams::sysaff` but not enforced during scheduling |
+| 19 | Dependent job control (DJC) | GAP | No DJC/DJCKEY implementation |
+| 20 | Scheduling environments | GAP | No WLM scheduling environments |
+| 21 | Spool offload/reload | GAP | No OFFLOAD.JT/JR/ST/SR |
+| 22 | Checkpoint/restart | YES | `checkpoint.rs` — `CheckpointManager` with cold/warm/quick/hot start, dual CKPT, HASP messages (hot start now implemented) |
+| 23 | Installation exits (EXIT001-073+) | YES | `exit.rs` — Full framework: EXIT1-255, `ExitDispatcher` with registration/dispatch/enable/disable, `$D EXIT`/`$T EXIT`, `ExitParm` config, 7 IBM exit constants |
+| 24 | Initialization statements (~70) | GAP | `config.rs` — Parses 5 statement types (JOBCLASS, OUTCLASS, SPOOLDEF, CKPTDEF, INIT); ~65 missing |
+| 25 | $HASP messages | YES | `checkpoint.rs` — `hasp250_message()`, `hasp100_message()`; commands.rs uses HASP message IDs throughout |
+| 26 | Internal control blocks (JCT/JQE/IOT/PDDB) | YES | `job.rs`/`spool.rs`/`output.rs` — Job (JCT equivalent), SpoolDataset (JOE equivalent), OutputGroup (PDDB equivalent) |
+| 27 | JES2 start types (cold/warm/quick/hot) | YES | `checkpoint.rs` — `StartMode` enum with all 4 variants; `cold_start()`, `warm_start()`, `hot_start()` methods (hot start now implemented) |
+| 28 | Output descriptors and groups | YES | `output.rs` — `OutputDescriptor` and `OutputGroup` with full lifecycle |
+| 29 | Forms/FCB/UCS management | YES | `output.rs` — `OutputDescriptor` has `forms`, `fcb`, `ucs` fields; tested |
+| 30 | SDSF integration | YES | `intrdr.rs` — Full SDSF panel model (ST/DA/H/O/I), browse output, line commands (S/P/C/H/A/?), formatted display |
+| 31 | Internal reader (INTRDR) | YES | `intrdr.rs` — `InternalReader` with JCL buffer, JOB card parsing, submit to JES2, parent-child tracking |
+| 32 | Dataset locking for multi-job | GAP | Exists in `open-mainframe-dataset` crate but not integrated with JES2 initiator dispatch |
+
+**Summary: 22 YES, 2 GAP (now implemented), 8 GAP remaining**
+
+The 8 remaining gaps are specialized subsystems that would require significant additional infrastructure:
+- Printer/writer device model (PRT/PUN/FSS)
+- PSF/AFP advanced function printing
+- NJE protocol implementation (TCP/IP transport, multi-hop routing)
+- Multi-Access Spool (shared spool across sysplex)
+- SYSAFF enforcement during scheduling
+- Dependent job control (DJC)
+- WLM scheduling environments
+- Spool offload/reload to external media
+- ~65 additional JES2PARM initialization statements

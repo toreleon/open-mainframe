@@ -42,11 +42,14 @@ pub mod certificate;
 pub mod database;
 pub mod dataset;
 pub mod error;
+pub mod exits;
 pub mod profile;
 pub mod resource;
 pub mod saf;
+pub mod seclabel;
 pub mod setropts;
 pub mod types;
+pub mod utilities;
 
 pub use auth::{
     AuthResult, AuthService, PasswordChangeResult, PasswordPolicy, PassTicket,
@@ -68,6 +71,17 @@ pub use resource::{
 };
 pub use saf::{SafRouter, SafRc, RacfRc, RacrouteResult, ExtractResult};
 pub use setropts::{Setropts, SetroptsListResult, SystemOptions, LogOption, MacSettings, PasswordRules};
+pub use exits::{
+    AuthExitContext, EventContext, EventType, ExitAction, ExitManager, PasswordExitContext,
+    PasswordExitResult, VerifyExitContext,
+};
+pub use seclabel::{
+    MacCheckResult, MacReason, SeclabelManager, SecurityCategory, SecurityLabel, SecurityLevel,
+};
+pub use utilities::{
+    SearchUtilEntry, SearchUtilResult, UnloadRecord, UnloadResult, VerifyResult,
+    irrdbu00, irrut100, irrut200,
+};
 
 /// Convenience result type for RACF operations.
 pub type Result<T> = std::result::Result<T, RacfError>;

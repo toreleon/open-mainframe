@@ -43,6 +43,7 @@ chrono = "0.4"
 open-mainframe-racf = { workspace = true }
 open-mainframe-dataset = { workspace = true }
 open-mainframe-jes2 = { workspace = true }
+open-mainframe-jcl = { workspace = true }
 open-mainframe-tso = { workspace = true }
 open-mainframe-encoding = { workspace = true }
 

@@ -240,6 +240,208 @@ impl Default for MqPmo {
 }
 
 // ---------------------------------------------------------------------------
+//  Report options (MQRO_*)
+// ---------------------------------------------------------------------------
+
+/// Report options for MQMD.Report field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct MqReportOptions {
+    /// Confirm on arrival (COA).
+    pub coa: bool,
+    /// Confirm on delivery (COD).
+    pub cod: bool,
+    /// Exception report.
+    pub exception: bool,
+    /// Expiry report.
+    pub expiry: bool,
+}
+
+// ---------------------------------------------------------------------------
+//  MQPMO context options
+// ---------------------------------------------------------------------------
+
+/// Context options for MQPMO.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum MqPmoContext {
+    /// Default context (queue manager sets identity context).
+    #[default]
+    Default,
+    /// Set identity context fields.
+    SetIdentity,
+    /// Set all context fields.
+    SetAll,
+    /// Pass identity context from source message.
+    PassIdentity,
+    /// Pass all context from source message.
+    PassAll,
+}
+
+// ---------------------------------------------------------------------------
+//  MQDLH — Dead-Letter Header
+// ---------------------------------------------------------------------------
+
+/// MQDLH — Dead-Letter Header prepended to undeliverable messages.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Mqdlh {
+    /// Reason message was put on DLQ.
+    pub reason: u32,
+    /// Original destination queue name.
+    pub dest_q_name: String,
+    /// Original destination queue manager name.
+    pub dest_qmgr_name: String,
+    /// Format of the original message data.
+    pub format: String,
+    /// CCSID of original data.
+    pub ccsid: u32,
+    /// Encoding of original data.
+    pub encoding: u32,
+    /// Put application name.
+    pub put_appl_name: String,
+    /// Put application type.
+    pub put_appl_type: u32,
+    /// Date message was put on DLQ (YYYYMMDD).
+    pub put_date: String,
+    /// Time message was put on DLQ (HHMMSSTH).
+    pub put_time: String,
+}
+
+impl Default for Mqdlh {
+    fn default() -> Self {
+        Self {
+            reason: 0,
+            dest_q_name: String::new(),
+            dest_qmgr_name: String::new(),
+            format: String::new(),
+            ccsid: 819,
+            encoding: 546,
+            put_appl_name: String::new(),
+            put_appl_type: 0,
+            put_date: String::new(),
+            put_time: String::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  MQTM — Trigger Message
+// ---------------------------------------------------------------------------
+
+/// Trigger types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TriggerType {
+    /// No triggering.
+    None,
+    /// Trigger on first message arriving on empty queue.
+    First,
+    /// Trigger on every message arrival.
+    Every,
+    /// Trigger when queue depth reaches threshold.
+    Depth,
+}
+
+impl Default for TriggerType {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+/// MQTM — Trigger Message (sent to initiation queue when trigger fires).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Mqtm {
+    /// Queue name that triggered.
+    pub queue_name: String,
+    /// Process name.
+    pub process_name: String,
+    /// Trigger data.
+    pub trigger_data: String,
+    /// Application type.
+    pub appl_type: u32,
+    /// Application ID (program name).
+    pub appl_id: String,
+    /// Environment data.
+    pub env_data: String,
+    /// User data.
+    pub user_data: String,
+}
+
+// ---------------------------------------------------------------------------
+//  MQXQH — Transmission Queue Header
+// ---------------------------------------------------------------------------
+
+/// MQXQH — header prepended to messages on transmission queues.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Mqxqh {
+    /// Remote queue name.
+    pub remote_q_name: String,
+    /// Remote queue manager name.
+    pub remote_qmgr_name: String,
+    /// Embedded message descriptor.
+    pub msg_desc: Mqmd,
+}
+
+// ---------------------------------------------------------------------------
+//  MQRFH2 — Rules and Formatting Header v2
+// ---------------------------------------------------------------------------
+
+/// MQRFH2 — used for JMS headers, message properties, etc.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Mqrfh2 {
+    /// Format of data following this header.
+    pub format: String,
+    /// CCSID of the name/value data.
+    pub name_value_ccsid: u32,
+    /// Name/value folders (XML-like).
+    pub folders: Vec<Mqrfh2Folder>,
+}
+
+/// An RFH2 folder (XML-like named property group).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Mqrfh2Folder {
+    /// Folder name (e.g., "jms", "usr", "mcd").
+    pub name: String,
+    /// Properties within this folder.
+    pub properties: std::collections::HashMap<String, String>,
+}
+
+// ---------------------------------------------------------------------------
+//  Message Handle & Properties (MQ v7+ API)
+// ---------------------------------------------------------------------------
+
+/// A message handle for managing message properties.
+#[derive(Debug, Clone)]
+pub struct MqMessageHandle {
+    /// Handle identifier.
+    pub handle: u64,
+    /// Properties stored on this handle.
+    pub properties: std::collections::HashMap<String, MqPropertyValue>,
+}
+
+/// A message property value.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum MqPropertyValue {
+    /// Boolean property.
+    Bool(bool),
+    /// 8-bit integer.
+    Int8(i8),
+    /// 16-bit integer.
+    Int16(i16),
+    /// 32-bit integer.
+    Int32(i32),
+    /// 64-bit integer.
+    Int64(i64),
+    /// 32-bit float.
+    Float32(f32),
+    /// 64-bit float.
+    Float64(f64),
+    /// String property.
+    String(String),
+    /// Byte array property.
+    ByteString(Vec<u8>),
+    /// Null (property exists but has no value).
+    Null,
+}
+
+// ---------------------------------------------------------------------------
 //  Tests
 // ---------------------------------------------------------------------------
 
@@ -291,5 +493,67 @@ mod tests {
     #[test]
     fn test_msg_type_default() {
         assert_eq!(MqMsgType::default(), MqMsgType::Datagram);
+    }
+
+    #[test]
+    fn test_mqdlh_default() {
+        let dlh = Mqdlh::default();
+        assert_eq!(dlh.reason, 0);
+        assert!(dlh.dest_q_name.is_empty());
+        assert_eq!(dlh.ccsid, 819);
+    }
+
+    #[test]
+    fn test_mqtm_default() {
+        let tm = Mqtm::default();
+        assert!(tm.queue_name.is_empty());
+        assert!(tm.process_name.is_empty());
+    }
+
+    #[test]
+    fn test_trigger_type_default() {
+        assert_eq!(TriggerType::default(), TriggerType::None);
+    }
+
+    #[test]
+    fn test_mqxqh_default() {
+        let xqh = Mqxqh::default();
+        assert!(xqh.remote_q_name.is_empty());
+        assert!(xqh.remote_qmgr_name.is_empty());
+    }
+
+    #[test]
+    fn test_mqrfh2_default() {
+        let rfh2 = Mqrfh2::default();
+        assert!(rfh2.folders.is_empty());
+    }
+
+    #[test]
+    fn test_message_handle_properties() {
+        let mut handle = MqMessageHandle {
+            handle: 1,
+            properties: std::collections::HashMap::new(),
+        };
+        handle.properties.insert("Color".to_string(), MqPropertyValue::String("Red".to_string()));
+        handle.properties.insert("Weight".to_string(), MqPropertyValue::Int32(150));
+        assert_eq!(handle.properties.len(), 2);
+        assert_eq!(
+            handle.properties.get("Color"),
+            Some(&MqPropertyValue::String("Red".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_report_options_default() {
+        let ro = MqReportOptions::default();
+        assert!(!ro.coa);
+        assert!(!ro.cod);
+        assert!(!ro.exception);
+        assert!(!ro.expiry);
+    }
+
+    #[test]
+    fn test_pmo_context_default() {
+        assert_eq!(MqPmoContext::default(), MqPmoContext::Default);
     }
 }

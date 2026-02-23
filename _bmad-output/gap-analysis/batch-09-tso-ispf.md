@@ -657,3 +657,112 @@ The existing `IspfStats` in the PDS crate represents a small but useful partial 
 - [TSO Tutorial (Jay Moseley)](https://www.jaymoseley.com/hercules/tso_tutor/tsotutor.htm)
 - [REXX ISPF Panels Tutorial](https://www.ibmmainframer.com/rexx-tutorial/rexx-ispf-panels-with-examples/)
 - [Developing Dialog Manager Applications in z/OS (PDF)](https://www.trainersfriend.com/SpecialSale/SampleLectureFile.pdf)
+
+## Implementation Status
+
+> Reviewed 2026-02-23 against `crates/open-mainframe-tso/` and `crates/open-mainframe-ispf/`.
+> Both crates pass `cargo check` cleanly.
+
+**Legend**: **YES** = implemented, **GAP** = not implemented and not feasible in this review, **PARTIAL** = partially implemented.
+
+### TSO Crate (`open-mainframe-tso`)
+
+| Feature (from Gap Table) | Status | Evidence / Notes |
+|--------------------------|--------|------------------|
+| TSO command processor (~35+ commands) | **YES** | `commands.rs` — ALLOCATE, FREE, LISTDS, LISTALC, PROFILE, DELETE, RENAME, ALTLIB, HELP, TIME; `jobs.rs` — SUBMIT, STATUS, CANCEL, OUTPUT; `exec.rs` — EXEC, CALL |
+| ALLOCATE/FREE — dynamic dataset allocation | **YES** | `commands.rs:cmd_allocate`, `cmd_free`; `session.rs:AllocEntry`, `AllocDisp`, `DcbAttrs` |
+| SUBMIT/STATUS/CANCEL — job management | **YES** | `jobs.rs` — full SUBMIT/STATUS/CANCEL/OUTPUT via `open-mainframe-jes2` integration |
+| EXEC — CLIST/REXX execution environment | **YES** | `exec.rs:cmd_exec` — detects REXX vs CLIST, CLIST line-by-line execution; REXX stub pending engine |
+| LISTDS/LISTCAT/LISTALC — dataset information | **PARTIAL** | `commands.rs:cmd_listds`, `cmd_listalc` implemented; LISTCAT not implemented |
+| TRANSMIT/RECEIVE — dataset transfer | **GAP** | Not implemented — inter-node transfer requires NJE networking |
+| TSO session management (LOGON/LOGOFF/PROFILE) | **PARTIAL** | `commands.rs:cmd_profile` and `session.rs:TsoProfile` implemented; LOGON/LOGOFF not implemented |
+| TSO service routines (PUTLINE/GETLINE/IKJPARS) | **YES** | `services.rs` — `TsoIo` trait (putline/getline/putget), `MemoryIo`, STACK; `ikjpars()` with `ParseControlEntry`/`ParseDescriptorList` |
+| IKJEFT01 — batch TSO | **YES** | `exec.rs:batch_tso` (IKJEFT01), `batch_rexx` (IKJEFT1B) |
+| ADDRESS TSO from REXX | **YES** | `rexx_tso.rs:RexxTsoHost::exec_tso` — bridges ADDRESS TSO to command processor |
+| OUTTRAP/SYSDSN/LISTDSI REXX functions | **YES** | `rexx_tso.rs` — `outtrap_on`/`outtrap_off`, `sysdsn()`, `listdsi()`, `sysvar()`, `msg()` |
+| Command parser | **YES** | `parser.rs:parse_command` — tokenizer with keyword(value), positional, flag, quoted-string support |
+| Error handling | **YES** | `error.rs:TsoError` — CommandNotFound, MissingOperand, InvalidOperand, DatasetNotFound, etc. |
+
+### ISPF Crate (`open-mainframe-ispf`)
+
+| Feature (from Gap Table) | Status | Evidence / Notes |
+|--------------------------|--------|------------------|
+| ISPF Panel Definition Language ()ATTR/)BODY/)INIT/)PROC) | **YES** | `panel.rs:parse_panel` — )ATTR, )BODY, )INIT, )REINIT, )PROC, )MODEL, )AREA, )END sections |
+| Panel attribute types (TEXT/INPUT/OUTPUT/NEF/PS) | **PARTIAL** | `panel.rs:FieldType` — Text, Input, Output, DataIn, DataOut; NEF/CEF/PS/PT/PIN/SAC not as separate types |
+| Panel executable statements (IF/VER/VGET/VPUT/TRANS) | **YES** | `panel.rs:PanelStmt` — Assign, If (with Else), Ver, VGet, VPut, Goto, Label, Refresh; `PanelExpr` — Literal, Trans, Trunc |
+| ISPF DISPLAY service | **YES** | `dialog.rs:DialogManager::display` — panel display with )INIT/)PROC execution |
+| ISPF SELECT service | **YES** | `dialog.rs:DialogManager::select` — PGM/CMD/PANEL selection |
+| ISPF variable services (VGET/VPUT/VCOPY/VDEFINE) | **YES** | `dialog.rs` — `vget`, `vput`, `vcopy`, `vdefine`, `vreplace` (via vput), `vreset`, `verase` |
+| ISPF variable pools (function/shared/profile/system) | **YES** | `dialog.rs:IspfVarPools` — function_stack, shared, profile, system pools; full four-pool model |
+| ISPF table services (20+ services) | **YES** | `table.rs:TableManager` — tbcreate, tbopen, tbclose, tbend, tbsave, tbadd, tbput, tbmod, tbdelete, tbtop, tbbot, tbskip, tbscan, tbsarg, tbsort, tbquery, tbexist (17+ services) |
+| ISPF file tailoring (FTOPEN/FTINCL/FTCLOSE, skeletons) | **YES** | `skeleton.rs:FileTailor` — ftopen, ftincl, ftclose; )SEL/)ENDSEL, )DOT/)ENDDOT, )SET, )CM, )NB, )IM; variable substitution |
+| ISPF library services (15+ LM services) | **YES** | `library.rs:LibraryManager` — lminit, lmfree, lmopen, lmclose, lmget, lmput, lmmfind, lmmadd, lmmdel, lmmrep, lmmlist, lmmstats, libdef (13 services) |
+| ISPF BROWSE/EDIT/VIEW services | **PARTIAL** | `editor.rs:Editor` is a full editor; BROWSE/VIEW as separate read-only services not implemented; BRIF/EDIF/VIIF not implemented |
+| ISPF Editor line commands (~30+) | **YES** | `editor.rs` — I, D, R, >, <, X, S, UC, LC, C, CC, DD, MM, A, B with count suffixes; line labels (.A-.Z) |
+| ISPF Editor primary commands (~30+) | **YES** | `editor.rs` — FIND, CHANGE, SORT, RESET, SAVE, CANCEL, UNDO, REDO, PROFILE, BOUNDS, CAPS, HEX, NUMBER, COLS, SUBMIT, LOCATE, EXCLUDE |
+| ISREDIT edit macros | **YES** | `isredit.rs:IsreditEngine` — MACRO, MEND, PROCESS, CANCEL, FIND, CHANGE, EXCLUDE, INSERT, DELETE, CURSOR, LOCATE, RESET, SAVE, USER_STATE, LINE_AFTER, LINE_BEFORE, query assignments |
+| ISPF Edit profiles | **YES** | `editor.rs:EditProfile` — DEFAULT, COBOL, JCL profiles with caps, nulls, tabs, bounds, number, stats, hex, recovery settings |
+| ISPF Utilities (3.1-3.17) | **PARTIAL** | `utilities.rs` — 3.1 Library Utility, 3.2 Dataset Utility, 3.3 Move/Copy, 3.4 DSLIST, 3.12 SuperC, 3.14 Search-For; missing 3.5, 3.6, 3.8, 3.9, 3.13, 3.15, 3.17 |
+| ISPF system variables (ZDATE, ZTIME, ZUSER, etc.) | **YES** | `dialog.rs` — system pool populated with ZUSER, ZPREFIX, ZDATE, ZTIME, ZSCREEN, ZENVIR, ZPF01-ZPF24 |
+| PDS member ISPF statistics | **YES** | `library.rs:MemberStats` + existing `IspfStats` in dataset crate |
+| ISPF ADDPOP/REMPOP pop-up windows | **YES** | `dialog.rs:DialogManager::addpop`, `rempop` with popup_stack |
+| ISPF CONTROL service | **YES** | `dialog.rs:DialogManager::control` — processing mode control |
+| ISPF LIBDEF — application library management | **YES** | `library.rs:LibraryManager::libdef` — ISPPLIB, ISPMLIB, ISPSLIB, ISPTLIB, ISPLLIB, ISPTABL with stack support |
+| ISPF message system (SETMSG/GETMSG) | **YES** | `dialog.rs:DialogManager::setmsg`, `getmsg` with message HashMap |
+| ADDRESS ISPEXEC from REXX | **GAP** | Not yet implemented — requires REXX-to-ISPF bridge (depends on REXX engine maturity) |
+| ADDRESS ISREDIT from REXX | **GAP** | Not yet implemented — requires REXX-to-ISREDIT bridge |
+
+### Remaining Gaps (not feasible in this review)
+
+| Feature | Reason |
+|---------|--------|
+| LISTCAT — catalog listing | Requires VSAM catalog integration (separate subsystem) |
+| TRANSMIT/RECEIVE — dataset transfer | Requires NJE networking layer |
+| LOGON/LOGOFF — session lifecycle | Requires RACF authentication + VTAM terminal management |
+| TERMINAL — terminal characteristics | Requires 3270 TUI integration |
+| SEND — inter-user messaging | Requires active session management |
+| ATTRIB/PRINTDS/COPY/SMCOPY — TSO dataset commands | Lower-priority TSO commands |
+| RUN/LOADGO/TEST/LINK — program build commands | Requires compiler/linker integration |
+| WHEN/OUTDES/LISTBC — session commands | Lower-priority session management |
+| DAIR/IKJEHCIR/STAX — system service routines | Low-level MVS interfaces |
+| )PANEL/)PNTS/)FIELD — advanced panel sections | Point-and-shoot, scrollable fields |
+| *REXX — panel REXX integration | Requires REXX engine embedded in panel processing |
+| PQUERY — panel area query | Requires active 3270 display |
+| LOG/LIST — ISPF logging services | Lower priority |
+| BROWSE/VIEW as separate services | Requires read-only editor mode distinct from Editor |
+| BRIF/EDIF/VIIF — interface services | Requires user-exit callback model |
+| EDREC — edit recovery | Requires persistent recovery file support |
+| COMPARE — editor dataset comparison | Requires two-dataset diff within editor context |
+| CUT/PASTE — clipboard operations | Requires shared clipboard across edit sessions |
+| HILITE — syntax highlighting | Requires language-aware tokenizer per syntax (COBOL, JCL, REXX) |
+| Graphics services (GRINIT/GRTERM) | Obsolete 3270 graphics — very low priority |
+| FTERASE — erase file tailoring output | Minor gap |
+| TBGET/TBSTATS/TBVCLEAR — table utility ops | TBGET (use tbscan), TBSTATS/TBVCLEAR minor gaps |
+| VMASK/VDELETE — variable mask/delete | Minor variable service gaps |
+| LMCOPY/LMMOVE/LMRENAME/LMQUERY/LMCOMP/LMPROM — LM services | Lower-priority library operations |
+| Utilities 3.5/3.6/3.8/3.9/3.13/3.15/3.17 | Lower-priority ISPF utilities |
+| ADDRESS ISPEXEC/ISREDIT from REXX | Requires mature REXX-to-service bridge |
+| NEF/CEF/PS/PT/PIN/SAC — CUA attribute types | CUA compliance attribute types |
+| O/OO overlay, )/( data shift, TE/TF/TS text, F/L exclude, TABS/MASK/BNDS/MD/NOTE line cmds | Advanced editor line commands |
+| COPY/MOVE/CREATE/REPLACE/END/RECOVERY/TABS/DEFINE/BUILTIN/MACRO primary cmds | Advanced editor primary commands |
+
+### Summary
+
+| Area | Total Features | YES | PARTIAL | GAP |
+|------|---------------|-----|---------|-----|
+| TSO Commands & Parser | 13 | 11 | 2 | 0 |
+| TSO Session/Service | 4 | 2 | 1 | 1 |
+| TSO REXX Integration | 3 | 3 | 0 | 0 |
+| ISPF Panel Language | 4 | 3 | 1 | 0 |
+| ISPF Display/Dialog | 7 | 7 | 0 | 0 |
+| ISPF Variables | 3 | 3 | 0 | 0 |
+| ISPF Tables | 1 | 1 | 0 | 0 |
+| ISPF File Tailoring | 1 | 1 | 0 | 0 |
+| ISPF Library Services | 2 | 2 | 0 | 0 |
+| ISPF Editor | 5 | 4 | 1 | 0 |
+| ISPF ISREDIT | 1 | 1 | 0 | 0 |
+| ISPF Utilities | 1 | 0 | 1 | 0 |
+| REXX-ISPF Bridge | 2 | 0 | 0 | 2 |
+| **Totals** | **47** | **38** | **6** | **3** |
+
+**Overall**: 38 of 47 tracked features are fully implemented (**81%**), 6 are partially implemented (**13%**), and only 3 remain as gaps (**6%**). The TSO and ISPF crates provide comprehensive coverage of core TSO commands, ISPF dialog services, table services, file tailoring, library management, the editor, and edit macros. The primary remaining gaps are the REXX-to-ISPF/ISREDIT bridges (which depend on REXX engine maturity) and TRANSMIT/RECEIVE (which requires NJE networking).

@@ -515,3 +515,181 @@ pub mgmtclas: Option<String>,
 - [z/OS DFSMS Access Method Services for Catalogs (SC23-6854)](https://www.ibm.com/docs/en/zos/2.5.0?topic=dfsms-access-method-services-catalogs)
 - [z/OS Catalog Structure (IBM Docs)](https://www.ibm.com/docs/en/zos/2.4.0?topic=catalogs-catalog-structure)
 - [Data Facility Storage Management Subsystem — Wikipedia](https://en.wikipedia.org/wiki/Data_Facility_Storage_Management_Subsystem_(MVS))
+
+## Implementation Status
+
+> Reviewed 2026-02-23 against `crates/open-mainframe-dataset/src/` source.
+> `cargo check -p open-mainframe-dataset` passes clean.
+
+### SMS Policy Engine (`sms.rs` — 990 lines, `acs.rs` — 1072 lines)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Data class definitions | YES | `DataClass` struct with recfm, lrecl, blksize, space, retpd, expdt |
+| Storage class definitions | YES | `StorageClass` with `Accessibility` enum (read-only, read-write, no-access) |
+| Management class definitions | YES | `ManagementClass` with `BackupFrequency`, migration_age, retention |
+| Storage group definitions | YES | `StorageGroup` with `StorageGroupType`: Pool, Vio, Dummy, Tape |
+| ACS routine interpreter | YES | `AcsEngine` executes parsed ACS routines, four routine types |
+| ACS FILTLIST | YES | `FiltList` with `*` and `**` wildcard pattern matching |
+| ACS system variables | YES | `AcsContext` provides &DSN, &DSTYPE, &HLQ, &JOBNAME, &STEPNAME, &UNIT |
+| SCDS (Source Control Data Set) | YES | `SmsConfiguration` serves as SCDS |
+| ACDS (Active Control Data Set) | YES | `ActiveConfiguration` serves as ACDS with `activate()` method |
+| COMMDS | GAP | Sysplex concept — not applicable to single-system emulation |
+| ISMF panels | GAP | UI concept — out of scope for library crate |
+| SMS construct validation | YES | `validate()` method with `ValidationIssue` / `ValidationSeverity` |
+| z/OSMF Storage Management plugin | GAP | REST API — separate from core library |
+
+### ICF Catalog Structure (`icf.rs` — 1107 lines)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Master catalog | YES | `IcfCatalogSystem` with dedicated master `IcfCatalog` |
+| User catalogs | YES | Multiple user catalogs connected to master |
+| BCS (Basic Catalog Structure) | YES | `BcsEntry` with `BTreeMap`-based index, `BcsEntryType` enum |
+| VVDS | YES | `Vvds` struct with `VvdsRecord` entries |
+| VVR (VSAM Volume Record) | YES | `VvdsRecordType::Vvr` |
+| NVR (Non-VSAM Volume Record) | YES | `VvdsRecordType::Nvr` |
+| VVCR (Control Record) | YES | `VvdsRecordType::Vvcr` |
+| Alias definitions | YES | `BcsEntryType::Alias` with routing in catalog search |
+| Connector records | YES | `BcsEntryType::UserCatalog` in master catalog |
+| Catalog search order | YES | Alias lookup → user catalog → master catalog chain |
+| EXAMINE | YES | `IcfCatalog::examine()` — BCS structural integrity check |
+| DIAGNOSE | YES | `IcfCatalog::diagnose()` — BCS-VVDS synchronization verification |
+| BCS-VVDS-VTOC synchronization | YES | BCS-VVDS sync in icf.rs; VTOC in space.rs |
+| Catalog recovery (IMPORT CONNECT / EXPORT DISCONNECT) | GAP | Not implemented as distinct operations |
+
+### IDCAMS Utility (`idcams/` — mod.rs 1574 lines, commands.rs 202 lines, parser.rs 936 lines)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| DEFINE CLUSTER | YES | KSDS, ESDS, RRDS with key length, record size, CI size |
+| DEFINE GDG | YES | Full limit/scratch/empty support |
+| DEFINE AIX | YES | Functional with metadata file + BLDINDEX wiring |
+| DEFINE PATH | YES | Links AIX to base cluster |
+| DEFINE NONVSAM | YES | `define_nonvsam` catalogs non-VSAM datasets |
+| DEFINE ALIAS | YES | `define_alias_cmd` creates HLQ alias entries |
+| DELETE | YES | With PURGE, FORCE options |
+| ALTER | YES | NEWNAME, ADDVOLUMES, FREESPACE support |
+| LISTCAT | YES | LEVEL and ALL display options |
+| REPRO | YES | Full execution with FROMKEY/TOKEY, SKIP/COUNT |
+| PRINT | YES | CHARACTER, HEX, SKIP, COUNT |
+| VERIFY | YES | VSAM end-of-data pointer check |
+| EXAMINE | YES | `examine_cmd` — BCS integrity check via ICF |
+| DIAGNOSE | YES | `diagnose_cmd` — BCS-VVDS sync check via ICF |
+| EXPORT / IMPORT | YES | `export` / `import` — portable dataset copy with catalog |
+| BLDINDEX | YES | `bldindex` — builds alternate index from base cluster |
+
+### DFSMShsm (`hsm.rs` — 1679 lines)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| ML0 (Level 0) | YES | `StorageTier::Ml0` — active DASD |
+| ML1 (Level 1) | YES | `StorageTier::Ml1` — secondary DASD with RLE compression |
+| ML2 (Level 2) | YES | `StorageTier::Ml2` — tape tier |
+| HMIGRATE | YES | `Hsm::hmigrate()` with compression |
+| HRECALL | YES | `Hsm::hrecall()` with decompression |
+| HBACKUP | YES | `Hsm::hbackup()` — dataset backup |
+| HRECOVER | YES | `Hsm::hrecover()` — dataset recovery from backup |
+| ABARS | YES | `Abars` struct with `abackup()` / `arecover()`, `AggregateGroup` |
+| CDS (Control Data Sets) | YES | `HsmControlDataSets` with MCDS, BCDS, OCDS |
+| Age-based migration | YES | `Hsm::auto_migrate()` with days-since-reference threshold |
+| Automatic secondary space mgmt | YES | `Hsm::auto_backup()` with management-class-driven policies |
+| Management class integration | YES | `HsmConfig` uses management class backup frequency and migration age |
+| Compression | YES | `rle_compress` / `rle_decompress` for migration data |
+| Fast Subsequent Migration | GAP | Reconnect-without-data-movement optimization not implemented |
+| Cloud ML2 | GAP | S3-compatible object storage — out of scope for core library |
+
+### DFSMSdss (`dss.rs` — 1032 lines)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| DUMP (logical) | YES | `Dss::dump()` — dataset-level backup with serialization |
+| RESTORE (logical) | YES | `Dss::restore()` — dataset-level recovery |
+| COPY | YES | `Dss::copy()` — dataset copy between locations |
+| PRINT | YES | `Dss::print_dataset()` — dataset content display |
+| INCLUDE/EXCLUDE | YES | `DssFilter` with wildcard pattern matching |
+| Dump format (serialize/deserialize) | YES | `DumpHeader`, `DumpDatasetRecord`, `DumpDataset` |
+| DUMP (physical) | GAP | Track-level volume backup not implemented |
+| RESTORE (physical) | GAP | Track-level volume recovery not implemented |
+| Concurrent Copy | GAP | Hardware-dependent — not applicable |
+| FlashCopy | GAP | IBM DS8000 hardware feature — not applicable |
+| SnapShot | GAP | Hardware-dependent — not applicable |
+| Volume DEFRAG | YES | `Vtoc::defrag()` in space.rs |
+| SMS conversion | GAP | Non-SMS to SMS-managed conversion not implemented |
+| Cross-memory API (ADRXMAIA) | GAP | z/OS-specific cross-memory services — not applicable |
+
+### DFSMSrmm (`rmm.rs` — 590 lines)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| VRS (Vital Record Specifications) | YES | `Vrs` struct with `RetentionType` enum |
+| Scratch pool management | YES | `Rmm::add_scratch_volume()`, `allocate_volume()` |
+| Private pool management | YES | `VolumeState::Private` tracking |
+| VRSEL processing | YES | `Rmm::vrsel()` — evaluates retention for all volumes |
+| Retention methods | YES | Days, WhileCatalog, Cycles in `RetentionType` enum |
+| Volume lifecycle | YES | `VolumeState`: Scratch → Private → Retained → Scratch |
+| Tape library integration | GAP | ATL automation — hardware-specific, not applicable |
+| EDG_EXIT100 | GAP | Installation exit — z/OS-specific hook, not applicable |
+
+### GDG (Generation Data Groups) (`gdg/` + `gdg_icf.rs` — 529 lines)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| GDG base creation | YES | `GdgBase` with configurable options |
+| Generation naming (GxxxxVyy) | YES | Standard format implemented |
+| Relative references (+1, 0, -1) | YES | `resolve_relative()` in gdg_icf.rs |
+| Absolute references | YES | G0001V00 format |
+| Rolloff management | YES | Oldest deleted/uncataloged when limit exceeded |
+| EMPTY/NOEMPTY | YES | Clear all vs oldest on rolloff |
+| Model DCB | YES | Template for generation attributes |
+| GDG-to-ICF catalog integration | YES | `GdgIcfManager` bridges GDG and ICF catalog |
+
+### PDSE Advanced Features (`pdse.rs` — 596 lines)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Basic PDS operations | YES | Existing pds.rs |
+| ISPF statistics | YES | Existing pds.rs |
+| Member aliases | YES | Existing pds.rs |
+| Program objects | YES | `ProgramObject` with class descriptors, deferred classes, aliases |
+| Member generations | YES | `MemberGeneration`, `GenerationHistory` with MAXGENS enforcement |
+| Extended attributes (EATTR) | YES | `Eattr` enum: No, Opt |
+| Load module AMODE/RMODE | YES | `Amode` (24/31/64/Any), `Rmode` (24/Any) |
+
+### Space & Volume Management (`space.rs` — 834 lines)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Primary/secondary allocation | YES | `SpaceAllocation` with primary/secondary quantities |
+| Allocation units | YES | `SpaceAllocationUnit`: Tracks, Cylinders, Bytes, Records |
+| Extent tracking | YES | `ExtentList` with max 16 extents, secondary allocation |
+| VTOC (Volume Table of Contents) | YES | `Vtoc` with allocate/delete/defrag |
+| Multi-volume datasets | YES | `MultiVolumeDataset` spanning multiple volumes |
+| RLSE (Release unused space) | YES | `SpaceAllocation::release()` |
+| DSCB Format 1 | YES | `DscbFormat1` dataset control block |
+| DEFRAG | YES | `Vtoc::defrag()` consolidates free extents |
+| Guaranteed space | GAP | SMS storage class attribute — requires SMS integration |
+| Extended addressability (>4 GB) | GAP | Large-format datasets not explicitly modeled |
+| Striped datasets | GAP | Multi-volume parallel I/O not implemented |
+| Compressed datasets | GAP | Hardware/software compression at dataset level not implemented |
+
+### Summary
+
+| Category | Total Features | YES | GAP | Previously |
+|----------|---------------|-----|-----|------------|
+| SMS Policy Engine | 13 | 10 | 3 | 3 Partial, 7 Missing |
+| ICF Catalog Structure | 14 | 13 | 1 | 2 Partial, 10 Missing |
+| IDCAMS Utility | 16 | 16 | 0 | 6 Present, 4 Partial, 6 Missing |
+| DFSMShsm | 14 | 12 | 2 | 0 Present, 14 Missing |
+| DFSMSdss | 14 | 7 | 7 | 1 Partial, 13 Missing |
+| DFSMSrmm | 8 | 6 | 2 | 0 Present, 8 Missing |
+| GDG | 8 | 8 | 0 | 7 Present, 1 Partial |
+| PDSE Advanced | 7 | 7 | 0 | 3 Present, 4 Missing |
+| Space & Volume Mgmt | 12 | 8 | 4 | 0 Present, 12 Missing |
+
+**Totals: 106 features — 87 YES (82%), 19 GAP (18%)**
+
+Most GAP items fall into categories that are not applicable to an emulated environment:
+- **Hardware-specific** (FlashCopy, Concurrent Copy, SnapShot, ATL, Cross-memory API) — 6 items
+- **z/OS-specific** (COMMDS sysplex, ISMF panels, EDG_EXIT100) — 3 items
+- **Not yet implemented but feasible** (Physical DUMP/RESTORE, SMS conversion, Fast Subsequent Migration, Guaranteed space, Extended addressability, Striped/Compressed datasets, Catalog recovery, z/OSMF plugin) — 10 items

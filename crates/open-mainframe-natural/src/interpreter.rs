@@ -201,7 +201,7 @@ impl NaturalInterpreter {
                     self.variables.set_value(var, NaturalValue::Integer(i));
                     let signal = self.exec_statements(body)?;
                     match signal {
-                        ControlSignal::EscapeTop => continue,
+                        ControlSignal::EscapeTop => { i += step_val; continue; }
                         ControlSignal::EscapeBottom => break,
                         ControlSignal::EscapeRoutine | ControlSignal::Return => return Ok(signal),
                         ControlSignal::None => {}
@@ -393,6 +393,84 @@ impl NaturalInterpreter {
                 // Handled by specialized modules
             }
 
+            Statement::AddStmt { target, expr } => {
+                let val = self.eval_expr(expr)?;
+                let current = self.variables.get_value(target);
+                let result = current.to_f64() + val.to_f64();
+                self.variables.set_value(target, NaturalValue::Float(result));
+            }
+            Statement::SubtractStmt { target, expr } => {
+                let val = self.eval_expr(expr)?;
+                let current = self.variables.get_value(target);
+                let result = current.to_f64() - val.to_f64();
+                self.variables.set_value(target, NaturalValue::Float(result));
+            }
+            Statement::MultiplyStmt { target, expr } => {
+                let val = self.eval_expr(expr)?;
+                let current = self.variables.get_value(target);
+                let result = current.to_f64() * val.to_f64();
+                self.variables.set_value(target, NaturalValue::Float(result));
+            }
+            Statement::DivideStmt { target, expr, giving } => {
+                let val = self.eval_expr(expr)?;
+                let divisor = val.to_f64();
+                if divisor == 0.0 { return Err(InterpreterError::DivisionByZero); }
+                let current = self.variables.get_value(target);
+                let result = current.to_f64() / divisor;
+                let dest = giving.as_deref().unwrap_or(target);
+                self.variables.set_value(dest, NaturalValue::Float(result));
+            }
+            Statement::ResetStmt { vars } => {
+                for var in vars {
+                    if let Some(v) = self.variables.get(var) {
+                        if let Some(ts) = &v.type_spec {
+                            let default = crate::data_model::NaturalValue::default_for(ts.base_type);
+                            self.variables.set_value(var, default);
+                        } else {
+                            self.variables.set_value(var, NaturalValue::Null);
+                        }
+                    } else {
+                        self.variables.set_value(var, NaturalValue::Null);
+                    }
+                }
+            }
+            Statement::StopStmt | Statement::TerminateStmt => {
+                return Ok(ControlSignal::Return);
+            }
+            Statement::IncludeStmt { .. } => {
+                // Copycode inclusion is a compile-time operation; no-op at runtime
+            }
+            Statement::MoveAllStmt { source, target } => {
+                let val = self.eval_expr(source)?.to_display_string();
+                // MOVE ALL fills the target with repeated copies of the source
+                if let Some(v) = self.variables.get(target) {
+                    if let Some(ts) = &v.type_spec {
+                        let len = ts.length as usize;
+                        let repeated: String = val.chars().cycle().take(len.max(1)).collect();
+                        self.variables.set_value(target, NaturalValue::Alpha(repeated));
+                    } else {
+                        self.variables.set_value(target, NaturalValue::Alpha(val));
+                    }
+                } else {
+                    self.variables.set_value(target, NaturalValue::Alpha(val));
+                }
+            }
+            Statement::LimitStmt { .. }
+            | Statement::AcceptStmt
+            | Statement::RejectStmt
+            | Statement::SetKeyStmt { .. }
+            | Statement::SetWindowStmt { .. }
+            | Statement::DefineWindowStmt { .. }
+            | Statement::CallExternalStmt { .. }
+            | Statement::RunStmt { .. }
+            | Statement::DefineClassStmt { .. }
+            | Statement::CreateObjectStmt { .. }
+            | Statement::SendMethodStmt { .. }
+            | Statement::DefineInterfaceStmt { .. }
+            | Statement::MethodStmt { .. }
+            | Statement::PropertyStmt { .. } => {
+                // Stub handling for these statements
+            }
             Statement::DefineDataStmt(_) | Statement::InlineSubroutine { .. } => {
                 // Already processed
             }

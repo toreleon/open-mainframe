@@ -87,6 +87,21 @@ pub struct PThread {
     pub cancel_enabled: bool,
     /// Thread-specific data.
     pub specific_data: HashMap<u32, i64>,
+    /// z/OS extension: thread-level security identity (pthread_security_np).
+    pub security_identity: Option<ThreadSecurity>,
+    /// z/OS extension: user-defined tag (pthread_tag_np).
+    pub tag: Option<String>,
+}
+
+/// z/OS extension: thread-level security identity for pthread_security_np.
+///
+/// Allows individual threads to run under different RACF identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadSecurity {
+    /// RACF user ID for this thread.
+    pub userid: String,
+    /// Whether the security environment is active.
+    pub active: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +415,8 @@ impl ThreadManager {
             detached: false,
             cancel_enabled: true,
             specific_data: HashMap::new(),
+            security_identity: None,
+            tag: None,
         };
         self.threads.insert(tid, thread);
         Ok(tid)
@@ -527,6 +544,68 @@ impl ThreadManager {
     /// Thread count.
     pub fn thread_count(&self) -> usize {
         self.threads.len()
+    }
+
+    /// pthread_security_np — create thread-level security (z/OS extension).
+    ///
+    /// Allows a thread to run under a different RACF identity.
+    pub fn set_thread_security(
+        &mut self,
+        tid: u64,
+        userid: &str,
+    ) -> Result<(), ThreadError> {
+        let thread = self
+            .threads
+            .get_mut(&tid)
+            .ok_or(ThreadError::NoSuchThread { tid })?;
+        thread.security_identity = Some(ThreadSecurity {
+            userid: userid.to_string(),
+            active: true,
+        });
+        Ok(())
+    }
+
+    /// pthread_security_np — delete thread-level security (z/OS extension).
+    pub fn delete_thread_security(&mut self, tid: u64) -> Result<(), ThreadError> {
+        let thread = self
+            .threads
+            .get_mut(&tid)
+            .ok_or(ThreadError::NoSuchThread { tid })?;
+        thread.security_identity = None;
+        Ok(())
+    }
+
+    /// pthread_tag_np — tag a thread with user data (z/OS extension).
+    pub fn tag_thread(
+        &mut self,
+        tid: u64,
+        tag: &str,
+    ) -> Result<(), ThreadError> {
+        let thread = self
+            .threads
+            .get_mut(&tid)
+            .ok_or(ThreadError::NoSuchThread { tid })?;
+        thread.tag = Some(tag.to_string());
+        Ok(())
+    }
+
+    /// Get thread tag.
+    pub fn get_thread_tag(&self, tid: u64) -> Result<Option<&str>, ThreadError> {
+        let thread = self
+            .threads
+            .get(&tid)
+            .ok_or(ThreadError::NoSuchThread { tid })?;
+        Ok(thread.tag.as_deref())
+    }
+
+    /// pthread_detach — detach a thread.
+    pub fn detach_thread(&mut self, tid: u64) -> Result<(), ThreadError> {
+        let thread = self
+            .threads
+            .get_mut(&tid)
+            .ok_or(ThreadError::NoSuchThread { tid })?;
+        thread.detached = true;
+        Ok(())
     }
 }
 
@@ -700,5 +779,62 @@ mod tests {
         mutex.try_lock(1).unwrap();
         let err = mutex.try_lock(2).unwrap_err();
         assert!(matches!(err, ThreadError::MutexLocked));
+    }
+
+    #[test]
+    fn test_set_thread_security() {
+        let mut mgr = ThreadManager::new(100);
+        let tid = mgr.create_thread("worker").unwrap();
+
+        mgr.set_thread_security(tid, "IBMUSER").unwrap();
+        let thread = mgr.get_thread(tid).unwrap();
+        let sec = thread.security_identity.as_ref().unwrap();
+        assert_eq!(sec.userid, "IBMUSER");
+        assert!(sec.active);
+    }
+
+    #[test]
+    fn test_delete_thread_security() {
+        let mut mgr = ThreadManager::new(100);
+        let tid = mgr.create_thread("worker").unwrap();
+
+        mgr.set_thread_security(tid, "IBMUSER").unwrap();
+        mgr.delete_thread_security(tid).unwrap();
+        let thread = mgr.get_thread(tid).unwrap();
+        assert!(thread.security_identity.is_none());
+    }
+
+    #[test]
+    fn test_tag_thread() {
+        let mut mgr = ThreadManager::new(100);
+        let tid = mgr.create_thread("worker").unwrap();
+
+        mgr.tag_thread(tid, "http-handler").unwrap();
+        let tag = mgr.get_thread_tag(tid).unwrap();
+        assert_eq!(tag, Some("http-handler"));
+    }
+
+    #[test]
+    fn test_detach_thread() {
+        let mut mgr = ThreadManager::new(100);
+        let tid = mgr.create_thread("worker").unwrap();
+        assert!(!mgr.get_thread(tid).unwrap().detached);
+
+        mgr.detach_thread(tid).unwrap();
+        assert!(mgr.get_thread(tid).unwrap().detached);
+
+        // Detached thread should be removed on exit.
+        mgr.exit_thread(tid, 0).unwrap();
+        assert!(mgr.get_thread(tid).is_none());
+    }
+
+    #[test]
+    fn test_detached_thread_cannot_join() {
+        let mut mgr = ThreadManager::new(100);
+        let tid = mgr.create_thread("worker").unwrap();
+        mgr.detach_thread(tid).unwrap();
+
+        let err = mgr.join_thread(tid).unwrap_err();
+        assert!(matches!(err, ThreadError::NoSuchThread { .. }));
     }
 }

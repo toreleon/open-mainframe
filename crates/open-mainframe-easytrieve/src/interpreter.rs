@@ -128,7 +128,7 @@ impl EzVariable {
     /// Create a new working storage variable.
     pub fn new(name: &str, data_type: &str, length: u32) -> Self {
         let value = match data_type {
-            "N" | "P" | "B" => EzValue::Numeric(0),
+            "N" | "P" | "B" | "U" | "I" => EzValue::Numeric(0),
             _ => EzValue::Alpha(String::new()),
         };
         Self {
@@ -386,6 +386,23 @@ impl EzInterpreter {
 
             EzStatement::End => Ok(Flow::Stop),
 
+            EzStatement::ElseIf { condition } => {
+                // If we reach ELSE-IF during normal flow, skip to END-IF
+                // (we already executed the IF-true branch)
+                let target = Self::find_endif(activities, *pc);
+                let _ = condition;
+                Ok(Flow::Jump(target))
+            }
+
+            EzStatement::Case { .. } => Ok(Flow::Next),
+            EzStatement::When { values } => {
+                // WHEN within CASE — skip (CASE evaluation not fully wired)
+                let _ = values;
+                Ok(Flow::Next)
+            }
+            EzStatement::EndCase => Ok(Flow::Next),
+            EzStatement::EndProc => Ok(Flow::Next),
+
             // Statements that are no-ops in the interpreter (handled elsewhere)
             EzStatement::Job { .. }
             | EzStatement::Print { .. }
@@ -405,6 +422,21 @@ impl EzInterpreter {
             | EzStatement::Control { .. }
             | EzStatement::Sum { .. }
             | EzStatement::Call { .. }
+            | EzStatement::Read { .. }
+            | EzStatement::Write { .. }
+            | EzStatement::Point { .. }
+            | EzStatement::Close { .. }
+            | EzStatement::Search { .. }
+            | EzStatement::Mask { .. }
+            | EzStatement::Link { .. }
+            | EzStatement::Transfer { .. }
+            | EzStatement::Proc { .. }
+            | EzStatement::NewPage
+            | EzStatement::Skip { .. }
+            | EzStatement::Release { .. }
+            | EzStatement::Parm { .. }
+            | EzStatement::Dli { .. }
+            | EzStatement::Record { .. }
             | EzStatement::Comment { .. }
             | EzStatement::Label { .. } => Ok(Flow::Next),
         }
@@ -593,7 +625,7 @@ impl EzInterpreter {
     fn parse_literal(s: &str, data_type: &str) -> EzValue {
         let trimmed = s.trim().trim_matches('\'');
         match data_type {
-            "N" | "P" | "B" => {
+            "N" | "P" | "B" | "U" | "I" => {
                 if let Ok(n) = trimmed.parse::<i64>() {
                     EzValue::Numeric(n)
                 } else if let Ok(d) = trimmed.parse::<f64>() {

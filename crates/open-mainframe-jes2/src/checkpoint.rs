@@ -19,6 +19,9 @@ pub enum StartMode {
     Warm,
     /// Quick start — like warm but skip full spool scan.
     Quick,
+    /// Hot start — resume after a brief interruption with minimal reprocessing;
+    /// running jobs remain in Running state.
+    Hot,
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +127,27 @@ impl CheckpointManager {
                 job.state = JobState::Ready;
             }
         }
+
+        // Remove purged jobs — they're done
+        data.jobs.retain(|_, j| !matches!(j.state, JobState::Purge));
+
+        self.sequence = data.sequence;
+        self.latest = Some(data.clone());
+        Ok(data)
+    }
+
+    /// Perform a hot start — restore state from checkpoint without modifying
+    /// running jobs.
+    ///
+    /// Unlike warm start, running jobs remain in Running state (they are
+    /// assumed to be resumable after a brief interruption). Purged jobs are
+    /// still removed.
+    pub fn hot_start(
+        &mut self,
+        checkpoint_json: &str,
+    ) -> Result<CheckpointData, String> {
+        let mut data: CheckpointData =
+            serde_json::from_str(checkpoint_json).map_err(|e| e.to_string())?;
 
         // Remove purged jobs — they're done
         data.jobs.retain(|_, j| !matches!(j.state, JobState::Purge));
@@ -313,5 +337,43 @@ mod tests {
         assert_eq!(datasets.len(), 1);
         let content = data.spool.read(datasets[0].key).unwrap();
         assert_eq!(content, &["OUTPUT LINE 1", "OUTPUT LINE 2"]);
+    }
+
+    #[test]
+    fn hot_start_preserves_running() {
+        let (jobs, next_num, class_defs, spool) = sample_state();
+        let mut mgr = CheckpointManager::new(CheckpointConfig::default());
+
+        let json = mgr.take_checkpoint(&jobs, next_num, &class_defs, &spool);
+        let data = mgr.hot_start(&json).unwrap();
+
+        // Running job should stay Running (unlike warm start)
+        let job1 = data.jobs.get(&1).unwrap();
+        assert_eq!(job1.state, JobState::Running);
+
+        // Output job preserved
+        let job2 = data.jobs.get(&2).unwrap();
+        assert_eq!(job2.state, JobState::Output);
+
+        // Purged job removed
+        assert!(!data.jobs.contains_key(&3));
+
+        // Spool preserved
+        assert_eq!(data.spool.dataset_count(), 1);
+    }
+
+    #[test]
+    fn hot_start_invalid_json() {
+        let mut mgr = CheckpointManager::new(CheckpointConfig::default());
+        assert!(mgr.hot_start("not json").is_err());
+    }
+
+    #[test]
+    fn start_mode_variants() {
+        assert_eq!(StartMode::Cold, StartMode::Cold);
+        assert_eq!(StartMode::Warm, StartMode::Warm);
+        assert_eq!(StartMode::Quick, StartMode::Quick);
+        assert_eq!(StartMode::Hot, StartMode::Hot);
+        assert_ne!(StartMode::Hot, StartMode::Warm);
     }
 }

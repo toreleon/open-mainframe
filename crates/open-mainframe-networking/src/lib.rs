@@ -26,23 +26,28 @@ pub mod tls;
 pub mod vtam;
 
 // Re-exports: VTAM (NET-100)
-pub use vtam::{Acb, AcbAuth, AcbMacrf, LuType, Session, SessionState, VtamError};
+pub use vtam::{
+    Acb, AcbAuth, AcbField, AcbMacrf, ApplDef, ExitType, Exlst, LuType, Nib, NibProcMode, Rpl,
+    RplOperation, RplReturnCode, Session, SessionState, VtamError,
+};
 
 // Re-exports: SNA (NET-101)
 pub use sna::{
-    BindParameters, Command3270, Lu0Session, Lu1PrinterSession, Lu2Session, ScsControlCode,
-    SnaError,
+    BindParameters, Command3270, Lu0Session, Lu1PrinterSession, Lu2Session, Lu3PrinterSession,
+    ScsControlCode, SnaError,
 };
 
 // Re-exports: APPC (NET-102)
 pub use appc::{
-    AppcError, AppcManager, Conversation, ConversationState, CpiC, DeallocateType, SyncLevel,
+    AppcError, AppcManager, CnosResult, Conversation, ConversationState, ConversationType, CpiC,
+    DeallocateType, ModeDef, SyncLevel, TpDefinition, TpRegistry, TpType,
 };
 
 // Re-exports: TCP/IP (NET-103)
 pub use tcpip::{
-    AutologEntry, DeviceDefinition, DeviceType, HomeAddress, LinkDefinition, PortReservation,
-    ResolverConfig, RouteEntry, TcpConfig, TcpIpError, TcpIpProfile, TransportProtocol, UdpConfig,
+    AutologEntry, CinetConfig, CinetStack, DeviceDefinition, DeviceType, HomeAddress,
+    LinkDefinition, PortReservation, ResolverConfig, RouteEntry, TcpConfig, TcpIpData, TcpIpError,
+    TcpIpProfile, TransportProtocol, UdpConfig,
 };
 
 // Re-exports: Sockets (NET-104)

@@ -52,7 +52,7 @@ pub use intrdr::{
     sdsf_output_queue, sdsf_status, InternalReader, SdsfLineCommand, SdsfPanel, SdsfRow,
 };
 pub use jecl::{parse_jecl, JeclStmt, JobparmParams, OutputParams, SetupParams};
-pub use job::{Job, JobClass, JobId, JobState};
+pub use job::{Job, JobClass, JobId, JobState, TypeRun};
 pub use queue::Jes2;
 pub use spool::SpoolManager;
 

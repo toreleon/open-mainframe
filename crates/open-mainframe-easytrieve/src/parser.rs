@@ -98,13 +98,16 @@ impl fmt::Display for EzToken {
 /// Known Easytrieve keywords.
 const KEYWORDS: &[&str] = &[
     "FILE", "DEFINE", "JOB", "SORT", "PUT", "GET", "PRINT", "DISPLAY",
-    "HEADING", "LINE", "TITLE", "IF", "ELSE", "END-IF", "DO", "END-DO",
+    "HEADING", "LINE", "TITLE", "IF", "ELSE", "ELSE-IF", "END-IF", "DO", "END-DO",
     "GOTO", "GO", "PERFORM", "STOP", "MACRO", "END-MACRO", "COPY", "SQL",
     "END-SQL", "END", "INPUT", "OUTPUT", "REPORT", "SEQUENCE", "CONTROL",
     "SUM", "COUNT", "AVG", "MIN", "MAX", "AND", "OR", "NOT", "EQ", "NE",
     "GT", "GE", "LT", "LE", "TO", "THRU", "BY", "WHILE", "UNTIL",
     "BEFORE", "AFTER", "MOVE", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE",
-    "W", "N", "P", "B", "A", "MATCHED", "SYNCHRONIZED", "CALL",
+    "W", "N", "P", "B", "A", "U", "I", "MATCHED", "SYNCHRONIZED", "CALL",
+    "CASE", "END-CASE", "WHEN", "OTHER", "READ", "WRITE", "POINT", "CLOSE",
+    "SEARCH", "MASK", "LINK", "TRANSFER", "PROC", "END-PROC", "NEWPAGE",
+    "SKIP", "RELEASE", "PARM", "DLI", "RECORD",
 ];
 
 /// Check whether an identifier is a keyword.
@@ -435,6 +438,119 @@ pub enum EzStatement {
         /// Parameters.
         params: Vec<String>,
     },
+    /// CASE multi-way conditional start.
+    Case {
+        /// Expression to match.
+        expression: Vec<String>,
+    },
+    /// WHEN clause within a CASE.
+    When {
+        /// Values to match against.
+        values: Vec<String>,
+    },
+    /// END-CASE terminator.
+    EndCase,
+    /// READ random access to indexed/relative file.
+    Read {
+        /// File name.
+        file: String,
+        /// Optional key value.
+        key: Option<String>,
+    },
+    /// WRITE update, delete, or add records.
+    Write {
+        /// File name.
+        file: String,
+        /// Operation: UPDATE, DELETE, ADD, or NEW.
+        operation: Option<String>,
+    },
+    /// POINT position within indexed/relative file.
+    Point {
+        /// File name.
+        file: String,
+        /// Key value to position to.
+        key: Option<String>,
+    },
+    /// CLOSE a file.
+    Close {
+        /// File name.
+        file: String,
+    },
+    /// SEARCH table lookup.
+    Search {
+        /// Table/file name.
+        table: String,
+        /// Key field.
+        key: Option<String>,
+        /// BINARY or SEQUENTIAL search mode.
+        mode: Option<String>,
+    },
+    /// MASK edit pattern definition.
+    Mask {
+        /// Mask name.
+        name: String,
+        /// Edit pattern string.
+        pattern: String,
+    },
+    /// LINK transfer control with return.
+    Link {
+        /// Program name.
+        program: String,
+        /// Parameters.
+        params: Vec<String>,
+    },
+    /// TRANSFER control without return.
+    Transfer {
+        /// Program name.
+        program: String,
+        /// Parameters.
+        params: Vec<String>,
+    },
+    /// PROC procedure definition start.
+    Proc {
+        /// Procedure name (typically precedes as a label).
+        name: Option<String>,
+    },
+    /// END-PROC procedure end.
+    EndProc,
+    /// NEWPAGE page eject.
+    NewPage,
+    /// SKIP space printer lines.
+    Skip {
+        /// Number of lines to skip.
+        count: u32,
+    },
+    /// RELEASE record hold.
+    Release {
+        /// File name.
+        file: Option<String>,
+    },
+    /// PARM statement for runtime options.
+    Parm {
+        /// Parameter key-value pairs.
+        options: Vec<(String, String)>,
+    },
+    /// DLI statement for IMS/DLI database operations.
+    Dli {
+        /// DLI function (GU, GN, GNP, ISRT, DLET, REPL, etc.).
+        function: String,
+        /// Segment name.
+        segment: Option<String>,
+        /// Additional arguments.
+        args: Vec<String>,
+    },
+    /// RECORD definition.
+    Record {
+        /// Record name.
+        name: String,
+        /// Record attributes.
+        attrs: Vec<(String, String)>,
+    },
+    /// ELSE-IF conditional.
+    ElseIf {
+        /// Condition expression tokens.
+        condition: Vec<String>,
+    },
     /// Label definition (identifier followed by a period at statement start).
     Label {
         /// Label name.
@@ -710,6 +826,94 @@ impl EzParser {
                 let file = Self::get_identifier_at(tokens, 1).unwrap_or_default();
                 Ok(EzStatement::Get { file })
             }
+            "ELSE-IF" => Ok(EzStatement::ElseIf {
+                condition: Self::collect_remaining_text(&tokens[1..]),
+            }),
+            "CASE" => Ok(EzStatement::Case {
+                expression: Self::collect_remaining_text(&tokens[1..]),
+            }),
+            "WHEN" => Ok(EzStatement::When {
+                values: Self::collect_remaining_text(&tokens[1..]),
+            }),
+            "OTHER" => Ok(EzStatement::When {
+                values: vec!["OTHER".into()],
+            }),
+            "END-CASE" => Ok(EzStatement::EndCase),
+            "READ" => {
+                let file = Self::get_identifier_at(tokens, 1).unwrap_or_default();
+                let key = Self::get_identifier_at(tokens, 2);
+                Ok(EzStatement::Read { file, key })
+            }
+            "WRITE" => {
+                let file = Self::get_identifier_at(tokens, 1).unwrap_or_default();
+                let operation = Self::get_identifier_at(tokens, 2);
+                Ok(EzStatement::Write { file, operation })
+            }
+            "POINT" => {
+                let file = Self::get_identifier_at(tokens, 1).unwrap_or_default();
+                let key = Self::get_identifier_at(tokens, 2);
+                Ok(EzStatement::Point { file, key })
+            }
+            "CLOSE" => {
+                let file = Self::get_identifier_at(tokens, 1).unwrap_or_default();
+                Ok(EzStatement::Close { file })
+            }
+            "SEARCH" => {
+                let table = Self::get_identifier_at(tokens, 1).unwrap_or_default();
+                let remaining = Self::collect_remaining_text(&tokens[2..]);
+                let key = remaining.first().cloned();
+                let mode = remaining.get(1).cloned();
+                Ok(EzStatement::Search { table, key, mode })
+            }
+            "MASK" => {
+                let name = Self::get_identifier_at(tokens, 1).unwrap_or_default();
+                let pattern_parts = Self::collect_remaining_text(&tokens[2..]);
+                let pattern = pattern_parts.join(" ");
+                Ok(EzStatement::Mask { name, pattern })
+            }
+            "LINK" => {
+                let program = Self::get_identifier_at(tokens, 1).unwrap_or_default();
+                let params = Self::collect_remaining_text(&tokens[2..]);
+                Ok(EzStatement::Link { program, params })
+            }
+            "TRANSFER" => {
+                let program = Self::get_identifier_at(tokens, 1).unwrap_or_default();
+                let params = Self::collect_remaining_text(&tokens[2..]);
+                Ok(EzStatement::Transfer { program, params })
+            }
+            "PROC" => {
+                let name = Self::get_identifier_at(tokens, 1);
+                Ok(EzStatement::Proc { name })
+            }
+            "END-PROC" => Ok(EzStatement::EndProc),
+            "NEWPAGE" => Ok(EzStatement::NewPage),
+            "SKIP" => {
+                let count = if let Some(EzToken::Number(n)) = tokens.get(1) {
+                    n.parse().unwrap_or(1)
+                } else {
+                    1
+                };
+                Ok(EzStatement::Skip { count })
+            }
+            "RELEASE" => {
+                let file = Self::get_identifier_at(tokens, 1);
+                Ok(EzStatement::Release { file })
+            }
+            "PARM" => {
+                let options = Self::parse_keyword_value_pairs(&tokens[1..]);
+                Ok(EzStatement::Parm { options })
+            }
+            "DLI" => {
+                let function = Self::get_identifier_at(tokens, 1).unwrap_or_default();
+                let segment = Self::get_identifier_at(tokens, 2);
+                let args = Self::collect_remaining_text(&tokens[3..]);
+                Ok(EzStatement::Dli { function, segment, args })
+            }
+            "RECORD" => {
+                let name = Self::get_identifier_at(tokens, 1).unwrap_or_default();
+                let attrs = Self::parse_keyword_value_pairs(&tokens[2..]);
+                Ok(EzStatement::Record { name, attrs })
+            }
             "BEFORE" | "AFTER" => {
                 // BEFORE/AFTER are control break triggers — store as labels
                 let text = Self::collect_remaining_text(tokens);
@@ -750,7 +954,7 @@ impl EzParser {
         while i < remaining.len() {
             let upper = remaining[i].to_uppercase();
             match upper.as_str() {
-                "W" | "A" | "N" | "P" | "B" => {
+                "W" | "A" | "N" | "P" | "B" | "U" | "I" => {
                     data_type = Some(upper.clone());
                     // Next might be length
                     if i + 1 < remaining.len() {

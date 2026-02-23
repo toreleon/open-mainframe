@@ -357,6 +357,113 @@ pub struct SqlResult {
 }
 
 // ---------------------------------------------------------------------------
+//  SQL DDL statements
+// ---------------------------------------------------------------------------
+
+/// A SQL DDL statement for IDMS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SqlDdl {
+    /// CREATE TABLE name (columns...).
+    CreateTable {
+        /// Table name.
+        name: String,
+        /// Column definitions (name, type_str).
+        columns: Vec<(String, String)>,
+    },
+    /// CREATE INDEX name ON table (columns...).
+    CreateIndex {
+        /// Index name.
+        name: String,
+        /// Target table.
+        table: String,
+        /// Indexed column names.
+        columns: Vec<String>,
+    },
+    /// DROP TABLE name.
+    DropTable {
+        /// Table name to drop.
+        name: String,
+    },
+}
+
+// ---------------------------------------------------------------------------
+//  SQL cursor
+// ---------------------------------------------------------------------------
+
+/// A SQL cursor for multi-row retrieval.
+#[derive(Debug, Clone)]
+pub struct SqlCursor {
+    /// Cursor name.
+    pub name: String,
+    /// The query this cursor is declared for.
+    pub query: String,
+    /// Whether the cursor is currently open.
+    pub open: bool,
+    /// Current position in the result set (0-based).
+    pub position: usize,
+}
+
+impl SqlCursor {
+    /// Declare a new cursor.
+    pub fn declare(name: &str, query: &str) -> Self {
+        Self {
+            name: name.to_uppercase(),
+            query: query.to_string(),
+            open: false,
+            position: 0,
+        }
+    }
+
+    /// Open the cursor.
+    pub fn open(&mut self) {
+        self.open = true;
+        self.position = 0;
+    }
+
+    /// Fetch next row, returning the current position.
+    pub fn fetch(&mut self) -> Option<usize> {
+        if !self.open {
+            return None;
+        }
+        let pos = self.position;
+        self.position += 1;
+        Some(pos)
+    }
+
+    /// Close the cursor.
+    pub fn close(&mut self) {
+        self.open = false;
+        self.position = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Catalog tables
+// ---------------------------------------------------------------------------
+
+/// Represents an IDMS system catalog table entry.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CatalogEntry {
+    /// Table/object name.
+    pub name: String,
+    /// Object type (TABLE, INDEX, VIEW, etc.).
+    pub object_type: String,
+    /// Schema that owns this object.
+    pub schema_name: String,
+}
+
+impl CatalogEntry {
+    /// Create a new catalog entry.
+    pub fn new(name: &str, object_type: &str, schema_name: &str) -> Self {
+        Self {
+            name: name.to_uppercase(),
+            object_type: object_type.to_uppercase(),
+            schema_name: schema_name.to_uppercase(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 //  Errors
 // ---------------------------------------------------------------------------
 
