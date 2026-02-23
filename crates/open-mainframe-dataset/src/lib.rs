@@ -33,6 +33,7 @@ pub mod catalog;
 pub mod dss;
 pub mod error;
 pub mod gdg;
+pub mod gdg_icf;
 pub mod hsm;
 pub mod icf;
 pub mod idcams;
@@ -54,6 +55,7 @@ pub use catalog::{Catalog, CatalogEntry};
 pub use dss::{Dss, DssFilter, DumpDataset, DumpDatasetRecord, DumpHeader};
 pub use error::DatasetError;
 pub use gdg::{GdgBase, GdgGeneration, GdgGenerationInfo, GdgListInfo, GdgOptions, GenerationNumber};
+pub use gdg_icf::{GdgCatalogInfo, GdgGenerationCatalogInfo, GdgIcfManager};
 pub use hsm::{
     Abars, AggregateGroup, BackupRecord, Hsm, HsmConfig, HsmControlDataSets, MigrationRecord,
     MigrationStatus, StorageTier,
