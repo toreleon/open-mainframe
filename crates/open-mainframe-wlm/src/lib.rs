@@ -11,6 +11,7 @@ pub mod capping;
 pub mod classify;
 pub mod goals;
 pub mod policy;
+pub mod scheduling;
 pub mod service;
 
 pub use capping::{CappingEngine, EnforcementAction, GroupUtilization, RuntimeEnvironment, ThrottleAction};
@@ -20,6 +21,10 @@ pub use goals::{
 };
 pub use policy::{
     CpuCapType, ReportClass, ResourceGroup, ServiceDefinition, Workload,
+};
+pub use scheduling::{
+    InitiatorScheduler, InitiatorState, ManagedInitiator, QueuedJob, SchedulingDecision,
+    SchedulingEnvironment,
 };
 pub use service::{
     GoalType, Importance, ServiceClass, ServiceGoal, ServicePolicy, WlmError,
