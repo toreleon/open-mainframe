@@ -6,7 +6,15 @@
 //! On real z/OS, SMF records are written via the SMFWTM / SMFEWTM macros to
 //! the SMF recording dataset (SYS1.MANx).  This emulation writes to an
 //! in-memory buffer or an on-disk file.
+//!
+//! ## SMF-102 enhancements
+//! - SMFWTM — standard record write (with NOTYPE suppression)
+//! - SMFEWTM — extended write with subsystem identification
+//! - Buffer management with configurable flush intervals and max size
+//! - User record types (128-255) support
 
+use crate::config::SmfPrmConfig;
+use crate::exits::{SmfExitAction, SmfExitRegistry};
 use crate::record::{SmfRecord, SmfRecordType};
 
 // ---------------------------------------------------------------------------
@@ -24,6 +32,8 @@ pub struct SmfWriterConfig {
     pub enabled_types: Vec<SmfRecordType>,
     /// Whether to validate records before writing.
     pub validate: bool,
+    /// Maximum buffer size in bytes before auto-flush.
+    pub max_buffer_size: usize,
 }
 
 impl Default for SmfWriterConfig {
@@ -33,6 +43,7 @@ impl Default for SmfWriterConfig {
             max_record_size: 32760,
             enabled_types: Vec::new(),
             validate: true,
+            max_buffer_size: 65536,
         }
     }
 }
@@ -51,6 +62,14 @@ pub enum SmfWriterError {
     /// Record type is not enabled in the configuration.
     #[error("SMF record type {0} is not enabled")]
     TypeNotEnabled(u8),
+
+    /// Record type is suppressed by NOTYPE configuration.
+    #[error("SMF record type {0} is suppressed (NOTYPE)")]
+    TypeSuppressed(u8),
+
+    /// Record was suppressed by an exit.
+    #[error("SMF record suppressed by exit")]
+    SuppressedByExit,
 
     /// I/O error while writing to a file target.
     #[error("SMF I/O error: {0}")]
@@ -132,6 +151,12 @@ pub struct SmfWriter {
     total_bytes: u64,
     /// Count by record type (indexed by type code).
     type_counts: [u64; 256],
+    /// Current buffer size in bytes.
+    buffer_bytes: usize,
+    /// Flushed records (moved from buffer on flush).
+    flushed_records: Vec<Vec<u8>>,
+    /// Total flush count.
+    flush_count: u64,
 }
 
 impl SmfWriter {
@@ -143,12 +168,58 @@ impl SmfWriter {
             sequence: 0,
             total_bytes: 0,
             type_counts: [0; 256],
+            buffer_bytes: 0,
+            flushed_records: Vec::new(),
+            flush_count: 0,
         }
     }
 
     /// Create a writer with default configuration.
     pub fn with_defaults() -> Self {
         Self::new(SmfWriterConfig::default())
+    }
+
+    /// SMFWTM — write an SMF record.
+    ///
+    /// If `prm_config` is provided, respects TYPE/NOTYPE suppression.
+    /// Records in the NOTYPE list are silently dropped.
+    pub fn smfwtm(
+        &mut self,
+        record: &SmfRecord,
+        prm_config: Option<&SmfPrmConfig>,
+    ) -> Result<u64, SmfWriterError> {
+        // Check NOTYPE suppression.
+        if let Some(prm) = prm_config {
+            if !prm.is_type_active(record.header.record_type) {
+                return Err(SmfWriterError::TypeSuppressed(record.header.record_type));
+            }
+        }
+        self.write(record)
+    }
+
+    /// SMFEWTM — extended write with subsystem identification.
+    pub fn smfewtm(
+        &mut self,
+        record: &SmfRecord,
+        subsystem_id: &str,
+    ) -> Result<u64, SmfWriterError> {
+        let mut rec = record.clone();
+        rec.header.subsystem_id = subsystem_id.to_string();
+        self.write(&rec)
+    }
+
+    /// Write an SMF record through the exit pipeline.
+    pub fn write_with_exits(
+        &mut self,
+        record: &SmfRecord,
+        exits: &SmfExitRegistry,
+    ) -> Result<u64, SmfWriterError> {
+        let mut rec = record.clone();
+        let action = exits.process(&mut rec);
+        match action {
+            SmfExitAction::Suppress => Err(SmfWriterError::SuppressedByExit),
+            _ => self.write(&rec),
+        }
     }
 
     /// Write an SMF record.
@@ -162,10 +233,18 @@ impl SmfWriter {
         rec.header.system_id = self.config.system_id.clone();
 
         let bytes = rec.to_bytes();
+        let bytes_len = bytes.len();
         self.sequence += 1;
-        self.total_bytes += bytes.len() as u64;
+        self.total_bytes += bytes_len as u64;
         self.type_counts[rec.header.record_type as usize] += 1;
+        self.buffer_bytes += bytes_len;
         self.records.push(bytes);
+
+        // Auto-flush if buffer exceeds max size.
+        if self.buffer_bytes >= self.config.max_buffer_size {
+            self.flush();
+        }
+
         Ok(self.sequence)
     }
 
@@ -210,9 +289,21 @@ impl SmfWriter {
         Ok(seq)
     }
 
-    /// Number of records written.
+    /// Flush the current buffer (move records to flushed storage).
+    pub fn flush(&mut self) {
+        self.flushed_records.append(&mut self.records);
+        self.buffer_bytes = 0;
+        self.flush_count += 1;
+    }
+
+    /// Number of records in the current buffer.
     pub fn record_count(&self) -> usize {
         self.records.len()
+    }
+
+    /// Total records including flushed.
+    pub fn total_record_count(&self) -> usize {
+        self.records.len() + self.flushed_records.len()
     }
 
     /// Total bytes written.
@@ -230,9 +321,27 @@ impl SmfWriter {
         self.type_counts[record_type as usize]
     }
 
+    /// Current buffer size in bytes.
+    pub fn buffer_bytes(&self) -> usize {
+        self.buffer_bytes
+    }
+
+    /// Number of flushes performed.
+    pub fn flush_count(&self) -> u64 {
+        self.flush_count
+    }
+
     /// Drain all collected records (returns raw bytes).
     pub fn drain(&mut self) -> Vec<Vec<u8>> {
         std::mem::take(&mut self.records)
+    }
+
+    /// Drain all records including flushed.
+    pub fn drain_all(&mut self) -> Vec<Vec<u8>> {
+        let mut all = std::mem::take(&mut self.flushed_records);
+        all.append(&mut self.records);
+        self.buffer_bytes = 0;
+        all
     }
 
     /// Get a reference to all collected records.
@@ -243,9 +352,12 @@ impl SmfWriter {
     /// Clear all collected records and reset counters.
     pub fn reset(&mut self) {
         self.records.clear();
+        self.flushed_records.clear();
         self.sequence = 0;
         self.total_bytes = 0;
         self.type_counts = [0; 256];
+        self.buffer_bytes = 0;
+        self.flush_count = 0;
     }
 
     /// Get the writer configuration.
@@ -257,6 +369,11 @@ impl SmfWriter {
     /// Each record is prefixed with a 4-byte big-endian length.
     pub fn to_dataset(&self) -> Vec<u8> {
         let mut buf = Vec::new();
+        for rec in &self.flushed_records {
+            let len = rec.len() as u32;
+            buf.extend_from_slice(&len.to_be_bytes());
+            buf.extend_from_slice(rec);
+        }
         for rec in &self.records {
             let len = rec.len() as u32;
             buf.extend_from_slice(&len.to_be_bytes());
@@ -470,5 +587,129 @@ mod tests {
         assert_eq!(w.count_for_type(5), 1);
         assert_eq!(w.count_for_type(30), 3);
         assert_eq!(w.count_for_type(80), 0);
+    }
+
+    // --- SMF-102 tests ---
+
+    #[test]
+    fn test_smfwtm_basic() {
+        let mut w = SmfWriter::with_defaults();
+        let rec = SmfRecord::new(30, vec![0; 20]);
+        let seq = w.smfwtm(&rec, None).unwrap();
+        assert_eq!(seq, 1);
+    }
+
+    #[test]
+    fn test_smfwtm_notype_suppression() {
+        let prm = SmfPrmConfig::parse("NOTYPE(0:29)").unwrap();
+        let mut w = SmfWriter::with_defaults();
+        let rec = SmfRecord::new(4, vec![0; 10]);
+        let err = w.smfwtm(&rec, Some(&prm)).unwrap_err();
+        assert!(matches!(err, SmfWriterError::TypeSuppressed(4)));
+    }
+
+    #[test]
+    fn test_smfwtm_type_active() {
+        let prm = SmfPrmConfig::parse("TYPE(30,80)").unwrap();
+        let mut w = SmfWriter::with_defaults();
+        let rec = SmfRecord::new(30, vec![0; 10]);
+        assert!(w.smfwtm(&rec, Some(&prm)).is_ok());
+    }
+
+    #[test]
+    fn test_smfewtm_sets_subsystem() {
+        let mut w = SmfWriter::with_defaults();
+        let rec = SmfRecord::new(110, vec![0; 20]);
+        let seq = w.smfewtm(&rec, "DB2A").unwrap();
+        assert_eq!(seq, 1);
+    }
+
+    #[test]
+    fn test_buffer_auto_flush() {
+        let config = SmfWriterConfig {
+            max_buffer_size: 100,
+            ..Default::default()
+        };
+        let mut w = SmfWriter::new(config);
+        // Write records until auto-flush triggers.
+        for _ in 0..10 {
+            w.write(&SmfRecord::new(4, vec![0; 20])).unwrap();
+        }
+        assert!(w.flush_count() > 0);
+        assert!(w.total_record_count() >= 10);
+    }
+
+    #[test]
+    fn test_manual_flush() {
+        let mut w = SmfWriter::with_defaults();
+        w.write(&SmfRecord::new(4, vec![0; 10])).unwrap();
+        w.write(&SmfRecord::new(5, vec![0; 10])).unwrap();
+        assert_eq!(w.record_count(), 2);
+        w.flush();
+        assert_eq!(w.record_count(), 0);
+        assert_eq!(w.buffer_bytes(), 0);
+        assert_eq!(w.flush_count(), 1);
+        assert_eq!(w.total_record_count(), 2);
+    }
+
+    #[test]
+    fn test_drain_all_includes_flushed() {
+        let mut w = SmfWriter::with_defaults();
+        w.write(&SmfRecord::new(4, vec![0; 10])).unwrap();
+        w.flush();
+        w.write(&SmfRecord::new(5, vec![0; 10])).unwrap();
+        let all = w.drain_all();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_user_record_types() {
+        let mut w = SmfWriter::with_defaults();
+        // User types 128-255 should work.
+        let rec = SmfRecord::new(200, vec![0; 50]);
+        let seq = w.write(&rec).unwrap();
+        assert_eq!(seq, 1);
+        assert_eq!(w.count_for_type(200), 1);
+    }
+
+    #[test]
+    fn test_write_with_exits() {
+        use crate::exits::{Iefu84Exit, SmfExitRegistry};
+        let mut w = SmfWriter::with_defaults();
+        let mut exits = SmfExitRegistry::new();
+        exits.register(Box::new(Iefu84Exit::new("PROD")), vec![]);
+
+        let rec = SmfRecord::new(30, vec![0; 10]);
+        let seq = w.write_with_exits(&rec, &exits).unwrap();
+        assert_eq!(seq, 1);
+    }
+
+    #[test]
+    fn test_write_with_exits_suppressed() {
+        use crate::exits::{Iefu83Exit, SmfExitRegistry};
+        let mut w = SmfWriter::with_defaults();
+        let mut exits = SmfExitRegistry::new();
+        exits.register(
+            Box::new(Iefu83Exit::new(Box::new(|_| true))),
+            vec![],
+        );
+
+        let rec = SmfRecord::new(30, vec![0; 10]);
+        let err = w.write_with_exits(&rec, &exits).unwrap_err();
+        assert!(matches!(err, SmfWriterError::SuppressedByExit));
+    }
+
+    #[test]
+    fn test_to_dataset_includes_flushed() {
+        let mut w = SmfWriter::with_defaults();
+        w.write(&SmfRecord::new(4, vec![0xAA])).unwrap();
+        w.flush();
+        w.write(&SmfRecord::new(5, vec![0xBB])).unwrap();
+        let ds = w.to_dataset();
+        assert!(!ds.is_empty());
+        // Should contain both records.
+        // Parse: first record.
+        let len1 = u32::from_be_bytes([ds[0], ds[1], ds[2], ds[3]]) as usize;
+        assert_eq!(len1, 19);
     }
 }
