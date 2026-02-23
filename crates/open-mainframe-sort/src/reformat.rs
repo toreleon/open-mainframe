@@ -22,6 +22,14 @@ pub enum OutrecField {
         data_type: crate::fields::DataType,
         mask: String,
     },
+    /// Insert current date in DATE1 format (MM/DD/YYYY or with custom separator).
+    Date1 { separator: char },
+    /// Insert current date in DATE2 format (DD/MM/YYYY or with custom separator).
+    Date2 { separator: char },
+    /// Insert current date in DATE3 format (YYYY/MM/DD or with custom separator).
+    Date3 { separator: char },
+    /// Insert current date in DATE4 format (YYYYMMDD, no separator).
+    Date4,
 }
 
 impl OutrecField {
@@ -35,6 +43,8 @@ impl OutrecField {
             OutrecField::SeqNum { width } => *width,
             OutrecField::Count { width } => *width,
             OutrecField::Edit { mask, .. } => mask.len(),
+            OutrecField::Date1 { .. } | OutrecField::Date2 { .. } | OutrecField::Date3 { .. } => 10, // MM/DD/YYYY
+            OutrecField::Date4 => 8, // YYYYMMDD
         }
     }
 
@@ -91,6 +101,26 @@ impl OutrecField {
                 };
                 let edited = apply_edit_mask(value, mask);
                 output.extend_from_slice(edited.as_bytes());
+            }
+            OutrecField::Date1 { separator } => {
+                let d = current_date();
+                let formatted = d.format_mdy(*separator);
+                output.extend_from_slice(formatted.as_bytes());
+            }
+            OutrecField::Date2 { separator } => {
+                let d = current_date();
+                let formatted = d.format_dmy(*separator);
+                output.extend_from_slice(formatted.as_bytes());
+            }
+            OutrecField::Date3 { separator } => {
+                let d = current_date();
+                let formatted = d.format_ymd(*separator);
+                output.extend_from_slice(formatted.as_bytes());
+            }
+            OutrecField::Date4 => {
+                let d = current_date();
+                let formatted = d.to_ymd();
+                output.extend_from_slice(formatted.as_bytes());
             }
         }
     }
@@ -426,6 +456,16 @@ pub mod datetime {
         let s = seconds_since_midnight % 60;
         format!("{:02}:{:02}:{:02}", h, m, s)
     }
+}
+
+/// Get the current date as a SimpleDate.
+fn current_date() -> datetime::SimpleDate {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = secs / 86400;
+    datetime::SimpleDate::from_days(days as i64)
 }
 
 /// Find and replace all occurrences of `find` in `data` with `replace`.

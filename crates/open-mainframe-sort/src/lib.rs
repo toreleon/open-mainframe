@@ -35,6 +35,7 @@ pub mod outfil;
 mod reformat;
 pub mod joinkeys;
 pub mod icetool;
+pub mod symbols;
 
 pub use error::SortError;
 pub use fields::{DataType, SortField, SortOrder, SortSpec};

@@ -1,9 +1,9 @@
 ---
 currentIG: IG-4
-currentEpic: UTIL-104
-epicsComplete: 11
+currentEpic: UTIL-105
+epicsComplete: 12
 epicsTotal: 162
-storiesComplete: 58
+storiesComplete: 65
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -31,7 +31,7 @@ lastUpdated: "2026-02-23"
 - [x] UTIL-101: IEBGENER Enhancements (4 stories)
 - [x] UTIL-102: IEBCOMPR (4 stories)
 - [x] UTIL-103: IEBUPDTE (4 stories)
-- [ ] UTIL-104: DFSORT Enhancements (7 stories)
+- [x] UTIL-104: DFSORT Enhancements (7 stories)
 - [ ] UTIL-105: IEBPTPCH (4 stories)
 - [ ] UTIL-106: IEBDG (4 stories)
 - [ ] UTIL-107: IEH System Utilities (6 stories)
@@ -253,5 +253,5 @@ lastUpdated: "2026-02-23"
 - Existing crates to extend: 10
 - Total epics: 162
 - Total stories: 949
-- Epics complete: 11
-- Stories complete: 58
+- Epics complete: 12
+- Stories complete: 65
