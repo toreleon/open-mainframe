@@ -8,10 +8,14 @@
 //! - **Service Policy** — named collections of service class/goal definitions
 
 pub mod classify;
+pub mod goals;
 pub mod policy;
 pub mod service;
 
 pub use classify::{ClassificationRule, Classifier, SubsystemType, WorkAttribute, WorkRequest};
+pub use goals::{
+    PerformanceIndex, ResourceDemand, ServiceUnits, SlidingWindow, WorkUnitTracker,
+};
 pub use policy::{
     CpuCapType, ReportClass, ResourceGroup, ServiceDefinition, Workload,
 };
