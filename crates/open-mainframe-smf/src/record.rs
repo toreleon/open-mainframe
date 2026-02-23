@@ -6,6 +6,24 @@
 //! - Type 5: Job termination
 //! - Type 30: Common address space work (subtype 1-5)
 
+use std::collections::HashMap;
+
+// ---------------------------------------------------------------------------
+//  Errors
+// ---------------------------------------------------------------------------
+
+/// Errors from SMF record operations.
+#[derive(Debug, thiserror::Error)]
+pub enum SmfRecordError {
+    /// Not enough bytes for header deserialization.
+    #[error("insufficient data: expected at least {expected} bytes, got {actual}")]
+    InsufficientData { expected: usize, actual: usize },
+
+    /// Record type not found in the registry.
+    #[error("unregistered record type {0}")]
+    UnregisteredType(u8),
+}
+
 // ---------------------------------------------------------------------------
 //  SMF Header
 // ---------------------------------------------------------------------------
@@ -34,6 +52,9 @@ pub struct SmfHeader {
 }
 
 impl SmfHeader {
+    /// Standard header serialized size in bytes.
+    pub const HEADER_SIZE: usize = 18;
+
     /// Create a new header for a given record type.
     pub fn new(record_type: u8) -> Self {
         Self {
@@ -47,6 +68,34 @@ impl SmfHeader {
             subsystem_id: String::new(),
             subtype: 0,
         }
+    }
+
+    /// Deserialize a header from bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, SmfRecordError> {
+        if bytes.len() < Self::HEADER_SIZE {
+            return Err(SmfRecordError::InsufficientData {
+                expected: Self::HEADER_SIZE,
+                actual: bytes.len(),
+            });
+        }
+        let rdw_length = u16::from_be_bytes([bytes[0], bytes[1]]);
+        let rdw_segment = u16::from_be_bytes([bytes[2], bytes[3]]);
+        let flag = bytes[4];
+        let record_type = bytes[5];
+        let time = u32::from_be_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]);
+        let date = u32::from_be_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
+        let system_id = String::from_utf8_lossy(&bytes[14..18]).trim_end().to_string();
+        Ok(Self {
+            rdw_length,
+            rdw_segment,
+            flag,
+            record_type,
+            time,
+            date,
+            system_id,
+            subsystem_id: String::new(),
+            subtype: 0,
+        })
     }
 
     /// Set date fields from components.
@@ -105,7 +154,7 @@ impl SmfHeader {
 // ---------------------------------------------------------------------------
 
 /// Well-known SMF record types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SmfRecordType {
     /// Type 4: Step termination.
     Type4,
@@ -115,22 +164,40 @@ pub enum SmfRecordType {
     Type14,
     /// Type 15: Output dataset activity.
     Type15,
+    /// Type 17: Dataset scratch (delete).
+    Type17,
+    /// Type 18: Dataset rename.
+    Type18,
     /// Type 30: Common address space work.
     Type30,
     /// Type 42: SMS statistics.
     Type42,
     /// Type 70: RMF CPU activity.
     Type70,
+    /// Type 71: Paging activity.
+    Type71,
+    /// Type 72: Workload activity.
+    Type72,
+    /// Type 74: Device activity.
+    Type74,
     /// Type 80: RACF processing.
     Type80,
     /// Type 89: Usage data.
     Type89,
     /// Type 92: File system activity.
     Type92,
+    /// Type 100: DB2 accounting.
+    Type100,
+    /// Type 101: DB2 performance.
+    Type101,
     /// Type 110: CICS transaction.
     Type110,
-    /// Type 116: DB2 statistics.
+    /// Type 115: MQ accounting.
+    Type115,
+    /// Type 116: DB2/MQ statistics.
     Type116,
+    /// Type 119: TCP/IP connections.
+    Type119,
     /// User-defined type.
     User(u8),
 }
@@ -143,15 +210,52 @@ impl SmfRecordType {
             SmfRecordType::Type5 => 5,
             SmfRecordType::Type14 => 14,
             SmfRecordType::Type15 => 15,
+            SmfRecordType::Type17 => 17,
+            SmfRecordType::Type18 => 18,
             SmfRecordType::Type30 => 30,
             SmfRecordType::Type42 => 42,
             SmfRecordType::Type70 => 70,
+            SmfRecordType::Type71 => 71,
+            SmfRecordType::Type72 => 72,
+            SmfRecordType::Type74 => 74,
             SmfRecordType::Type80 => 80,
             SmfRecordType::Type89 => 89,
             SmfRecordType::Type92 => 92,
+            SmfRecordType::Type100 => 100,
+            SmfRecordType::Type101 => 101,
             SmfRecordType::Type110 => 110,
+            SmfRecordType::Type115 => 115,
             SmfRecordType::Type116 => 116,
+            SmfRecordType::Type119 => 119,
             SmfRecordType::User(n) => *n,
+        }
+    }
+
+    /// Construct from a numeric code.
+    pub fn from_code(code: u8) -> Self {
+        match code {
+            4 => SmfRecordType::Type4,
+            5 => SmfRecordType::Type5,
+            14 => SmfRecordType::Type14,
+            15 => SmfRecordType::Type15,
+            17 => SmfRecordType::Type17,
+            18 => SmfRecordType::Type18,
+            30 => SmfRecordType::Type30,
+            42 => SmfRecordType::Type42,
+            70 => SmfRecordType::Type70,
+            71 => SmfRecordType::Type71,
+            72 => SmfRecordType::Type72,
+            74 => SmfRecordType::Type74,
+            80 => SmfRecordType::Type80,
+            89 => SmfRecordType::Type89,
+            92 => SmfRecordType::Type92,
+            100 => SmfRecordType::Type100,
+            101 => SmfRecordType::Type101,
+            110 => SmfRecordType::Type110,
+            115 => SmfRecordType::Type115,
+            116 => SmfRecordType::Type116,
+            119 => SmfRecordType::Type119,
+            n => SmfRecordType::User(n),
         }
     }
 }
@@ -173,8 +277,15 @@ impl SmfRecord {
     /// Create a new record with the given type and data.
     pub fn new(record_type: u8, data: Vec<u8>) -> Self {
         let mut header = SmfHeader::new(record_type);
-        header.rdw_length = (18 + data.len()) as u16;
+        header.rdw_length = (SmfHeader::HEADER_SIZE + data.len()) as u16;
         Self { header, data }
+    }
+
+    /// Deserialize a record from bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, SmfRecordError> {
+        let header = SmfHeader::from_bytes(bytes)?;
+        let data = bytes[SmfHeader::HEADER_SIZE..].to_vec();
+        Ok(Self { header, data })
     }
 
     /// Serialize the entire record to bytes.
@@ -187,6 +298,68 @@ impl SmfRecord {
     /// Total record length.
     pub fn length(&self) -> usize {
         self.header.to_bytes().len() + self.data.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Record Type Registry
+// ---------------------------------------------------------------------------
+
+/// A parser function that takes raw record data and returns a description string.
+pub type RecordParserFn = Box<dyn Fn(&SmfRecord) -> String + Send + Sync>;
+
+/// Registry mapping record type codes to their parsers.
+pub struct SmfRecordRegistry {
+    parsers: HashMap<u8, RecordParserFn>,
+}
+
+impl std::fmt::Debug for SmfRecordRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SmfRecordRegistry")
+            .field("registered_types", &self.parsers.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+impl Default for SmfRecordRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SmfRecordRegistry {
+    /// Create a new empty registry.
+    pub fn new() -> Self {
+        Self {
+            parsers: HashMap::new(),
+        }
+    }
+
+    /// Register a parser for a record type.
+    pub fn register_type(&mut self, type_code: u8, parser: RecordParserFn) {
+        self.parsers.insert(type_code, parser);
+    }
+
+    /// Parse a record using the registered parser.
+    pub fn parse(&self, record: &SmfRecord) -> Result<String, SmfRecordError> {
+        let type_code = record.header.record_type;
+        let parser = self
+            .parsers
+            .get(&type_code)
+            .ok_or(SmfRecordError::UnregisteredType(type_code))?;
+        Ok(parser(record))
+    }
+
+    /// Check if a type is registered.
+    pub fn is_registered(&self, type_code: u8) -> bool {
+        self.parsers.contains_key(&type_code)
+    }
+
+    /// Get all registered type codes.
+    pub fn registered_types(&self) -> Vec<u8> {
+        let mut types: Vec<u8> = self.parsers.keys().copied().collect();
+        types.sort();
+        types
     }
 }
 
@@ -440,22 +613,36 @@ impl SmfType30 {
 }
 
 // ---------------------------------------------------------------------------
-//  Helpers
+//  Helpers (public for use by other modules)
 // ---------------------------------------------------------------------------
 
-fn extend_padded(buf: &mut Vec<u8>, s: &str, len: usize) {
+pub(crate) fn extend_padded(buf: &mut Vec<u8>, s: &str, len: usize) {
     let bytes: Vec<u8> = s.bytes().chain(std::iter::repeat(b' ')).take(len).collect();
     buf.extend_from_slice(&bytes);
 }
 
-fn push_u32(buf: &mut Vec<u8>, val: u32) {
+pub(crate) fn read_padded(data: &[u8], offset: usize, len: usize) -> String {
+    if offset + len > data.len() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&data[offset..offset + len])
+        .trim_end()
+        .to_string()
+}
+
+pub(crate) fn push_u16(buf: &mut Vec<u8>, val: u16) {
+    buf.push((val >> 8) as u8);
+    buf.push(val as u8);
+}
+
+pub(crate) fn push_u32(buf: &mut Vec<u8>, val: u32) {
     buf.push((val >> 24) as u8);
     buf.push((val >> 16) as u8);
     buf.push((val >> 8) as u8);
     buf.push(val as u8);
 }
 
-fn push_u64(buf: &mut Vec<u8>, val: u64) {
+pub(crate) fn push_u64(buf: &mut Vec<u8>, val: u64) {
     buf.push((val >> 56) as u8);
     buf.push((val >> 48) as u8);
     buf.push((val >> 40) as u8);
@@ -464,6 +651,37 @@ fn push_u64(buf: &mut Vec<u8>, val: u64) {
     buf.push((val >> 16) as u8);
     buf.push((val >> 8) as u8);
     buf.push(val as u8);
+}
+
+pub(crate) fn read_u16(data: &[u8], offset: usize) -> u16 {
+    if offset + 2 > data.len() {
+        return 0;
+    }
+    u16::from_be_bytes([data[offset], data[offset + 1]])
+}
+
+#[allow(dead_code)]
+pub(crate) fn read_u32(data: &[u8], offset: usize) -> u32 {
+    if offset + 4 > data.len() {
+        return 0;
+    }
+    u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]])
+}
+
+pub(crate) fn read_u64(data: &[u8], offset: usize) -> u64 {
+    if offset + 8 > data.len() {
+        return 0;
+    }
+    u64::from_be_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+        data[offset + 4],
+        data[offset + 5],
+        data[offset + 6],
+        data[offset + 7],
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +726,29 @@ mod tests {
     }
 
     #[test]
+    fn test_smf_header_roundtrip() {
+        let mut hdr = SmfHeader::new(30);
+        hdr.rdw_length = 100;
+        hdr.flag = 0x42;
+        hdr.set_date(2024, 150);
+        hdr.set_time(14, 30, 0, 0);
+        let bytes = hdr.to_bytes();
+        let restored = SmfHeader::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.record_type, 30);
+        assert_eq!(restored.rdw_length, 100);
+        assert_eq!(restored.flag, 0x42);
+        assert_eq!(restored.time, hdr.time);
+        assert_eq!(restored.date, hdr.date);
+        assert_eq!(restored.system_id, "SYS1");
+    }
+
+    #[test]
+    fn test_smf_header_from_bytes_insufficient() {
+        let err = SmfHeader::from_bytes(&[0u8; 10]).unwrap_err();
+        assert!(matches!(err, SmfRecordError::InsufficientData { .. }));
+    }
+
+    #[test]
     fn test_smf_record_new() {
         let rec = SmfRecord::new(4, vec![1, 2, 3, 4]);
         assert_eq!(rec.header.record_type, 4);
@@ -519,6 +760,50 @@ mod tests {
         let rec = SmfRecord::new(5, vec![0xAA, 0xBB]);
         let bytes = rec.to_bytes();
         assert_eq!(bytes.len(), 20); // 18 header + 2 data
+    }
+
+    #[test]
+    fn test_smf_record_roundtrip() {
+        let rec = SmfRecord::new(42, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        let bytes = rec.to_bytes();
+        let restored = SmfRecord::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.header.record_type, 42);
+        assert_eq!(restored.data, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn test_record_type_registry() {
+        let mut registry = SmfRecordRegistry::new();
+        registry.register_type(
+            30,
+            Box::new(|rec| format!("Type30(len={})", rec.data.len())),
+        );
+        assert!(registry.is_registered(30));
+        assert!(!registry.is_registered(80));
+
+        let rec = SmfRecord::new(30, vec![0; 10]);
+        let result = registry.parse(&rec).unwrap();
+        assert_eq!(result, "Type30(len=10)");
+
+        let rec2 = SmfRecord::new(80, vec![0; 5]);
+        assert!(registry.parse(&rec2).is_err());
+    }
+
+    #[test]
+    fn test_record_type_registry_types() {
+        let mut registry = SmfRecordRegistry::new();
+        registry.register_type(30, Box::new(|_| "t30".to_string()));
+        registry.register_type(80, Box::new(|_| "t80".to_string()));
+        let types = registry.registered_types();
+        assert_eq!(types, vec![30, 80]);
+    }
+
+    #[test]
+    fn test_record_type_from_code() {
+        assert_eq!(SmfRecordType::from_code(4), SmfRecordType::Type4);
+        assert_eq!(SmfRecordType::from_code(30), SmfRecordType::Type30);
+        assert_eq!(SmfRecordType::from_code(80), SmfRecordType::Type80);
+        assert_eq!(SmfRecordType::from_code(200), SmfRecordType::User(200));
     }
 
     #[test]
@@ -590,5 +875,33 @@ mod tests {
     fn test_subtype30_codes() {
         assert_eq!(SmfSubtype30::JobStart.code(), 1);
         assert_eq!(SmfSubtype30::JobEnd.code(), 5);
+    }
+
+    #[test]
+    fn test_helper_read_padded() {
+        let data = b"HELLO   WORLD   ";
+        assert_eq!(read_padded(data, 0, 8), "HELLO");
+        assert_eq!(read_padded(data, 8, 8), "WORLD");
+    }
+
+    #[test]
+    fn test_helper_u16_roundtrip() {
+        let mut buf = Vec::new();
+        push_u16(&mut buf, 0x1234);
+        assert_eq!(read_u16(&buf, 0), 0x1234);
+    }
+
+    #[test]
+    fn test_helper_u32_roundtrip() {
+        let mut buf = Vec::new();
+        push_u32(&mut buf, 0xDEADBEEF);
+        assert_eq!(read_u32(&buf, 0), 0xDEADBEEF);
+    }
+
+    #[test]
+    fn test_helper_u64_roundtrip() {
+        let mut buf = Vec::new();
+        push_u64(&mut buf, 0x0102030405060708);
+        assert_eq!(read_u64(&buf, 0), 0x0102030405060708);
     }
 }
