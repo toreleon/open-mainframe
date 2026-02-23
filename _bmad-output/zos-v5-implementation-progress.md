@@ -1,9 +1,9 @@
 ---
 currentIG: IG-5
-currentEpic: DFSMS-108
-epicsComplete: 25
+currentEpic: DFSMS-109
+epicsComplete: 26
 epicsTotal: 162
-storiesComplete: 145
+storiesComplete: 150
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -47,7 +47,7 @@ lastUpdated: "2026-02-23"
 - [x] DFSMS-105: DFSMShsm Backup (6 stories)
 - [x] DFSMS-106: DFSMSdss DUMP/RESTORE (7 stories)
 - [x] DFSMS-107: DFSMSrmm Tape Mgmt (5 stories)
-- [ ] DFSMS-108: PDSE & Member Generations (5 stories)
+- [x] DFSMS-108: PDSE & Member Generations (5 stories)
 - [ ] DFSMS-109: Space & Volume Mgmt (5 stories)
 - [ ] DFSMS-110: GDG-to-ICF Integration (4 stories)
 
