@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
+use crate::auth::{AuthService, PassTicketValidationResult};
 use crate::database::RacfDatabase;
 use crate::resource::{AuthReason, ResourceManager};
 use crate::types::AccessLevel;
@@ -287,6 +288,83 @@ impl SafRouter {
                 fields: Vec::new(),
             },
         }
+    }
+
+    // ─────── RACROUTE VERIFY with PassTicket (SYS-110.4) ───────
+
+    /// RACROUTE REQUEST=VERIFY with PassTicket support.
+    ///
+    /// When `appl` is provided, the password is treated as a PassTicket
+    /// and validated against the PTKTDATA profile for that application.
+    /// When `appl` is `None` and a NOEVAL profile exists, the password
+    /// is tested as a PassTicket before falling back to regular password auth.
+    pub fn verify_passticket(
+        &self,
+        auth_service: &mut AuthService,
+        db: &RacfDatabase,
+        userid: &str,
+        password: &str,
+        appl: Option<&str>,
+    ) -> RacrouteResult {
+        if !self.active {
+            return RacrouteResult {
+                saf_rc: SafRc::NotActive,
+                racf_rc: RacfRc::Authorized,
+            };
+        }
+
+        let userid_upper = userid.trim().to_uppercase();
+
+        // Check user exists and is not revoked.
+        let Some(user) = db.get_user(&userid_upper) else {
+            return RacrouteResult {
+                saf_rc: SafRc::Failed,
+                racf_rc: RacfRc::NoProfile,
+            };
+        };
+
+        if user.is_revoked() {
+            return RacrouteResult {
+                saf_rc: SafRc::Failed,
+                racf_rc: RacfRc::NotAuthorized,
+            };
+        }
+
+        if let Some(app) = appl {
+            // Explicit APPL — validate as PassTicket.
+            let result = auth_service.validate_passticket(&userid_upper, app, password);
+            return match result {
+                PassTicketValidationResult::Success => RacrouteResult {
+                    saf_rc: SafRc::Success,
+                    racf_rc: RacfRc::Authorized,
+                },
+                _ => RacrouteResult {
+                    saf_rc: SafRc::Failed,
+                    racf_rc: RacfRc::NotAuthorized,
+                },
+            };
+        }
+
+        // No APPL — check NOEVAL profiles first.
+        let noeval_apps: Vec<String> = auth_service
+            .passticket_profiles
+            .values()
+            .filter(|p| p.noeval)
+            .map(|p| p.application.clone())
+            .collect();
+
+        for app in &noeval_apps {
+            let result = auth_service.validate_passticket(&userid_upper, app, password);
+            if result.is_valid() {
+                return RacrouteResult {
+                    saf_rc: SafRc::Success,
+                    racf_rc: RacfRc::Authorized,
+                };
+            }
+        }
+
+        // Fall back to regular password verification.
+        self.verify(db, userid, password)
     }
 
     // ─────── Internal dispatch ───────
@@ -633,5 +711,168 @@ mod tests {
         let result = saf.extract(&db, "USER", "JSMITH", &["NAME"]);
         assert_eq!(result.saf_rc, SafRc::NotActive);
         assert!(result.fields.is_empty());
+    }
+
+    // ─────── SYS-110.4: RACROUTE VERIFY with PassTicket ───────
+
+    #[test]
+    fn test_verify_passticket_with_appl() {
+        let db = setup_db();
+        let saf = SafRouter::new();
+        let mut auth = crate::auth::AuthService::new();
+        auth.add_passticket_profile("CICSAPP1", "MYSECRETKEY");
+
+        // Generate a PassTicket.
+        let ticket = auth.generate_passticket("JSMITH", "CICSAPP1").unwrap();
+
+        // RACROUTE VERIFY with APPL should validate the PassTicket.
+        let result = saf.verify_passticket(
+            &mut auth,
+            &db,
+            "JSMITH",
+            &ticket.ticket,
+            Some("CICSAPP1"),
+        );
+        assert!(result.is_authorized());
+    }
+
+    #[test]
+    fn test_verify_passticket_replay_fails() {
+        let db = setup_db();
+        let saf = SafRouter::new();
+        let mut auth = crate::auth::AuthService::new();
+        auth.add_passticket_profile("CICSAPP1", "MYSECRETKEY");
+
+        let ticket = auth.generate_passticket("JSMITH", "CICSAPP1").unwrap();
+
+        // First use.
+        let r1 = saf.verify_passticket(&mut auth, &db, "JSMITH", &ticket.ticket, Some("CICSAPP1"));
+        assert!(r1.is_authorized());
+
+        // Replay.
+        let r2 = saf.verify_passticket(&mut auth, &db, "JSMITH", &ticket.ticket, Some("CICSAPP1"));
+        assert!(!r2.is_authorized());
+    }
+
+    #[test]
+    fn test_verify_passticket_wrong_app() {
+        let db = setup_db();
+        let saf = SafRouter::new();
+        let mut auth = crate::auth::AuthService::new();
+        auth.add_passticket_profile("CICSAPP1", "KEY1");
+        auth.add_passticket_profile("CICSAPP2", "KEY2");
+
+        let ticket = auth.generate_passticket("JSMITH", "CICSAPP1").unwrap();
+
+        // Wrong application should fail.
+        let result = saf.verify_passticket(
+            &mut auth,
+            &db,
+            "JSMITH",
+            &ticket.ticket,
+            Some("CICSAPP2"),
+        );
+        assert!(!result.is_authorized());
+    }
+
+    #[test]
+    fn test_verify_passticket_noeval_mode() {
+        let db = setup_db();
+        let saf = SafRouter::new();
+        let mut auth = crate::auth::AuthService::new();
+
+        // Define PTKTDATA with NOEVAL.
+        auth.rdefine_ptktdata(
+            "AUTOAPP",
+            "AUTOKEY",
+            crate::auth::PassTicketKeyType::KeyMasked,
+            None,
+            true, // NOEVAL
+        );
+
+        // Generate a PassTicket.
+        let ticket = auth.generate_passticket("JSMITH", "AUTOAPP").unwrap();
+
+        // VERIFY without APPL should detect and validate the PassTicket via NOEVAL.
+        let result = saf.verify_passticket(
+            &mut auth,
+            &db,
+            "JSMITH",
+            &ticket.ticket,
+            None, // no APPL
+        );
+        assert!(result.is_authorized());
+    }
+
+    #[test]
+    fn test_verify_passticket_falls_back_to_password() {
+        let db = setup_db();
+        let saf = SafRouter::new();
+        let mut auth = crate::auth::AuthService::new();
+
+        // No NOEVAL profiles. Without APPL, should fall back to password.
+        let result = saf.verify_passticket(
+            &mut auth,
+            &db,
+            "JSMITH",
+            "SECRET123", // regular password
+            None,
+        );
+        assert!(result.is_authorized());
+    }
+
+    #[test]
+    fn test_verify_passticket_revoked_user() {
+        let mut db = setup_db();
+        db.alter_user("JSMITH", None, None, None, &[UserAttribute::Revoke], &[])
+            .unwrap();
+        let saf = SafRouter::new();
+        let mut auth = crate::auth::AuthService::new();
+        auth.add_passticket_profile("CICSAPP1", "KEY1");
+
+        let ticket = auth.generate_passticket("JSMITH", "CICSAPP1").unwrap();
+
+        let result = saf.verify_passticket(
+            &mut auth,
+            &db,
+            "JSMITH",
+            &ticket.ticket,
+            Some("CICSAPP1"),
+        );
+        assert!(!result.is_authorized());
+    }
+
+    #[test]
+    fn test_verify_passticket_user_not_found() {
+        let db = setup_db();
+        let saf = SafRouter::new();
+        let mut auth = crate::auth::AuthService::new();
+        auth.add_passticket_profile("CICSAPP1", "KEY1");
+
+        let result = saf.verify_passticket(
+            &mut auth,
+            &db,
+            "NOBODY",
+            "WHATEVER",
+            Some("CICSAPP1"),
+        );
+        assert_eq!(result.racf_rc, RacfRc::NoProfile);
+    }
+
+    #[test]
+    fn test_verify_passticket_racf_not_active() {
+        let db = setup_db();
+        let mut saf = SafRouter::new();
+        saf.set_active(false);
+        let mut auth = crate::auth::AuthService::new();
+
+        let result = saf.verify_passticket(
+            &mut auth,
+            &db,
+            "JSMITH",
+            "ANYTHING",
+            Some("APP"),
+        );
+        assert_eq!(result.saf_rc, SafRc::NotActive);
     }
 }

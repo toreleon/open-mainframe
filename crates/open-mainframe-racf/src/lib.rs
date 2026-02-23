@@ -48,10 +48,14 @@ pub mod saf;
 pub mod setropts;
 pub mod types;
 
-pub use auth::{AuthResult, AuthService, PasswordChangeResult, PasswordPolicy};
+pub use auth::{
+    AuthResult, AuthService, PasswordChangeResult, PasswordPolicy, PassTicket,
+    PassTicketKeyType, PassTicketListResult, PassTicketProfile, PassTicketValidationResult,
+};
 pub use certificate::{
-    CertMapping, CertRc, CertType, CertUsage, Certificate, CertificateManager, GencertParams,
-    KeyAlgorithm, Keyring, KeyringConnection, SubjectDN, TrustStatus,
+    CertMapping, CertRc, CertType, CertUsage, Certificate, CertificateManager,
+    ChainValidationResult, GencertParams, KeyAlgorithm, Keyring, KeyringConnection, SubjectDN,
+    TrustStatus,
 };
 pub use database::{AuthCheckResult, ListDatasetResult, ListGroupResult, ListUserResult, RacfDatabase, SearchResult};
 pub use dataset::DatasetProfile;

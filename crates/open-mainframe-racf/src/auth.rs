@@ -78,7 +78,22 @@ pub enum PasswordChangeResult {
     UserNotFound,
 }
 
-// ─────────────────────── PassTicket ───────────────────────
+// ─────────────────────── PassTicket Types ───────────────────────
+
+/// PassTicket key storage type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PassTicketKeyType {
+    /// Key stored in masked form (KEYMASKED).
+    KeyMasked,
+    /// Key stored in encrypted form (KEYENCRYPTED).
+    KeyEncrypted,
+}
+
+impl Default for PassTicketKeyType {
+    fn default() -> Self {
+        Self::KeyMasked
+    }
+}
 
 /// PassTicket application profile — defines which apps can use PassTicket auth.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +102,12 @@ pub struct PassTicketProfile {
     pub application: String,
     /// Shared secret key (simplified — in production this is DES-encrypted).
     pub secret_key: String,
+    /// Key storage type.
+    pub key_type: PassTicketKeyType,
+    /// PassTicket validity window in minutes (default 10).
+    pub timeout_minutes: u32,
+    /// If true, evaluate password as PassTicket even without explicit APPL parameter.
+    pub noeval: bool,
 }
 
 /// A generated PassTicket.
@@ -100,6 +121,41 @@ pub struct PassTicket {
     pub userid: String,
     /// The application this ticket is valid for.
     pub application: String,
+}
+
+/// Result of PassTicket validation with detailed reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PassTicketValidationResult {
+    /// PassTicket is valid.
+    Success,
+    /// PassTicket was already used (replay detected).
+    Replay,
+    /// PassTicket has expired (was valid but outside the time window).
+    Expired,
+    /// PassTicket value is invalid (wrong key or malformed).
+    InvalidTicket,
+    /// No PTKTDATA profile found for the application.
+    NoProfile,
+}
+
+impl PassTicketValidationResult {
+    /// Whether the validation succeeded.
+    pub fn is_valid(&self) -> bool {
+        matches!(self, Self::Success)
+    }
+}
+
+/// Result from RLIST PTKTDATA — shows profile configuration.
+#[derive(Debug, Clone)]
+pub struct PassTicketListResult {
+    /// Application name.
+    pub application: String,
+    /// Key type (KEYMASKED or KEYENCRYPTED).
+    pub key_type: PassTicketKeyType,
+    /// Timeout in minutes.
+    pub timeout_minutes: u32,
+    /// NOEVAL flag.
+    pub noeval: bool,
 }
 
 // ─────────────────────── Certificate Mapping ───────────────────────
@@ -117,6 +173,9 @@ pub struct CertificateMapping {
 
 // ─────────────────────── Authentication Service ───────────────────────
 
+/// Maximum sequence number to try during PassTicket validation.
+const MAX_PASSTICKET_SEQ: u64 = 256;
+
 /// RACF authentication service — manages password auth, PassTickets, and certificate mapping.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthService {
@@ -128,6 +187,8 @@ pub struct AuthService {
     pub certificate_mappings: BTreeMap<String, CertificateMapping>,
     /// Used PassTickets for replay prevention: "userid:app:ticket" → expiry timestamp.
     pub used_passtickets: BTreeMap<String, u64>,
+    /// Monotonic sequence counter for PassTicket uniqueness.
+    passticket_seq: u64,
 }
 
 impl Default for AuthService {
@@ -144,6 +205,7 @@ impl AuthService {
             passticket_profiles: BTreeMap::new(),
             certificate_mappings: BTreeMap::new(),
             used_passtickets: BTreeMap::new(),
+            passticket_seq: 0,
         }
     }
 
@@ -192,7 +254,10 @@ impl AuthService {
 
             // Auto-revoke if max failures exceeded.
             if user.failed_password_count >= self.policy.max_failures {
-                warn!("AUTH: user {} auto-revoked after {} failures", userid, user.failed_password_count);
+                warn!(
+                    "AUTH: user {} auto-revoked after {} failures",
+                    userid, user.failed_password_count
+                );
                 user.attributes.insert(UserAttribute::Revoke);
             }
 
@@ -291,25 +356,76 @@ impl AuthService {
         PasswordChangeResult::Success
     }
 
-    // ─────── PassTicket ───────
+    // ─────── PassTicket Management (SYS-110.1) ───────
 
-    /// Register a PassTicket application profile.
+    /// Register a PassTicket application profile (simplified interface).
     pub fn add_passticket_profile(&mut self, application: &str, secret_key: &str) {
+        self.rdefine_ptktdata(
+            application,
+            secret_key,
+            PassTicketKeyType::KeyMasked,
+            None,
+            false,
+        );
+    }
+
+    /// RDEFINE PTKTDATA — create a PassTicket profile for an application.
+    ///
+    /// Equivalent to: `RDEFINE PTKTDATA appname SSIGNON(KEYMASKED(key))`
+    pub fn rdefine_ptktdata(
+        &mut self,
+        application: &str,
+        secret_key: &str,
+        key_type: PassTicketKeyType,
+        timeout: Option<u32>,
+        noeval: bool,
+    ) {
         let app = application.trim().to_uppercase();
         self.passticket_profiles.insert(
             app.clone(),
             PassTicketProfile {
                 application: app,
                 secret_key: secret_key.to_string(),
+                key_type,
+                timeout_minutes: timeout.unwrap_or(10),
+                noeval,
             },
         );
     }
 
+    /// RLIST PTKTDATA — list a PassTicket application profile.
+    ///
+    /// Returns profile details including application name, key type, and timeout.
+    pub fn rlist_ptktdata(&self, application: &str) -> Option<PassTicketListResult> {
+        let app = application.trim().to_uppercase();
+        self.passticket_profiles.get(&app).map(|p| PassTicketListResult {
+            application: p.application.clone(),
+            key_type: p.key_type,
+            timeout_minutes: p.timeout_minutes,
+            noeval: p.noeval,
+        })
+    }
+
+    /// Delete a PTKTDATA profile.
+    pub fn rdelete_ptktdata(&mut self, application: &str) -> bool {
+        let app = application.trim().to_uppercase();
+        self.passticket_profiles.remove(&app).is_some()
+    }
+
+    /// List all PTKTDATA application names.
+    pub fn list_ptktdata_applications(&self) -> Vec<&str> {
+        self.passticket_profiles.keys().map(|k| k.as_str()).collect()
+    }
+
+    // ─────── PassTicket Generation (SYS-110.2) ───────
+
     /// Generate a PassTicket for a user and application.
     ///
     /// Returns `None` if no PTKTDATA profile exists for the application.
+    /// Each call produces a unique ticket, even within the same time window,
+    /// via a monotonic sequence counter.
     pub fn generate_passticket(
-        &self,
+        &mut self,
         userid: &str,
         application: &str,
     ) -> Option<PassTicket> {
@@ -319,9 +435,11 @@ impl AuthService {
         let profile = self.passticket_profiles.get(&app)?;
         let timestamp = current_timestamp();
 
-        // Generate ticket: simplified HMAC-like computation.
-        // Real PassTickets use DES with the secured signon key.
-        let ticket = generate_ticket_value(&userid, &app, &profile.secret_key, timestamp);
+        // Use monotonic seq to ensure uniqueness within the same time window.
+        let seq = self.passticket_seq;
+        self.passticket_seq += 1;
+
+        let ticket = generate_ticket_value(&userid, &app, &profile.secret_key, timestamp, seq);
 
         Some(PassTicket {
             ticket,
@@ -331,49 +449,77 @@ impl AuthService {
         })
     }
 
-    /// Validate a PassTicket.
+    // ─────── PassTicket Validation (SYS-110.3) ───────
+
+    /// Validate a PassTicket with detailed result.
     ///
-    /// Checks that the ticket matches the expected value and hasn't been replayed.
+    /// Checks the ticket against the PTKTDATA profile key and the current/adjacent
+    /// time windows. Detects replay, expiry, and invalid tickets.
     pub fn validate_passticket(
         &mut self,
         userid: &str,
         application: &str,
         ticket: &str,
-    ) -> bool {
+    ) -> PassTicketValidationResult {
         let app = application.trim().to_uppercase();
         let userid = userid.trim().to_uppercase();
 
         let Some(profile) = self.passticket_profiles.get(&app) else {
             debug!("PASSTICKET: no profile for application {}", app);
-            return false;
+            return PassTicketValidationResult::NoProfile;
         };
 
+        let secret = profile.secret_key.clone();
+        let timeout_secs = u64::from(profile.timeout_minutes) * 60;
         let now = current_timestamp();
 
         // Check replay — ticket must not have been used before.
         let replay_key = format!("{}:{}:{}", userid, app, ticket);
         if self.used_passtickets.contains_key(&replay_key) {
             warn!("PASSTICKET: replay detected for {}:{}", userid, app);
-            return false;
+            return PassTicketValidationResult::Replay;
         }
 
-        // Validate against current and adjacent time windows (±10 minutes).
-        let valid = [now, now.wrapping_sub(600), now + 600]
-            .iter()
-            .any(|&ts| {
-                let expected = generate_ticket_value(&userid, &app, &profile.secret_key, ts);
-                expected == ticket
-            });
-
-        if valid {
-            // Record ticket as used (with expiry).
-            self.used_passtickets.insert(replay_key, now + 1200);
-            info!("PASSTICKET: valid ticket for {}:{}", userid, app);
-        } else {
-            debug!("PASSTICKET: invalid ticket for {}:{}", userid, app);
+        // Check current and adjacent time windows (±1 window for clock skew).
+        let valid_windows = [now, now.wrapping_sub(timeout_secs), now + timeout_secs];
+        for &ts in &valid_windows {
+            for seq in 0..MAX_PASSTICKET_SEQ.min(self.passticket_seq + 1) {
+                let expected = generate_ticket_value(&userid, &app, &secret, ts, seq);
+                if expected == ticket {
+                    // Record ticket as used with expiry.
+                    self.used_passtickets
+                        .insert(replay_key, now + timeout_secs * 2);
+                    info!("PASSTICKET: valid ticket for {}:{}", userid, app);
+                    return PassTicketValidationResult::Success;
+                }
+            }
         }
 
-        valid
+        // Check expired windows (2-3 windows back) to distinguish expired from invalid.
+        let expired_windows = [
+            now.wrapping_sub(timeout_secs * 2),
+            now.wrapping_sub(timeout_secs * 3),
+        ];
+        for &ts in &expired_windows {
+            for seq in 0..MAX_PASSTICKET_SEQ.min(self.passticket_seq + 1) {
+                let expected = generate_ticket_value(&userid, &app, &secret, ts, seq);
+                if expected == ticket {
+                    debug!("PASSTICKET: expired ticket for {}:{}", userid, app);
+                    return PassTicketValidationResult::Expired;
+                }
+            }
+        }
+
+        debug!("PASSTICKET: invalid ticket for {}:{}", userid, app);
+        PassTicketValidationResult::InvalidTicket
+    }
+
+    /// Check if an application has NOEVAL set.
+    pub fn is_noeval_application(&self, application: &str) -> bool {
+        let app = application.trim().to_uppercase();
+        self.passticket_profiles
+            .get(&app)
+            .map_or(false, |p| p.noeval)
     }
 
     // ─────── Certificate Mapping ───────
@@ -418,17 +564,23 @@ impl AuthService {
 /// Generate a simplified PassTicket value.
 ///
 /// Real z/OS uses DES-MAC with the secured signon key. This implementation
-/// uses a simplified hash for demonstration purposes.
-fn generate_ticket_value(userid: &str, application: &str, secret: &str, timestamp: u64) -> String {
-    // Simple deterministic ticket: hash of userid + app + secret + time window.
+/// uses a simplified hash for demonstration purposes. The `seq` parameter
+/// ensures uniqueness when multiple tickets are generated in the same time window.
+fn generate_ticket_value(
+    userid: &str,
+    application: &str,
+    secret: &str,
+    timestamp: u64,
+    seq: u64,
+) -> String {
     // Time window = timestamp / 600 (10-minute windows).
     let window = timestamp / 600;
-    let input = format!("{}:{}:{}:{}", userid, application, secret, window);
+    let input = format!("{}:{}:{}:{}:{}", userid, application, secret, window, seq);
 
     // Simple hash — take a numeric hash and format as 8-digit string.
-    let hash = input.bytes().fold(0u64, |acc, b| {
-        acc.wrapping_mul(31).wrapping_add(u64::from(b))
-    });
+    let hash = input
+        .bytes()
+        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(u64::from(b)));
     format!("{:08}", hash % 100_000_000)
 }
 
@@ -446,7 +598,8 @@ mod tests {
     fn setup() -> (RacfDatabase, AuthService) {
         let mut db = RacfDatabase::new();
         db.add_group("DEPT01", "SYS1", "ADMIN1").unwrap();
-        db.add_user("JSMITH", "DEPT01", "John Smith", "ADMIN1").unwrap();
+        db.add_user("JSMITH", "DEPT01", "John Smith", "ADMIN1")
+            .unwrap();
 
         // Set password with recent change timestamp.
         let user = db.get_user_mut("JSMITH").unwrap();
@@ -457,7 +610,7 @@ mod tests {
         (db, auth)
     }
 
-    // ─────── Story S105.1: Password and Passphrase Authentication ───────
+    // ─────── Password Authentication (existing) ───────
 
     #[test]
     fn test_authenticate_success() {
@@ -514,7 +667,8 @@ mod tests {
     #[test]
     fn test_authenticate_revoked_user() {
         let (mut db, auth) = setup();
-        db.alter_user("JSMITH", None, None, None, &[UserAttribute::Revoke], &[]).unwrap();
+        db.alter_user("JSMITH", None, None, None, &[UserAttribute::Revoke], &[])
+            .unwrap();
 
         let result = auth.authenticate(&mut db, "JSMITH", "SECRET1");
         assert_eq!(result, AuthResult::Revoked);
@@ -530,7 +684,8 @@ mod tests {
     #[test]
     fn test_authenticate_no_password() {
         let (mut db, _) = setup();
-        db.add_user("NOPASS", "DEPT01", "No Pass", "ADMIN1").unwrap();
+        db.add_user("NOPASS", "DEPT01", "No Pass", "ADMIN1")
+            .unwrap();
         let auth = AuthService::new();
 
         let result = auth.authenticate(&mut db, "NOPASS", "anything");
@@ -600,10 +755,111 @@ mod tests {
         assert_eq!(db.get_user("JSMITH").unwrap().failed_password_count, 0);
     }
 
-    // ─────── Story S105.2: PassTicket and Certificate Authentication ───────
+    // ─────── SYS-110.1: PTKTDATA Profile Management ───────
 
     #[test]
-    fn test_passticket_generate_and_validate() {
+    fn test_rdefine_ptktdata_keymasked() {
+        let mut auth = AuthService::new();
+        auth.rdefine_ptktdata(
+            "CICSAPP1",
+            "E001193519561977",
+            PassTicketKeyType::KeyMasked,
+            None,
+            false,
+        );
+
+        let listing = auth.rlist_ptktdata("CICSAPP1").unwrap();
+        assert_eq!(listing.application, "CICSAPP1");
+        assert_eq!(listing.key_type, PassTicketKeyType::KeyMasked);
+        assert_eq!(listing.timeout_minutes, 10);
+        assert!(!listing.noeval);
+    }
+
+    #[test]
+    fn test_rdefine_ptktdata_zosmf() {
+        let mut auth = AuthService::new();
+        auth.rdefine_ptktdata(
+            "ZOSMF",
+            "ZOSMFKEY12345678",
+            PassTicketKeyType::KeyMasked,
+            Some(15),
+            false,
+        );
+
+        let listing = auth.rlist_ptktdata("ZOSMF").unwrap();
+        assert_eq!(listing.application, "ZOSMF");
+        assert_eq!(listing.timeout_minutes, 15);
+    }
+
+    #[test]
+    fn test_rdefine_ptktdata_keyencrypted() {
+        let mut auth = AuthService::new();
+        auth.rdefine_ptktdata(
+            "DB2APP",
+            "ENCRYPTEDKEY",
+            PassTicketKeyType::KeyEncrypted,
+            None,
+            false,
+        );
+
+        let listing = auth.rlist_ptktdata("DB2APP").unwrap();
+        assert_eq!(listing.key_type, PassTicketKeyType::KeyEncrypted);
+    }
+
+    #[test]
+    fn test_rdefine_ptktdata_with_noeval() {
+        let mut auth = AuthService::new();
+        auth.rdefine_ptktdata(
+            "AUTOAPP",
+            "AUTOKEY",
+            PassTicketKeyType::KeyMasked,
+            None,
+            true,
+        );
+
+        assert!(auth.is_noeval_application("AUTOAPP"));
+        let listing = auth.rlist_ptktdata("AUTOAPP").unwrap();
+        assert!(listing.noeval);
+    }
+
+    #[test]
+    fn test_rlist_ptktdata_not_found() {
+        let auth = AuthService::new();
+        assert!(auth.rlist_ptktdata("NOAPP").is_none());
+    }
+
+    #[test]
+    fn test_no_profile_fails_generation() {
+        let mut auth = AuthService::new();
+        assert!(auth.generate_passticket("JSMITH", "NOAPP").is_none());
+    }
+
+    #[test]
+    fn test_rdelete_ptktdata() {
+        let mut auth = AuthService::new();
+        auth.add_passticket_profile("CICSAPP1", "KEY1");
+        assert!(auth.rdelete_ptktdata("CICSAPP1"));
+        assert!(auth.rlist_ptktdata("CICSAPP1").is_none());
+    }
+
+    #[test]
+    fn test_list_ptktdata_applications() {
+        let mut auth = AuthService::new();
+        auth.add_passticket_profile("APP1", "KEY1");
+        auth.add_passticket_profile("APP2", "KEY2");
+        auth.add_passticket_profile("APP3", "KEY3");
+
+        let apps = auth.list_ptktdata_applications();
+        assert_eq!(apps.len(), 3);
+        assert!(apps.contains(&"APP1"));
+        assert!(apps.contains(&"APP2"));
+        assert!(apps.contains(&"APP3"));
+    }
+
+    // ─────── SYS-110.2: PassTicket Generation ───────
+
+    #[test]
+    fn test_passticket_generate() {
         let mut auth = AuthService::new();
         auth.add_passticket_profile("CICSAPP1", "MYSECRETKEY");
 
@@ -611,9 +867,44 @@ mod tests {
         assert_eq!(ticket.userid, "JSMITH");
         assert_eq!(ticket.application, "CICSAPP1");
         assert_eq!(ticket.ticket.len(), 8);
+    }
 
-        // Validate the ticket.
-        assert!(auth.validate_passticket("JSMITH", "CICSAPP1", &ticket.ticket));
+    #[test]
+    fn test_passticket_same_second_uniqueness() {
+        let mut auth = AuthService::new();
+        auth.add_passticket_profile("CICSAPP1", "MYSECRETKEY");
+
+        // Generate two tickets for the same user/app — they should be different.
+        let t1 = auth.generate_passticket("JSMITH", "CICSAPP1").unwrap();
+        let t2 = auth.generate_passticket("JSMITH", "CICSAPP1").unwrap();
+        assert_ne!(t1.ticket, t2.ticket, "same-second tickets must differ");
+    }
+
+    #[test]
+    fn test_passticket_uses_ptktdata_key() {
+        let mut auth = AuthService::new();
+        auth.add_passticket_profile("APP1", "KEY_A");
+        let t1 = auth.generate_passticket("JSMITH", "APP1").unwrap();
+
+        // Different key produces different ticket (same seq, but different AuthService instance).
+        let mut auth2 = AuthService::new();
+        auth2.add_passticket_profile("APP1", "KEY_B");
+        let t2 = auth2.generate_passticket("JSMITH", "APP1").unwrap();
+
+        assert_ne!(t1.ticket, t2.ticket, "different keys produce different tickets");
+    }
+
+    // ─────── SYS-110.3: PassTicket Validation & Replay ───────
+
+    #[test]
+    fn test_passticket_validate_success() {
+        let mut auth = AuthService::new();
+        auth.add_passticket_profile("CICSAPP1", "MYSECRETKEY");
+
+        let ticket = auth.generate_passticket("JSMITH", "CICSAPP1").unwrap();
+        let result = auth.validate_passticket("JSMITH", "CICSAPP1", &ticket.ticket);
+        assert_eq!(result, PassTicketValidationResult::Success);
+        assert!(result.is_valid());
     }
 
     #[test]
@@ -624,23 +915,74 @@ mod tests {
         let ticket = auth.generate_passticket("JSMITH", "CICSAPP1").unwrap();
 
         // First use should succeed.
-        assert!(auth.validate_passticket("JSMITH", "CICSAPP1", &ticket.ticket));
-        // Second use (replay) should fail.
-        assert!(!auth.validate_passticket("JSMITH", "CICSAPP1", &ticket.ticket));
+        assert!(auth
+            .validate_passticket("JSMITH", "CICSAPP1", &ticket.ticket)
+            .is_valid());
+        // Second use (replay) should fail with Replay.
+        let result = auth.validate_passticket("JSMITH", "CICSAPP1", &ticket.ticket);
+        assert_eq!(result, PassTicketValidationResult::Replay);
     }
 
     #[test]
-    fn test_passticket_no_profile() {
-        let auth = AuthService::new();
-        assert!(auth.generate_passticket("JSMITH", "NOAPP").is_none());
+    fn test_passticket_no_profile_validation() {
+        let mut auth = AuthService::new();
+        let result = auth.validate_passticket("JSMITH", "NOAPP", "00000000");
+        assert_eq!(result, PassTicketValidationResult::NoProfile);
     }
 
     #[test]
-    fn test_passticket_wrong_ticket() {
+    fn test_passticket_invalid_ticket() {
         let mut auth = AuthService::new();
         auth.add_passticket_profile("CICSAPP1", "MYSECRETKEY");
-        assert!(!auth.validate_passticket("JSMITH", "CICSAPP1", "00000000"));
+        let result = auth.validate_passticket("JSMITH", "CICSAPP1", "00000000");
+        assert_eq!(result, PassTicketValidationResult::InvalidTicket);
     }
+
+    #[test]
+    fn test_passticket_wrong_application() {
+        let mut auth = AuthService::new();
+        auth.add_passticket_profile("CICSAPP1", "KEY1");
+        auth.add_passticket_profile("CICSAPP2", "KEY2");
+
+        let ticket = auth.generate_passticket("JSMITH", "CICSAPP1").unwrap();
+        // Validating against wrong application should fail.
+        let result = auth.validate_passticket("JSMITH", "CICSAPP2", &ticket.ticket);
+        assert!(!result.is_valid());
+    }
+
+    #[test]
+    fn test_passticket_replay_cache_purge() {
+        let mut auth = AuthService::new();
+        // Insert an "already expired" entry.
+        auth.used_passtickets
+            .insert("old:key:ticket".to_string(), 0);
+        auth.purge_expired_passtickets();
+        assert!(auth.used_passtickets.is_empty());
+    }
+
+    #[test]
+    fn test_passticket_multiple_generate_all_validate() {
+        let mut auth = AuthService::new();
+        auth.add_passticket_profile("CICSAPP1", "KEY1");
+
+        // Generate 10 tickets rapidly.
+        let tickets: Vec<PassTicket> = (0..10)
+            .map(|_| auth.generate_passticket("JSMITH", "CICSAPP1").unwrap())
+            .collect();
+
+        // All should be unique.
+        let unique: std::collections::HashSet<&str> =
+            tickets.iter().map(|t| t.ticket.as_str()).collect();
+        assert_eq!(unique.len(), 10, "all 10 tickets must be unique");
+
+        // All should validate successfully.
+        for ticket in &tickets {
+            let result = auth.validate_passticket("JSMITH", "CICSAPP1", &ticket.ticket);
+            assert!(result.is_valid(), "ticket {} should validate", ticket.ticket);
+        }
+    }
+
+    // ─────── Certificate Mapping (existing) ───────
 
     #[test]
     fn test_certificate_mapping() {
@@ -669,14 +1011,5 @@ mod tests {
         auth.add_certificate_mapping("CN=John,O=X,C=US", "CN=CA,O=X,C=US", "JSMITH");
         assert!(auth.remove_certificate_mapping("CN=John,O=X,C=US"));
         assert!(auth.lookup_certificate("CN=John,O=X,C=US").is_none());
-    }
-
-    #[test]
-    fn test_purge_expired_passtickets() {
-        let mut auth = AuthService::new();
-        // Insert an "already expired" entry.
-        auth.used_passtickets.insert("old:key:ticket".to_string(), 0);
-        auth.purge_expired_passtickets();
-        assert!(auth.used_passtickets.is_empty());
     }
 }
