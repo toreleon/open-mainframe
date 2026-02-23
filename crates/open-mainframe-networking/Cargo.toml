@@ -1,0 +1,12 @@
+[package]
+name = "open-mainframe-networking"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "z/OS Networking: VTAM, SNA, TCP/IP, FTP, SSH"
+
+[dependencies]
+thiserror.workspace = true
+miette.workspace = true

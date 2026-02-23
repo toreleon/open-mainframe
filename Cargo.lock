@@ -1409,6 +1409,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-networking"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "thiserror",
+]
+
+[[package]]
 name = "open-mainframe-pgmmgmt"
 version = "0.1.0"
 dependencies = [
@@ -1424,6 +1432,14 @@ dependencies = [
  "serde",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "open-mainframe-precompilers"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "thiserror",
 ]
 
 [[package]]
@@ -1509,6 +1525,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-uss"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "thiserror",
+]
+
+[[package]]
 name = "open-mainframe-utilities"
 version = "0.1.0"
 dependencies = [
@@ -1525,6 +1549,7 @@ version = "0.1.0"
 dependencies = [
  "miette",
  "serde",
+ "serde_json",
  "thiserror",
  "tracing",
 ]
