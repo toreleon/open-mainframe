@@ -1,9 +1,9 @@
 ---
 currentIG: IG-4
-currentEpic: DFSMS-101
-epicsComplete: 18
+currentEpic: DFSMS-102
+epicsComplete: 19
 epicsTotal: 162
-storiesComplete: 98
+storiesComplete: 105
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -40,7 +40,7 @@ lastUpdated: "2026-02-23"
 
 ### IG-5: DFSMS, HSM & Catalog (EXTEND: open-mainframe-dataset)
 - [x] DFSMS-100: SMS Construct Data Model (7 stories)
-- [ ] DFSMS-101: ACS Routine Interpreter (7 stories)
+- [x] DFSMS-101: ACS Routine Interpreter (7 stories)
 - [ ] DFSMS-102: ICF Catalogs (7 stories)
 - [ ] DFSMS-103: IDCAMS Extensions (7 stories)
 - [ ] DFSMS-104: DFSMShsm Migration (5 stories)
@@ -253,5 +253,5 @@ lastUpdated: "2026-02-23"
 - Existing crates to extend: 10
 - Total epics: 162
 - Total stories: 949
-- Epics complete: 18
-- Stories complete: 98
+- Epics complete: 19
+- Stories complete: 105

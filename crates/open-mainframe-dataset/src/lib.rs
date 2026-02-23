@@ -27,6 +27,7 @@
 //! - Dataset catalog for name resolution
 //! - PDS member support
 
+pub mod acs;
 pub mod bsam;
 pub mod catalog;
 pub mod error;
