@@ -12,11 +12,16 @@
 //! - **APF Authorization** — authorized program facility
 
 pub mod binder;
+pub mod objmod;
 pub mod program;
 
 pub use binder::{
     AdconType, Binder, BinderError, EsdEntry, EsdType, LoadModule, ObjectModule, ResolvedSymbol,
     RldEntry, TextRecord,
+};
+
+pub use objmod::{
+    CesdEntry, LoadModuleText, ParseError, ParsedLoadModule, RawRecord, RecordType,
 };
 
 pub use program::{

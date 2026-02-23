@@ -1,9 +1,9 @@
 ---
-currentIG: IG-8
-currentEpic: SYS-105
-epicsComplete: 32
+currentIG: IG-9
+currentEpic: WLM-100
+epicsComplete: 33
 epicsTotal: 162
-storiesComplete: 195
+storiesComplete: 201
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -64,7 +64,7 @@ lastUpdated: "2026-02-23"
 ### IG-8: Program Management & Binder (NEW: open-mainframe-pgmmgmt)
 - [x] Scaffold crate
 - [x] SYS-104: Binder & Program Execution (10 stories)
-- [ ] SYS-105: Object & Load Module Format (6 stories)
+- [x] SYS-105: Object & Load Module Format (6 stories)
 
 ### IG-9: WLM Extensions (EXTEND: open-mainframe-wlm)
 - [ ] WLM-100: Service Definition Data Model (7 stories)
