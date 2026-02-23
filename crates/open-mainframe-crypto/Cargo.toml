@@ -1,0 +1,12 @@
+[package]
+name = "open-mainframe-crypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "z/OS ICSF cryptographic services — symmetric/asymmetric operations, key stores, RACF crypto integration, security labels, audit, exits"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
