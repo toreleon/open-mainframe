@@ -9,12 +9,14 @@
 
 pub mod capping;
 pub mod classify;
+pub mod enclave;
 pub mod goals;
 pub mod policy;
 pub mod scheduling;
 pub mod service;
 
 pub use capping::{CappingEngine, EnforcementAction, GroupUtilization, RuntimeEnvironment, ThrottleAction};
+pub use enclave::{Enclave, EnclaveManager, EnclaveState};
 pub use classify::{ClassificationRule, Classifier, SubsystemType, WorkAttribute, WorkRequest};
 pub use goals::{
     PerformanceIndex, ResourceDemand, ServiceUnits, SlidingWindow, WorkUnitTracker,

@@ -1,9 +1,9 @@
 ---
 currentIG: IG-9
-currentEpic: WLM-105
-epicsComplete: 38
+currentEpic: WLM-106
+epicsComplete: 39
 epicsTotal: 162
-storiesComplete: 231
+storiesComplete: 236
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -72,7 +72,7 @@ lastUpdated: "2026-02-23"
 - [x] WLM-102: Goal Evaluation & PI (6 stories)
 - [x] WLM-103: Resource Groups & Capping (5 stories)
 - [x] WLM-104: WLM-Managed Initiator Scheduling (6 stories)
-- [ ] WLM-105: Enclave Framework (5 stories)
+- [x] WLM-105: Enclave Framework (5 stories)
 - [ ] WLM-106: IWM Services API (7 stories)
 - [ ] WLM-107: Scheduling & App Environments (5 stories)
 - [ ] WLM-108: Service Definition Persistence (4 stories)
