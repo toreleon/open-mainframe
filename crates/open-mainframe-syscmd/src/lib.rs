@@ -12,9 +12,15 @@
 //! - **JES2 routing** — $D, $S, $P, $C, $A, $T commands
 
 pub mod commands;
+pub mod sdsf;
 
 pub use commands::{
     AddressSpace, AsidStatus, CancelOptions, CommandDispatcher, CommandOutput, CommandRegistry,
     DisplayResult, JobInfo, MemoryInfo, ModifyParams, ReplyResult, StartParams, StorageArea,
     SystemCommand, SystemTime, WtorEntry,
+};
+
+pub use sdsf::{
+    JobStatus, JobType, LineCommand, LineCommandResult, LogEntry, PanelRow, PanelType,
+    RenderedPanel, SdsfEngine, SdsfJob, SortField, SysoutDataset,
 };
