@@ -23,6 +23,7 @@
 //! assert_eq!(result.condition_code, 0);
 //! ```
 
+pub mod amaspzap;
 pub mod error;
 pub mod iebcompr;
 pub mod iebcopy;
@@ -614,6 +615,7 @@ impl UtilityRegistry {
         reg.register(Box::new(ieh::Iehprogm));
         reg.register(Box::new(ieh::Iehlist));
         reg.register(Box::new(ieh::Iehmove));
+        reg.register(Box::new(amaspzap::Amaspzap));
         reg
     }
 

@@ -1,9 +1,9 @@
 ---
 currentIG: IG-4
-currentEpic: UTIL-108
-epicsComplete: 15
+currentEpic: UTIL-109
+epicsComplete: 16
 epicsTotal: 162
-storiesComplete: 79
+storiesComplete: 85
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -35,7 +35,7 @@ lastUpdated: "2026-02-23"
 - [x] UTIL-105: IEBPTPCH (4 stories)
 - [x] UTIL-106: IEBDG (4 stories)
 - [x] UTIL-107: IEH System Utilities (6 stories)
-- [ ] UTIL-108: AMASPZAP (6 stories)
+- [x] UTIL-108: AMASPZAP (6 stories)
 - [ ] UTIL-109: TSO/REXX/USS Batch (6 stories)
 
 ### IG-5: DFSMS, HSM & Catalog (EXTEND: open-mainframe-dataset)
@@ -253,5 +253,5 @@ lastUpdated: "2026-02-23"
 - Existing crates to extend: 10
 - Total epics: 162
 - Total stories: 949
-- Epics complete: 15
-- Stories complete: 79
+- Epics complete: 16
+- Stories complete: 85
