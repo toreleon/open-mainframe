@@ -23,6 +23,8 @@
 //! let result = preprocessor.process(source)?;
 //! ```
 
+pub mod bind;
+pub mod ops;
 pub mod preprocess;
 pub mod runtime;
 pub mod utilities;
@@ -39,6 +41,20 @@ pub use runtime::{
 pub use utilities::{
     BindAction, BindOptions, Binder, BoundPackage, ColumnInfo, Dclgen, DclgenLanguage,
     DclgenOptions, IsolationLevel, ReleaseOption, TableInfo, ValidateOption,
+};
+
+// SYS-114: BIND & Package Management re-exports
+pub use bind::{
+    BindError, BindPackage, BindPlan, BindResult, CatalogAction, CatalogExplain,
+    CatalogIsolation, CatalogPackListEntry, CatalogPackage, CatalogPlan, CatalogValidate,
+    Db2Catalog, Dbrm as BindDbrm, FreeCommand, FreeTarget, PackageBindOptions, PackageRef,
+    RebindCommand, RebindTarget,
+};
+
+// SYS-115: Operational Utilities re-exports
+pub use ops::{
+    DataFormat, DclgenOutput, DclgenUtil, Dsntep2, Dsntep2Result, LoadUtility, OpsColumnDef,
+    OpsError, OpsResult, OpsTable, OpsTableDef, UnloadUtility,
 };
 
 use thiserror::Error;
