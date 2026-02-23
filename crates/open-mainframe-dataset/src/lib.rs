@@ -32,6 +32,7 @@ pub mod bsam;
 pub mod catalog;
 pub mod error;
 pub mod gdg;
+pub mod icf;
 pub mod idcams;
 pub mod locking;
 pub mod pds;
@@ -47,6 +48,10 @@ pub use bsam::{
 pub use catalog::{Catalog, CatalogEntry};
 pub use error::DatasetError;
 pub use gdg::{GdgBase, GdgGeneration, GdgGenerationInfo, GdgListInfo, GdgOptions, GenerationNumber};
+pub use icf::{
+    BcsEntry, BcsEntryType, CatalogIssue, CatalogLookupResult, IcfCatalog, IcfCatalogSystem, Vvds,
+    VvdsRecord, VvdsRecordType,
+};
 pub use idcams::{Idcams, IdcamsCommand, IdcamsResult};
 pub use locking::{DatasetLockManager, LockEntry, LockManager, LockMode};
 pub use pds::{IspfStats, Pds, PdsMember};
