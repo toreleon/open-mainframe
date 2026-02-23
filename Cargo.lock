@@ -1264,6 +1264,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-clist"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "thiserror",
+]
+
+[[package]]
 name = "open-mainframe-cobol"
 version = "0.1.0"
 dependencies = [

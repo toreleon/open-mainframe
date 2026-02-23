@@ -28,6 +28,7 @@ members = [
     "crates/open-mainframe-uss",
     "crates/open-mainframe-networking",
     "crates/open-mainframe-precompilers",
+    "crates/open-mainframe-clist",
 ]
 
 [workspace.package]
@@ -102,3 +103,4 @@ open-mainframe-pgmmgmt = { path = "crates/open-mainframe-pgmmgmt" }
 open-mainframe-uss = { path = "crates/open-mainframe-uss" }
 open-mainframe-networking = { path = "crates/open-mainframe-networking" }
 open-mainframe-precompilers = { path = "crates/open-mainframe-precompilers" }
+open-mainframe-clist = { path = "crates/open-mainframe-clist" }
