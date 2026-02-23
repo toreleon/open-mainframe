@@ -1,0 +1,12 @@
+[package]
+name = "open-mainframe-natural"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Software AG Natural 4GL — parser, interpreter, ADABAS/SQL database access, reporting, maps, and security"
+
+[dependencies]
+thiserror.workspace = true
+miette.workspace = true

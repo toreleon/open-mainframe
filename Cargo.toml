@@ -34,6 +34,8 @@ members = [
     "crates/open-mainframe-idms",
     "crates/open-mainframe-adabas",
     "crates/open-mainframe-easytrieve",
+    "crates/open-mainframe-natural",
+    "crates/open-mainframe-focus",
 ]
 
 [workspace.package]
@@ -114,3 +116,5 @@ open-mainframe-parmlib = { path = "crates/open-mainframe-parmlib" }
 open-mainframe-idms = { path = "crates/open-mainframe-idms" }
 open-mainframe-adabas = { path = "crates/open-mainframe-adabas" }
 open-mainframe-easytrieve = { path = "crates/open-mainframe-easytrieve" }
+open-mainframe-natural = { path = "crates/open-mainframe-natural" }
+open-mainframe-focus = { path = "crates/open-mainframe-focus" }

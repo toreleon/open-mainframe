@@ -1,0 +1,12 @@
+[package]
+name = "open-mainframe-focus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Information Builders FOCUS — multi-dialect 4GL with TABLE/GRAPH/MODIFY engines, Dialogue Manager, data adapters, and report formatting"
+
+[dependencies]
+thiserror.workspace = true
+miette.workspace = true

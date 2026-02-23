@@ -1362,6 +1362,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-focus"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "thiserror",
+]
+
+[[package]]
 name = "open-mainframe-hlasm"
 version = "0.1.0"
 dependencies = [
@@ -1452,6 +1460,14 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "open-mainframe-natural"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "thiserror",
 ]
 
 [[package]]
