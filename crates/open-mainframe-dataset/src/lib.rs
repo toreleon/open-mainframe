@@ -50,8 +50,8 @@ pub use catalog::{Catalog, CatalogEntry};
 pub use error::DatasetError;
 pub use gdg::{GdgBase, GdgGeneration, GdgGenerationInfo, GdgListInfo, GdgOptions, GenerationNumber};
 pub use hsm::{
-    BackupRecord, Hsm, HsmConfig, HsmControlDataSets, MigrationRecord, MigrationStatus,
-    StorageTier,
+    Abars, AggregateGroup, BackupRecord, Hsm, HsmConfig, HsmControlDataSets, MigrationRecord,
+    MigrationStatus, StorageTier,
 };
 pub use icf::{
     BcsEntry, BcsEntryType, CatalogIssue, CatalogLookupResult, IcfCatalog, IcfCatalogSystem, Vvds,

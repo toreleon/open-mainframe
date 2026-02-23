@@ -10,6 +10,9 @@
 //! - **Automatic Space Management** — Age-based migration policies
 //! - **Compression** — RLE compression for migrated data
 //! - **CDS** — Control Data Sets (MCDS, BCDS, OCDS)
+//! - **HBACKUP/HRECOVER** — Dataset-level backup and recovery
+//! - **ABARS** — Aggregate Backup and Recovery Support
+//! - **Auto Backup** — Management-class-driven backup frequency
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -497,6 +500,167 @@ impl Hsm {
         Ok(messages)
     }
 
+    // ─────────────────────── Backup & Recovery ───────────────────────
+
+    /// HBACKUP — create a backup copy of a dataset.
+    ///
+    /// If `max_versions` > 0, only the most recent N backups are retained.
+    pub fn hbackup(
+        &mut self,
+        dsn: &str,
+        max_versions: u32,
+    ) -> Result<String, DatasetError> {
+        // Find the dataset file (on ML0 or migrated)
+        let status = self.statuses.get(dsn).ok_or_else(|| DatasetError::IoError {
+            message: format!("Dataset '{}' not found in HSM", dsn),
+        })?;
+
+        let data_path = self.dataset_path(dsn, status.tier);
+        let data = std::fs::read(&data_path)?;
+
+        // Create backup directory
+        let backup_dir = self.config.ml1_path.join("BACKUPS");
+        std::fs::create_dir_all(&backup_dir)?;
+
+        // Determine version number
+        let existing = self.cds.bcds.entry(dsn.to_string()).or_default();
+        let version = existing.last().map(|r| r.version + 1).unwrap_or(1);
+
+        // Write backup file (compressed)
+        let compressed = rle_compress(&data);
+        let backup_filename = format!("{}.V{:04}", dsn.replace('.', "_"), version);
+        let backup_path = backup_dir.join(&backup_filename);
+        std::fs::write(&backup_path, &compressed)?;
+
+        let backup_size = compressed.len() as u64;
+
+        // Record in BCDS
+        self.cds.record_backup(BackupRecord {
+            dsn: dsn.to_string(),
+            version,
+            backed_up_at: SystemTime::now(),
+            backup_size,
+            target_volume: "BKVOL1".to_string(),
+        });
+
+        // Enforce max_versions
+        if max_versions > 0 {
+            let records = self.cds.bcds.get_mut(dsn).unwrap();
+            while records.len() > max_versions as usize {
+                let old = records.remove(0);
+                let old_filename = format!("{}.V{:04}", dsn.replace('.', "_"), old.version);
+                let old_path = backup_dir.join(&old_filename);
+                let _ = std::fs::remove_file(&old_path);
+            }
+        }
+
+        let versions_kept = self.cds.bcds.get(dsn).map(|v| v.len()).unwrap_or(0);
+        Ok(format!(
+            "ARC0010I {} BACKED UP (VERSION {} OF {}, {} BYTES)",
+            dsn, version, versions_kept, backup_size
+        ))
+    }
+
+    /// HRECOVER — recover a dataset from backup.
+    ///
+    /// If `from_version` is None, recovers the most recent backup.
+    /// If `replace` is true, overwrites existing dataset.
+    pub fn hrecover(
+        &mut self,
+        dsn: &str,
+        from_version: Option<u32>,
+        replace: bool,
+    ) -> Result<String, DatasetError> {
+        let records = self.cds.bcds.get(dsn).ok_or_else(|| DatasetError::IoError {
+            message: format!("No backup found for '{}'", dsn),
+        })?;
+
+        // Find the appropriate backup version
+        let record = if let Some(ver) = from_version {
+            records
+                .iter()
+                .find(|r| r.version == ver)
+                .ok_or_else(|| DatasetError::IoError {
+                    message: format!("Backup version {} not found for '{}'", ver, dsn),
+                })?
+        } else {
+            records.last().ok_or_else(|| DatasetError::IoError {
+                message: format!("No backup versions available for '{}'", dsn),
+            })?
+        };
+
+        let version = record.version;
+
+        // Read backup file
+        let backup_dir = self.config.ml1_path.join("BACKUPS");
+        let backup_filename = format!("{}.V{:04}", dsn.replace('.', "_"), version);
+        let backup_path = backup_dir.join(&backup_filename);
+        let compressed = std::fs::read(&backup_path)?;
+        let data = rle_decompress(&compressed);
+
+        // Check if target exists
+        let target_path = self.dataset_path(dsn, StorageTier::Ml0);
+        if target_path.exists() && !replace {
+            return Err(DatasetError::IoError {
+                message: format!(
+                    "Dataset '{}' exists. Use REPLACE to overwrite.",
+                    dsn
+                ),
+            });
+        }
+
+        // Write restored data
+        if let Some(parent) = target_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target_path, &data)?;
+
+        let original_size = data.len() as u64;
+
+        // Update status to ML0
+        self.statuses.insert(
+            dsn.to_string(),
+            MigrationStatus {
+                dsn: dsn.to_string(),
+                tier: StorageTier::Ml0,
+                original_size,
+                compressed_size: original_size,
+                last_referenced: SystemTime::now(),
+                source_volume: "VOL001".to_string(),
+            },
+        );
+
+        Ok(format!(
+            "ARC0011I {} RECOVERED FROM VERSION {} ({} BYTES)",
+            dsn, version, original_size
+        ))
+    }
+
+    /// Automatic backup — back up datasets based on backup frequency.
+    ///
+    /// `backed_up_today` is a set of DSNs already backed up today (to avoid duplicates).
+    /// Returns list of backup messages.
+    pub fn auto_backup(
+        &mut self,
+        eligible_dsns: &[String],
+        max_versions: u32,
+        backed_up_today: &[String],
+    ) -> Result<Vec<String>, DatasetError> {
+        let mut messages = Vec::new();
+
+        for dsn in eligible_dsns {
+            if backed_up_today.contains(dsn) {
+                continue; // Skip — already backed up today
+            }
+            if self.statuses.contains_key(dsn) {
+                let msg = self.hbackup(dsn, max_versions)?;
+                messages.push(msg);
+            }
+        }
+
+        Ok(messages)
+    }
+
     /// Get dataset path for a given tier.
     fn dataset_path(&self, dsn: &str, tier: StorageTier) -> PathBuf {
         let mut path = self.config.tier_path(tier).to_path_buf();
@@ -504,6 +668,128 @@ impl Hsm {
             path.push(component);
         }
         path
+    }
+}
+
+// ─────────────────────── ABARS ───────────────────────
+
+/// Aggregate group definition for ABARS.
+#[derive(Debug, Clone)]
+pub struct AggregateGroup {
+    /// Aggregate group name.
+    pub name: String,
+    /// Dataset filter patterns (e.g., "PAYROLL.**").
+    pub filters: Vec<String>,
+}
+
+impl AggregateGroup {
+    /// Create a new aggregate group.
+    pub fn new(name: &str, filters: Vec<String>) -> Self {
+        Self {
+            name: name.to_uppercase(),
+            filters,
+        }
+    }
+
+    /// Check if a DSN matches any filter in the aggregate.
+    pub fn matches(&self, dsn: &str) -> bool {
+        let dsn_upper = dsn.to_uppercase();
+        self.filters.iter().any(|f| {
+            let filter = f.to_uppercase();
+            if filter.ends_with(".**") {
+                let prefix = &filter[..filter.len() - 3];
+                dsn_upper.starts_with(prefix) && dsn_upper.len() > prefix.len()
+            } else if filter.ends_with(".*") {
+                let prefix = &filter[..filter.len() - 2];
+                dsn_upper.starts_with(prefix)
+                    && dsn_upper[prefix.len()..].starts_with('.')
+                    && !dsn_upper[prefix.len() + 1..].contains('.')
+            } else {
+                dsn_upper == filter
+            }
+        })
+    }
+
+    /// List all matching datasets from a set.
+    pub fn matching_datasets<'a>(&self, all_dsns: &'a [String]) -> Vec<&'a String> {
+        all_dsns.iter().filter(|d| self.matches(d)).collect()
+    }
+}
+
+/// ABARS engine for aggregate backup/recovery.
+#[derive(Debug, Default)]
+pub struct Abars {
+    /// Defined aggregate groups.
+    pub groups: HashMap<String, AggregateGroup>,
+}
+
+impl Abars {
+    /// Define an aggregate group.
+    pub fn define_group(&mut self, group: AggregateGroup) {
+        self.groups.insert(group.name.clone(), group);
+    }
+
+    /// Get an aggregate group.
+    pub fn get_group(&self, name: &str) -> Option<&AggregateGroup> {
+        self.groups.get(&name.to_uppercase())
+    }
+
+    /// ABACKUP — back up all datasets in an aggregate group.
+    pub fn abackup(
+        &self,
+        group_name: &str,
+        hsm: &mut Hsm,
+        all_dsns: &[String],
+    ) -> Result<Vec<String>, DatasetError> {
+        let group = self.groups.get(&group_name.to_uppercase()).ok_or_else(|| {
+            DatasetError::IoError {
+                message: format!("Aggregate group '{}' not found", group_name),
+            }
+        })?;
+
+        let matching = group.matching_datasets(all_dsns);
+        let mut messages = Vec::new();
+
+        for dsn in matching {
+            let msg = hsm.hbackup(dsn, 0)?; // No version limit for aggregate
+            messages.push(msg);
+        }
+
+        messages.push(format!(
+            "ARC0020I AGGREGATE {} BACKED UP ({} DATASETS)",
+            group_name,
+            messages.len()
+        ));
+        Ok(messages)
+    }
+
+    /// ARECOVER — recover all datasets in an aggregate group.
+    pub fn arecover(
+        &self,
+        group_name: &str,
+        hsm: &mut Hsm,
+        all_dsns: &[String],
+    ) -> Result<Vec<String>, DatasetError> {
+        let group = self.groups.get(&group_name.to_uppercase()).ok_or_else(|| {
+            DatasetError::IoError {
+                message: format!("Aggregate group '{}' not found", group_name),
+            }
+        })?;
+
+        let matching = group.matching_datasets(all_dsns);
+        let mut messages = Vec::new();
+
+        for dsn in matching {
+            let msg = hsm.hrecover(dsn, None, true)?;
+            messages.push(msg);
+        }
+
+        messages.push(format!(
+            "ARC0021I AGGREGATE {} RECOVERED ({} DATASETS)",
+            group_name,
+            messages.len()
+        ));
+        Ok(messages)
     }
 }
 
@@ -995,6 +1281,397 @@ mod tests {
                 "Wrong tier for {}",
                 dsn
             );
+        }
+
+        cleanup(&dir);
+    }
+
+    // ─── DFSMS-105.1: HBACKUP ───
+
+    #[test]
+    fn test_hbackup_creates_backup() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+        create_test_dataset(&mut hsm, "MY.CRITICAL.DATA", b"critical data content");
+
+        let msg = hsm.hbackup("MY.CRITICAL.DATA", 0).unwrap();
+        assert!(msg.contains("BACKED UP"));
+        assert!(msg.contains("VERSION 1"));
+
+        let backups = hsm.cds.get_backups("MY.CRITICAL.DATA").unwrap();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(backups[0].version, 1);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_hbackup_version_retention() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+        create_test_dataset(&mut hsm, "VERSIONED.DS", b"version data");
+
+        // Take 4 backups with max 3 versions
+        for _ in 0..4 {
+            hsm.hbackup("VERSIONED.DS", 3).unwrap();
+        }
+
+        let backups = hsm.cds.get_backups("VERSIONED.DS").unwrap();
+        assert_eq!(backups.len(), 3); // Only 3 kept
+        assert_eq!(backups[0].version, 2); // Oldest is version 2
+        assert_eq!(backups[2].version, 4); // Newest is version 4
+
+        cleanup(&dir);
+    }
+
+    // ─── DFSMS-105.2: HRECOVER ───
+
+    #[test]
+    fn test_hrecover_latest() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+        let original = b"recover this data";
+        create_test_dataset(&mut hsm, "RECOVER.DS", original);
+
+        hsm.hbackup("RECOVER.DS", 0).unwrap();
+
+        // Delete the original
+        let path = hsm.dataset_path("RECOVER.DS", StorageTier::Ml0);
+        std::fs::remove_file(&path).unwrap();
+
+        // Recover
+        let msg = hsm.hrecover("RECOVER.DS", None, true).unwrap();
+        assert!(msg.contains("RECOVERED FROM VERSION 1"));
+
+        let restored = std::fs::read(&path).unwrap();
+        assert_eq!(restored, original);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_hrecover_specific_version() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+
+        // Create and backup v1
+        create_test_dataset(&mut hsm, "MULTI.DS", b"version 1 data");
+        hsm.hbackup("MULTI.DS", 0).unwrap();
+
+        // Overwrite and backup v2
+        let path = hsm.dataset_path("MULTI.DS", StorageTier::Ml0);
+        std::fs::write(&path, b"version 2 data").unwrap();
+        hsm.hbackup("MULTI.DS", 0).unwrap();
+
+        // Overwrite and backup v3
+        std::fs::write(&path, b"version 3 data").unwrap();
+        hsm.hbackup("MULTI.DS", 0).unwrap();
+
+        // Recover version 2 specifically
+        let msg = hsm.hrecover("MULTI.DS", Some(2), true).unwrap();
+        assert!(msg.contains("RECOVERED FROM VERSION 2"));
+
+        let restored = std::fs::read(&path).unwrap();
+        assert_eq!(restored, b"version 2 data");
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_hrecover_replace_required() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+        create_test_dataset(&mut hsm, "EXISTS.DS", b"existing data");
+        hsm.hbackup("EXISTS.DS", 0).unwrap();
+
+        // Trying to recover without replace should fail
+        let result = hsm.hrecover("EXISTS.DS", None, false);
+        assert!(result.is_err());
+
+        // With replace should succeed
+        let msg = hsm.hrecover("EXISTS.DS", None, true).unwrap();
+        assert!(msg.contains("RECOVERED"));
+
+        cleanup(&dir);
+    }
+
+    // ─── DFSMS-105.3: Automatic Backup ───
+
+    #[test]
+    fn test_auto_backup_eligible() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+        for i in 0..5 {
+            create_test_dataset(
+                &mut hsm,
+                &format!("AUTO.BK{:02}", i),
+                format!("data-{}", i).as_bytes(),
+            );
+        }
+
+        let eligible: Vec<String> = (0..5).map(|i| format!("AUTO.BK{:02}", i)).collect();
+        let messages = hsm.auto_backup(&eligible, 3, &[]).unwrap();
+        assert_eq!(messages.len(), 5);
+
+        // All should have backups
+        for dsn in &eligible {
+            assert!(hsm.cds.get_backups(dsn).is_some());
+        }
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_auto_backup_skips_already_backed_up() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+        create_test_dataset(&mut hsm, "DAILY.DS", b"daily backup data");
+
+        let eligible = vec!["DAILY.DS".to_string()];
+        let backed_up = vec!["DAILY.DS".to_string()];
+
+        // Should skip since already backed up today
+        let messages = hsm.auto_backup(&eligible, 3, &backed_up).unwrap();
+        assert_eq!(messages.len(), 0);
+
+        cleanup(&dir);
+    }
+
+    // ─── DFSMS-105.4: ABARS Aggregate Definition ───
+
+    #[test]
+    fn test_aggregate_group_definition() {
+        let mut abars = Abars::default();
+        let group = AggregateGroup::new(
+            "PAYROLL.AG",
+            vec!["PAYROLL.**".to_string()],
+        );
+        abars.define_group(group);
+
+        let g = abars.get_group("PAYROLL.AG").unwrap();
+        assert_eq!(g.name, "PAYROLL.AG");
+        assert_eq!(g.filters, vec!["PAYROLL.**"]);
+    }
+
+    #[test]
+    fn test_aggregate_group_matching() {
+        let group = AggregateGroup::new(
+            "PAYROLL.AG",
+            vec!["PAYROLL.**".to_string()],
+        );
+
+        assert!(group.matches("PAYROLL.DATA.FILE"));
+        assert!(group.matches("PAYROLL.HISTORY.2026"));
+        assert!(!group.matches("HR.DATA.FILE"));
+        assert!(!group.matches("PAYROLL")); // Must have qualifiers after prefix
+    }
+
+    #[test]
+    fn test_aggregate_group_listing() {
+        let group = AggregateGroup::new(
+            "APP.AG",
+            vec!["APP.**".to_string(), "SHARED.CONFIG".to_string()],
+        );
+
+        let all = vec![
+            "APP.DATA.FILE1".to_string(),
+            "APP.LOG.2026".to_string(),
+            "SHARED.CONFIG".to_string(),
+            "OTHER.DS".to_string(),
+        ];
+
+        let matches = group.matching_datasets(&all);
+        assert_eq!(matches.len(), 3);
+
+        cleanup(&PathBuf::new()); // no-op, just for consistency
+    }
+
+    // ─── DFSMS-105.5: ABACKUP/ARECOVER ───
+
+    #[test]
+    fn test_abackup_aggregate() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+        let mut abars = Abars::default();
+
+        // Create datasets
+        let dsns: Vec<String> = (0..5)
+            .map(|i| format!("PAY.DATA.FILE{}", i))
+            .collect();
+
+        for dsn in &dsns {
+            create_test_dataset(&mut hsm, dsn, format!("data-{}", dsn).as_bytes());
+        }
+
+        // Also a non-matching dataset
+        create_test_dataset(&mut hsm, "OTHER.DS", b"other");
+
+        // Define aggregate
+        abars.define_group(AggregateGroup::new(
+            "PAY.AG",
+            vec!["PAY.**".to_string()],
+        ));
+
+        let all_dsns: Vec<String> = dsns.iter().chain(std::iter::once(&"OTHER.DS".to_string())).cloned().collect();
+        let messages = abars.abackup("PAY.AG", &mut hsm, &all_dsns).unwrap();
+
+        // 5 backup messages + 1 summary
+        assert_eq!(messages.len(), 6);
+        assert!(messages.last().unwrap().contains("5 DATASETS"));
+
+        // Verify backups exist for PAY datasets but not OTHER
+        for dsn in &dsns {
+            assert!(hsm.cds.get_backups(dsn).is_some());
+        }
+        assert!(hsm.cds.get_backups("OTHER.DS").is_none());
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_arecover_aggregate() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+        let mut abars = Abars::default();
+
+        // Create and backup datasets
+        let dsns: Vec<String> = (0..5)
+            .map(|i| format!("REC.DATA.FILE{}", i))
+            .collect();
+
+        let originals: Vec<Vec<u8>> = dsns
+            .iter()
+            .map(|dsn| format!("original-data-{}", dsn).into_bytes())
+            .collect();
+
+        for (dsn, data) in dsns.iter().zip(originals.iter()) {
+            create_test_dataset(&mut hsm, dsn, data);
+            hsm.hbackup(dsn, 0).unwrap();
+        }
+
+        // Delete all originals
+        for dsn in &dsns {
+            let path = hsm.dataset_path(dsn, StorageTier::Ml0);
+            let _ = std::fs::remove_file(&path);
+        }
+
+        // Define aggregate and recover
+        abars.define_group(AggregateGroup::new(
+            "REC.AG",
+            vec!["REC.**".to_string()],
+        ));
+
+        let messages = abars.arecover("REC.AG", &mut hsm, &dsns).unwrap();
+        // 5 recover messages + 1 summary
+        assert_eq!(messages.len(), 6);
+
+        // Verify all datasets restored with correct content
+        for (dsn, original_data) in dsns.iter().zip(originals.iter()) {
+            let path = hsm.dataset_path(dsn, StorageTier::Ml0);
+            let restored = std::fs::read(&path).unwrap();
+            assert_eq!(&restored, original_data, "Mismatch for {}", dsn);
+        }
+
+        cleanup(&dir);
+    }
+
+    // ─── DFSMS-105.6: Integration Test ───
+
+    #[test]
+    fn test_full_backup_recover_cycle() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+
+        // Create dataset and take 3 versioned backups
+        create_test_dataset(&mut hsm, "CYCLE.DS", b"version 1");
+        hsm.hbackup("CYCLE.DS", 5).unwrap();
+
+        let path = hsm.dataset_path("CYCLE.DS", StorageTier::Ml0);
+        std::fs::write(&path, b"version 2").unwrap();
+        hsm.hbackup("CYCLE.DS", 5).unwrap();
+
+        std::fs::write(&path, b"version 3").unwrap();
+        hsm.hbackup("CYCLE.DS", 5).unwrap();
+
+        // Recover version 2
+        let msg = hsm.hrecover("CYCLE.DS", Some(2), true).unwrap();
+        assert!(msg.contains("VERSION 2"));
+        let restored = std::fs::read(&path).unwrap();
+        assert_eq!(restored, b"version 2");
+
+        // Recover latest (version 3)
+        let msg = hsm.hrecover("CYCLE.DS", None, true).unwrap();
+        assert!(msg.contains("VERSION 3"));
+        let restored = std::fs::read(&path).unwrap();
+        assert_eq!(restored, b"version 3");
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_full_aggregate_backup_recover_5ds() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut hsm = create_hsm(&dir);
+        let mut abars = Abars::default();
+
+        let dsns: Vec<String> = (0..5)
+            .map(|i| format!("FULL.AGG.DS{}", i))
+            .collect();
+
+        let originals: Vec<Vec<u8>> = dsns
+            .iter()
+            .map(|dsn| format!("content-of-{}", dsn).into_bytes())
+            .collect();
+
+        for (dsn, data) in dsns.iter().zip(originals.iter()) {
+            create_test_dataset(&mut hsm, dsn, data);
+        }
+
+        abars.define_group(AggregateGroup::new(
+            "FULL.AG",
+            vec!["FULL.**".to_string()],
+        ));
+
+        // ABACKUP
+        let msgs = abars.abackup("FULL.AG", &mut hsm, &dsns).unwrap();
+        assert!(msgs.last().unwrap().contains("5 DATASETS"));
+
+        // Delete originals
+        for dsn in &dsns {
+            let path = hsm.dataset_path(dsn, StorageTier::Ml0);
+            let _ = std::fs::remove_file(&path);
+        }
+
+        // ARECOVER
+        let msgs = abars.arecover("FULL.AG", &mut hsm, &dsns).unwrap();
+        assert!(msgs.last().unwrap().contains("5 DATASETS"));
+
+        // Verify all match originals
+        for (dsn, original) in dsns.iter().zip(originals.iter()) {
+            let path = hsm.dataset_path(dsn, StorageTier::Ml0);
+            assert_eq!(&std::fs::read(&path).unwrap(), original);
         }
 
         cleanup(&dir);

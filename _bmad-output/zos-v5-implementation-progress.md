@@ -1,9 +1,9 @@
 ---
 currentIG: IG-5
-currentEpic: DFSMS-105
-epicsComplete: 22
+currentEpic: DFSMS-106
+epicsComplete: 23
 epicsTotal: 162
-storiesComplete: 127
+storiesComplete: 133
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -44,7 +44,7 @@ lastUpdated: "2026-02-23"
 - [x] DFSMS-102: ICF Catalogs (9 stories)
 - [x] DFSMS-103: IDCAMS Extensions (6 stories)
 - [x] DFSMS-104: DFSMShsm Migration (7 stories)
-- [ ] DFSMS-105: DFSMShsm Backup (5 stories)
+- [x] DFSMS-105: DFSMShsm Backup (6 stories)
 - [ ] DFSMS-106: DFSMSdss DUMP/RESTORE (6 stories)
 - [ ] DFSMS-107: DFSMSrmm Tape Mgmt (5 stories)
 - [ ] DFSMS-108: PDSE & Member Generations (5 stories)
