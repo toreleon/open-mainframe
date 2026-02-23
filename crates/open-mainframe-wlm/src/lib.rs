@@ -12,6 +12,7 @@ pub mod classify;
 pub mod enclave;
 pub mod goals;
 pub mod iwm;
+pub mod operator;
 pub mod persistence;
 pub mod policy;
 pub mod scheduling;
@@ -20,6 +21,11 @@ pub mod service;
 pub use capping::{CappingEngine, EnforcementAction, GroupUtilization, RuntimeEnvironment, ThrottleAction};
 pub use enclave::{Enclave, EnclaveManager, EnclaveState};
 pub use iwm::{ClassifyResult, IwmServices, RegisteredServer, ServiceClassInfo};
+pub use operator::{
+    ClassMeasurement, ClassStatus, DisplayWlmResponse, PrometheusMetric,
+    ResourceGroupStatus, SmfWlmData, SmfWlmRecord, SmfWlmRecordType,
+    VaryWlmCommand, WlmMode,
+};
 pub use persistence::{ActivationResult, PolicyStore};
 pub use classify::{ClassificationRule, Classifier, SubsystemType, WorkAttribute, WorkRequest};
 pub use goals::{
