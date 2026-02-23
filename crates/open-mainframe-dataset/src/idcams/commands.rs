@@ -41,12 +41,34 @@ pub enum IdcamsCommand {
         force: bool,
     },
 
-    /// ALTER - Rename datasets.
-    Alter {
-        /// Old dataset name.
+    /// DEFINE NONVSAM - Catalog a non-VSAM dataset.
+    DefineNonVsam {
+        /// Dataset name.
         name: String,
-        /// New dataset name.
-        newname: String,
+        /// Volume serials.
+        volumes: Vec<String>,
+        /// Device type (e.g. 3390).
+        devt: Option<String>,
+    },
+
+    /// DEFINE ALIAS - Create an HLQ alias to a user catalog.
+    DefineAlias {
+        /// Alias name (typically an HLQ).
+        name: String,
+        /// Related user catalog.
+        relate: String,
+    },
+
+    /// ALTER - Modify dataset attributes.
+    Alter {
+        /// Dataset name.
+        name: String,
+        /// New name (rename).
+        newname: Option<String>,
+        /// Additional volumes.
+        addvolumes: Option<Vec<String>>,
+        /// Freespace (ci-pct, ca-pct).
+        freespace: Option<(u8, u8)>,
     },
 
     /// LISTCAT - List catalog entries.
@@ -113,6 +135,42 @@ pub enum IdcamsCommand {
         name: String,
         /// AIX entry name (PATHENTRY).
         pathentry: String,
+    },
+
+    /// BLDINDEX - Build an alternate index from base cluster records.
+    BldIndex {
+        /// Base cluster (input).
+        indataset: String,
+        /// AIX (output).
+        outdataset: String,
+    },
+
+    /// EXPORT - Export a dataset to portable format.
+    Export {
+        /// Dataset to export.
+        dataset: String,
+        /// Output DD/file name.
+        outfile: String,
+    },
+
+    /// IMPORT - Import a dataset from portable format.
+    Import {
+        /// Input DD/file name.
+        infile: String,
+        /// Target dataset name.
+        outdataset: String,
+    },
+
+    /// EXAMINE - Check BCS structural integrity.
+    Examine {
+        /// Catalog name.
+        name: String,
+    },
+
+    /// DIAGNOSE - Check BCS-VVDS synchronization.
+    Diagnose {
+        /// Catalog name.
+        name: String,
     },
 }
 

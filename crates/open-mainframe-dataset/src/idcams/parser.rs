@@ -72,6 +72,21 @@ fn parse_single_command(input: &str) -> Result<Option<IdcamsCommand>, DatasetErr
     if input.starts_with("VERIFY") {
         return parse_verify(&input);
     }
+    if input.starts_with("BLDINDEX") {
+        return parse_bldindex(&input);
+    }
+    if input.starts_with("EXPORT") {
+        return parse_export(&input);
+    }
+    if input.starts_with("IMPORT") {
+        return parse_import(&input);
+    }
+    if input.starts_with("EXAMINE") {
+        return parse_examine(&input);
+    }
+    if input.starts_with("DIAGNOSE") {
+        return parse_diagnose(&input);
+    }
 
     // Unknown command - skip
     Ok(None)
@@ -89,6 +104,12 @@ fn parse_define(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
     }
     if input.starts_with("DEFINE PATH") {
         return parse_define_path(input);
+    }
+    if input.contains("NONVSAM") {
+        return parse_define_nonvsam(input);
+    }
+    if input.starts_with("DEFINE ALIAS") {
+        return parse_define_alias(input);
     }
     if input.contains("CLUSTER") {
         return parse_define_cluster(input);
@@ -217,10 +238,31 @@ fn parse_alter(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
         ));
     };
 
-    let newname = extract_param(input, "NEWNAME")
-        .ok_or_else(|| DatasetError::InvalidParameter("ALTER requires NEWNAME".to_string()))?;
+    let newname = extract_param(input, "NEWNAME");
+    let addvolumes = extract_param(input, "ADDVOLUMES").map(|s| {
+        s.split_whitespace().map(|v| v.to_string()).collect()
+    });
+    let freespace = extract_param(input, "FREESPACE").and_then(|s| {
+        let parts: Vec<&str> = s.split_whitespace().collect();
+        if parts.len() >= 2 {
+            Some((parts[0].parse().ok()?, parts[1].parse().ok()?))
+        } else {
+            None
+        }
+    });
 
-    Ok(Some(IdcamsCommand::Alter { name, newname }))
+    if newname.is_none() && addvolumes.is_none() && freespace.is_none() {
+        return Err(DatasetError::InvalidParameter(
+            "ALTER requires at least one modification parameter".to_string(),
+        ));
+    }
+
+    Ok(Some(IdcamsCommand::Alter {
+        name,
+        newname,
+        addvolumes,
+        freespace,
+    }))
 }
 
 /// Parse LISTCAT command.
@@ -310,6 +352,122 @@ fn parse_verify(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
         .ok_or_else(|| DatasetError::InvalidParameter("VERIFY requires DATASET".to_string()))?;
 
     Ok(Some(IdcamsCommand::Verify { dataset }))
+}
+
+/// Parse DEFINE NONVSAM command.
+fn parse_define_nonvsam(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    let name = extract_param(input, "NAME")
+        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE NONVSAM requires NAME".to_string()))?;
+
+    let volumes = extract_param(input, "VOLUMES")
+        .map(|s| s.split_whitespace().map(|v| v.to_string()).collect())
+        .unwrap_or_default();
+
+    let devt = extract_param(input, "DEVT")
+        .or_else(|| extract_param(input, "DEVICETYPES"));
+
+    Ok(Some(IdcamsCommand::DefineNonVsam {
+        name,
+        volumes,
+        devt,
+    }))
+}
+
+/// Parse DEFINE ALIAS command.
+fn parse_define_alias(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    let name = extract_param(input, "NAME")
+        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE ALIAS requires NAME".to_string()))?;
+
+    let relate = extract_param(input, "RELATE")
+        .ok_or_else(|| DatasetError::InvalidParameter("DEFINE ALIAS requires RELATE".to_string()))?;
+
+    Ok(Some(IdcamsCommand::DefineAlias { name, relate }))
+}
+
+/// Parse BLDINDEX command.
+fn parse_bldindex(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    let indataset = extract_param(input, "INDATASET")
+        .or_else(|| extract_param(input, "IDS"))
+        .ok_or_else(|| DatasetError::InvalidParameter("BLDINDEX requires INDATASET".to_string()))?;
+
+    let outdataset = extract_param(input, "OUTDATASET")
+        .or_else(|| extract_param(input, "ODS"))
+        .ok_or_else(|| DatasetError::InvalidParameter("BLDINDEX requires OUTDATASET".to_string()))?;
+
+    Ok(Some(IdcamsCommand::BldIndex {
+        indataset,
+        outdataset,
+    }))
+}
+
+/// Parse EXPORT command.
+fn parse_export(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    // EXPORT dataset OUTFILE(ddname)
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+    let dataset = if tokens.len() > 1 {
+        tokens[1].trim_matches(|c| c == '(' || c == ')').to_string()
+    } else {
+        return Err(DatasetError::InvalidParameter(
+            "EXPORT requires dataset name".to_string(),
+        ));
+    };
+
+    let outfile = extract_param(input, "OUTFILE")
+        .or_else(|| extract_param(input, "ODS"))
+        .unwrap_or_else(|| format!("{}.EXPORT", dataset));
+
+    Ok(Some(IdcamsCommand::Export { dataset, outfile }))
+}
+
+/// Parse IMPORT command.
+fn parse_import(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    let infile = extract_param(input, "INFILE")
+        .or_else(|| extract_param(input, "IDS"))
+        .ok_or_else(|| DatasetError::InvalidParameter("IMPORT requires INFILE".to_string()))?;
+
+    let outdataset = extract_param(input, "OUTDATASET")
+        .or_else(|| extract_param(input, "ODS"))
+        .ok_or_else(|| DatasetError::InvalidParameter("IMPORT requires OUTDATASET".to_string()))?;
+
+    Ok(Some(IdcamsCommand::Import {
+        infile,
+        outdataset,
+    }))
+}
+
+/// Parse EXAMINE command.
+fn parse_examine(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    let name = extract_param(input, "NAME")
+        .or_else(|| {
+            let tokens: Vec<&str> = input.split_whitespace().collect();
+            if tokens.len() > 1 {
+                Some(tokens[1].trim_matches(|c| c == '(' || c == ')').to_string())
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| DatasetError::InvalidParameter("EXAMINE requires NAME".to_string()))?;
+
+    Ok(Some(IdcamsCommand::Examine { name }))
+}
+
+/// Parse DIAGNOSE command.
+fn parse_diagnose(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    let name = extract_param(input, "NAME")
+        .or_else(|| {
+            let tokens: Vec<&str> = input.split_whitespace().collect();
+            // Skip "DIAGNOSE" and optional "ICFCATALOG" keyword
+            for token in &tokens[1..] {
+                let t = token.trim_matches(|c| c == '(' || c == ')');
+                if t != "ICFCATALOG" {
+                    return Some(t.to_string());
+                }
+            }
+            None
+        })
+        .ok_or_else(|| DatasetError::InvalidParameter("DIAGNOSE requires NAME".to_string()))?;
+
+    Ok(Some(IdcamsCommand::Diagnose { name }))
 }
 
 /// Extract a parameter value from IDCAMS syntax.
@@ -602,6 +760,167 @@ mod tests {
                 assert_eq!(*count, 0);
             }
             _ => panic!("Expected Repro"),
+        }
+    }
+
+    #[test]
+    fn test_parse_define_nonvsam() {
+        let input = "DEFINE NONVSAM (NAME(MY.SEQ.FILE) VOLUMES(VOL001) DEVT(3390))";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::DefineNonVsam {
+                name,
+                volumes,
+                devt,
+            } => {
+                assert_eq!(name, "MY.SEQ.FILE");
+                assert_eq!(volumes, &["VOL001"]);
+                assert_eq!(devt.as_deref(), Some("3390"));
+            }
+            _ => panic!("Expected DefineNonVsam"),
+        }
+    }
+
+    #[test]
+    fn test_parse_define_alias() {
+        let input = "DEFINE ALIAS (NAME(PROD) RELATE(UCAT.PROD))";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::DefineAlias { name, relate } => {
+                assert_eq!(name, "PROD");
+                assert_eq!(relate, "UCAT.PROD");
+            }
+            _ => panic!("Expected DefineAlias"),
+        }
+    }
+
+    #[test]
+    fn test_parse_alter_newname() {
+        let input = "ALTER MY.DATASET NEWNAME(MY.NEWNAME)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::Alter {
+                name,
+                newname,
+                addvolumes,
+                freespace,
+            } => {
+                assert_eq!(name, "MY.DATASET");
+                assert_eq!(newname.as_deref(), Some("MY.NEWNAME"));
+                assert!(addvolumes.is_none());
+                assert!(freespace.is_none());
+            }
+            _ => panic!("Expected Alter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_alter_addvolumes() {
+        let input = "ALTER MY.KSDS ADDVOLUMES(VOL002)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::Alter { addvolumes, .. } => {
+                assert_eq!(addvolumes.as_deref(), Some(&["VOL002".to_string()][..]));
+            }
+            _ => panic!("Expected Alter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_alter_freespace() {
+        let input = "ALTER MY.KSDS FREESPACE(20 10)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::Alter { freespace, .. } => {
+                assert_eq!(*freespace, Some((20, 10)));
+            }
+            _ => panic!("Expected Alter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_bldindex() {
+        let input = "BLDINDEX INDATASET(MY.KSDS) OUTDATASET(MY.AIX)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::BldIndex {
+                indataset,
+                outdataset,
+            } => {
+                assert_eq!(indataset, "MY.KSDS");
+                assert_eq!(outdataset, "MY.AIX");
+            }
+            _ => panic!("Expected BldIndex"),
+        }
+    }
+
+    #[test]
+    fn test_parse_export() {
+        let input = "EXPORT MY.DATA OUTFILE(MY.EXPORT)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::Export { dataset, outfile } => {
+                assert_eq!(dataset, "MY.DATA");
+                assert_eq!(outfile, "MY.EXPORT");
+            }
+            _ => panic!("Expected Export"),
+        }
+    }
+
+    #[test]
+    fn test_parse_import() {
+        let input = "IMPORT INFILE(MY.EXPORT) OUTDATASET(MY.NEW)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::Import { infile, outdataset } => {
+                assert_eq!(infile, "MY.EXPORT");
+                assert_eq!(outdataset, "MY.NEW");
+            }
+            _ => panic!("Expected Import"),
+        }
+    }
+
+    #[test]
+    fn test_parse_examine() {
+        let input = "EXAMINE NAME(UCAT.PROD)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::Examine { name } => {
+                assert_eq!(name, "UCAT.PROD");
+            }
+            _ => panic!("Expected Examine"),
+        }
+    }
+
+    #[test]
+    fn test_parse_diagnose() {
+        let input = "DIAGNOSE ICFCATALOG NAME(UCAT.PROD)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::Diagnose { name } => {
+                assert_eq!(name, "UCAT.PROD");
+            }
+            _ => panic!("Expected Diagnose"),
         }
     }
 
