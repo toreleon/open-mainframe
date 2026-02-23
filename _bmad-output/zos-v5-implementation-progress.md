@@ -1,9 +1,9 @@
 ---
 currentIG: IG-9
-currentEpic: WLM-107
-epicsComplete: 40
+currentEpic: WLM-108
+epicsComplete: 41
 epicsTotal: 162
-storiesComplete: 243
+storiesComplete: 248
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -74,7 +74,7 @@ lastUpdated: "2026-02-23"
 - [x] WLM-104: WLM-Managed Initiator Scheduling (6 stories)
 - [x] WLM-105: Enclave Framework (5 stories)
 - [x] WLM-106: IWM Services API (7 stories)
-- [ ] WLM-107: Scheduling & App Environments (5 stories)
+- [x] WLM-107: Scheduling & App Environments (5 stories)
 - [ ] WLM-108: Service Definition Persistence (4 stories)
 - [ ] WLM-109: Operator Commands & Monitoring (5 stories)
 - [ ] WLM-110: WLM Health API (6 stories)

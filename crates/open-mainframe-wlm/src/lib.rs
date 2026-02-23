@@ -27,8 +27,10 @@ pub use policy::{
     CpuCapType, ReportClass, ResourceGroup, ServiceDefinition, Workload,
 };
 pub use scheduling::{
-    InitiatorScheduler, InitiatorState, ManagedInitiator, QueuedJob, SchedulingDecision,
-    SchedulingEnvironment,
+    AppEnvironmentManager, ApplicationEnvironment, AppServer,
+    InitiatorScheduler, InitiatorState, ManagedInitiator, QueuedJob,
+    ResourceDefinition, ResourceState, SchedulingDecision, SchedulingEnvironment,
+    ServerStartRequest, ServerState,
 };
 pub use service::{
     GoalType, Importance, ServiceClass, ServiceGoal, ServicePolicy, WlmError,
