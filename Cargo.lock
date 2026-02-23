@@ -362,6 +362,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -1388,6 +1389,22 @@ dependencies = [
  "miette",
  "serde",
  "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "open-mainframe-mvs"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dashmap",
+ "miette",
+ "open-mainframe-dataset",
+ "open-mainframe-racf",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
  "tracing",
 ]
 

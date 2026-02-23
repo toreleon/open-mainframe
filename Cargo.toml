@@ -21,6 +21,7 @@ members = [
     "crates/open-mainframe-smf",
     "crates/open-mainframe-pli",
     "crates/open-mainframe-zosmf",
+    "crates/open-mainframe-mvs",
 ]
 
 [workspace.package]
@@ -88,3 +89,4 @@ open-mainframe-wlm = { path = "crates/open-mainframe-wlm" }
 open-mainframe-smf = { path = "crates/open-mainframe-smf" }
 open-mainframe-pli = { path = "crates/open-mainframe-pli" }
 open-mainframe-zosmf = { path = "crates/open-mainframe-zosmf" }
+open-mainframe-mvs = { path = "crates/open-mainframe-mvs" }
