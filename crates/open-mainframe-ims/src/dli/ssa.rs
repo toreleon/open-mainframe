@@ -115,6 +115,7 @@ impl Ssa {
     }
 
     /// Convert to SSA string.
+    #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
         let mut result = self.segment_name.clone();
 
@@ -419,6 +420,7 @@ pub enum SsaOperator {
 
 impl SsaOperator {
     /// Parse from string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "=" | "EQ" => Some(SsaOperator::Eq),

@@ -99,7 +99,7 @@ impl DatabaseDefinition {
         } else {
             self.hierarchy
                 .entry(parent)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(name.clone());
         }
 
@@ -203,6 +203,7 @@ pub enum AccessMethod {
 
 impl AccessMethod {
     /// Parse from string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "HISAM" => Some(AccessMethod::HISAM),

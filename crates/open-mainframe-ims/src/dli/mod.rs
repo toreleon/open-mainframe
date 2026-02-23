@@ -58,6 +58,7 @@ pub enum DliFunction {
 
 impl DliFunction {
     /// Parse from string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "GU" => Some(DliFunction::GU),
@@ -230,6 +231,7 @@ pub struct DliProcessor {
 
 /// A segment held for update/delete.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct HeldSegment {
     segment_name: String,
     record_id: u64,

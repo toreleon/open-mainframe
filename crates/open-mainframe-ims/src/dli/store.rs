@@ -462,7 +462,7 @@ impl HierarchicalStore {
         key_value: &[u8],
     ) -> bool {
         let siblings = if parent_id == 0 {
-            self.roots.iter().cloned().collect::<Vec<_>>()
+            self.roots.to_vec()
         } else {
             self.children.get(&parent_id).cloned().unwrap_or_default()
         };

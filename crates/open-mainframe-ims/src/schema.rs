@@ -341,7 +341,7 @@ fn field_to_postgres_type(field: &FieldDefinition) -> String {
             }
         }
         FieldType::Hex => {
-            format!("BYTEA") // Hexadecimal data stored as bytea
+            "BYTEA".to_string() // Hexadecimal data stored as bytea
         }
     }
 }

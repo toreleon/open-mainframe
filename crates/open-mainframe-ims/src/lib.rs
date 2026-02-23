@@ -30,6 +30,58 @@ pub mod psb;
 pub mod runtime;
 pub mod schema;
 
+// --- IMS Transaction Manager (TM) modules ---
+pub mod tm;
+pub mod regions;
+pub mod operator;
+pub mod otma;
+pub mod connect;
+pub mod fastpath;
+pub mod msc;
+pub mod codegen;
+
+// --- MFS (Message Format Service) modules ---
+pub mod mfs_parser;
+pub mod mfs_compiler;
+pub mod mfs_runtime;
+
+// Re-exports for TM modules
+pub use tm::{
+    AltPcb, AltPcbState, ConversationalTransaction, ConversationState, ExtendedRestart,
+    RollbackType, SavepointManager, Savepoint, ScratchPadArea,
+};
+pub use regions::{
+    BmpRegion, MppRegion, ProgramSchedulingParams, RegionState, RegionType,
+    SchedulingType, TransactionDef, TransactionScheduler,
+};
+pub use operator::{
+    AssignChangeCommand, CheckpointCommand, CheckpointMode, CommandResult, DisplayCommand,
+    DisplayTarget, ImsCommand, ImsCommandProcessor, StartStopCommand, StartStopTarget,
+};
+pub use otma::{OtmaExit, OtmaMessagePrefix, SyncLevel, Tpipe, TpipeState, XcfGroup};
+pub use connect::{
+    ConnectionPool, ConnectionState, ImsConnectConfig, IrmMessage, RsmMessage, TlsSettings,
+    XmlJsonAdapter,
+};
+pub use fastpath::{DedbIntegration, EmhPriority, EmhQueue, IfpRegion, IfpState};
+pub use msc::{
+    LinkState, LinkType, MscLink, RemoteRouting, SharedQueue, SharedQueueState,
+};
+pub use codegen::{
+    generate_aib_copybook, generate_aibtdli_call, generate_cbltdli_call, generate_dib_copybook,
+};
+pub use mfs_parser::{
+    ExtendedAttributes, MfsColor, MfsDev, MfsDfld, MfsDiv, MfsDpage, MfsFmtDef, MfsHighlight,
+    MfsLpage, MfsMfld, MfsMsgDef, MfsParseResult, MfsParser, MfsSeg, MfsStatement, MsgType,
+};
+pub use mfs_compiler::{
+    CompiledField, CompiledFmt, CompiledMsg, CompiledScreenField, CompiledSegment, Dif, Dof,
+    FormatLibrary, MfsCompiler, Mid, Mod,
+};
+pub use mfs_runtime::{
+    format_input_message, format_output_message, MfsBypass, MfsBypassMode,
+};
+
 use thiserror::Error;
 
 /// Errors that can occur during IMS operations.
@@ -95,10 +147,11 @@ pub enum StatusCategory {
 /// IMS DL/I status codes.
 ///
 /// Covers database, system service, GSAM, and message queue operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StatusCode {
     // --- Success ---
     /// Successful completion (spaces)
+    #[default]
     Ok,
 
     // --- Database Get informational ---
@@ -415,12 +468,6 @@ impl StatusCode {
     /// Total number of named status codes defined (excluding Unknown).
     pub fn defined_count() -> usize {
         33
-    }
-}
-
-impl Default for StatusCode {
-    fn default() -> Self {
-        StatusCode::Ok
     }
 }
 

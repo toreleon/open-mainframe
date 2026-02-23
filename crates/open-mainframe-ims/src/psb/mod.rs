@@ -52,16 +52,22 @@ impl ProgramSpecBlock {
 }
 
 /// PSB language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PsbLanguage {
+    /// COBOL.
+    #[default]
     Cobol,
+    /// PL/I.
     Pli,
+    /// Assembler.
     Asm,
+    /// Pascal.
     Pascal,
 }
 
 impl PsbLanguage {
     /// Parse from string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "COBOL" | "CBL" => Some(PsbLanguage::Cobol),
@@ -73,11 +79,7 @@ impl PsbLanguage {
     }
 }
 
-impl Default for PsbLanguage {
-    fn default() -> Self {
-        PsbLanguage::Cobol
-    }
-}
+
 
 /// A Program Communication Block within a PSB.
 #[derive(Debug, Clone)]
@@ -245,6 +247,7 @@ pub struct ProcessingOptions {
 
 impl ProcessingOptions {
     /// Parse from PROCOPT string (e.g., "GIRD", "A", "G").
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         let upper = s.to_uppercase();
         let mut opts = ProcessingOptions::default();
