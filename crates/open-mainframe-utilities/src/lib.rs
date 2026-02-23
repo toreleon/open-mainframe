@@ -24,8 +24,9 @@
 //! ```
 
 pub mod error;
+pub mod iebcopy;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use tracing::info;
@@ -200,6 +201,117 @@ impl UtilityResult {
 
 // ─────────────────────── DD Allocation ───────────────────────
 
+// ─────────────────────── PDS In-Memory Data ───────────────────────
+
+/// In-memory representation of a PDS member for utility processing.
+#[derive(Debug, Clone)]
+pub struct PdsMemberData {
+    /// Member name (uppercase, up to 8 characters).
+    pub name: String,
+    /// Member content (records/lines).
+    pub content: Vec<String>,
+    /// Whether this member has been "deleted" (for compress tracking).
+    pub deleted: bool,
+}
+
+impl PdsMemberData {
+    /// Create a new PDS member with content.
+    pub fn new(name: &str, content: Vec<String>) -> Self {
+        Self {
+            name: name.to_uppercase(),
+            content,
+            deleted: false,
+        }
+    }
+}
+
+/// In-memory PDS dataset for utility processing.
+///
+/// Simulates a Partitioned Data Set with members accessible by name.
+#[derive(Debug, Clone, Default)]
+pub struct PdsData {
+    /// Members indexed by uppercase name, stored in order.
+    pub members: BTreeMap<String, PdsMemberData>,
+}
+
+impl PdsData {
+    /// Create a new empty PDS.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a member to the PDS.
+    pub fn add_member(&mut self, name: &str, content: Vec<String>) {
+        let key = name.to_uppercase();
+        self.members
+            .insert(key.clone(), PdsMemberData::new(&key, content));
+    }
+
+    /// Check if a member exists (and is not deleted).
+    pub fn has_member(&self, name: &str) -> bool {
+        self.members
+            .get(&name.to_uppercase())
+            .map_or(false, |m| !m.deleted)
+    }
+
+    /// Get a member's content.
+    pub fn get_member(&self, name: &str) -> Option<&PdsMemberData> {
+        self.members
+            .get(&name.to_uppercase())
+            .filter(|m| !m.deleted)
+    }
+
+    /// Delete a member (marks as deleted for compress tracking).
+    pub fn delete_member(&mut self, name: &str) -> bool {
+        if let Some(m) = self.members.get_mut(&name.to_uppercase()) {
+            m.deleted = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// List active (non-deleted) member names in sorted order.
+    pub fn member_names(&self) -> Vec<String> {
+        self.members
+            .values()
+            .filter(|m| !m.deleted)
+            .map(|m| m.name.clone())
+            .collect()
+    }
+
+    /// Number of active members.
+    pub fn member_count(&self) -> usize {
+        self.members.values().filter(|m| !m.deleted).count()
+    }
+
+    /// Number of deleted members (for compress tracking).
+    pub fn deleted_count(&self) -> usize {
+        self.members.values().filter(|m| m.deleted).count()
+    }
+
+    /// Compress: remove all deleted entries and repack.
+    pub fn compress(&mut self) {
+        self.members.retain(|_, m| !m.deleted);
+    }
+}
+
+/// Sequential (flat file) unload format for PDS transport.
+#[derive(Debug, Clone, Default)]
+pub struct UnloadData {
+    /// Records in unload format: header lines + member content.
+    pub records: Vec<String>,
+}
+
+impl UnloadData {
+    /// Create new empty unload data.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+// ─────────────────────── DD Allocation ───────────────────────
+
 /// A simulated DD (Data Definition) allocation for utility processing.
 ///
 /// Represents the connection between a DDname and its backing data,
@@ -216,6 +328,12 @@ pub struct DdAllocation {
     pub output: Vec<String>,
     /// Disposition (NEW, OLD, SHR, MOD).
     pub disposition: String,
+    /// PDS data (for partitioned datasets).
+    pub pds_data: Option<PdsData>,
+    /// Sequential unload data (for load/unload operations).
+    pub unload_data: Option<UnloadData>,
+    /// Dataset organization (PS=sequential, PO=partitioned).
+    pub dsorg: Option<String>,
 }
 
 impl DdAllocation {
@@ -227,6 +345,9 @@ impl DdAllocation {
             inline_data: None,
             output: Vec::new(),
             disposition: disp.to_string(),
+            pds_data: None,
+            unload_data: None,
+            dsorg: None,
         }
     }
 
@@ -238,6 +359,9 @@ impl DdAllocation {
             inline_data: Some(data),
             output: Vec::new(),
             disposition: String::new(),
+            pds_data: None,
+            unload_data: None,
+            dsorg: None,
         }
     }
 
@@ -249,6 +373,9 @@ impl DdAllocation {
             inline_data: None,
             output: Vec::new(),
             disposition: "NEW".to_string(),
+            pds_data: None,
+            unload_data: None,
+            dsorg: None,
         }
     }
 
@@ -260,12 +387,48 @@ impl DdAllocation {
             inline_data: None,
             output: Vec::new(),
             disposition: "DUMMY".to_string(),
+            pds_data: None,
+            unload_data: None,
+            dsorg: None,
+        }
+    }
+
+    /// Create a DD allocation backed by a PDS.
+    pub fn pds(ddname: &str, dsname: &str, disp: &str, pds_data: PdsData) -> Self {
+        Self {
+            ddname: ddname.to_string(),
+            dsname: Some(dsname.to_string()),
+            inline_data: None,
+            output: Vec::new(),
+            disposition: disp.to_string(),
+            pds_data: Some(pds_data),
+            unload_data: None,
+            dsorg: Some("PO".to_string()),
+        }
+    }
+
+    /// Create a DD allocation for sequential output (for unload).
+    pub fn sequential(ddname: &str, dsname: &str, disp: &str) -> Self {
+        Self {
+            ddname: ddname.to_string(),
+            dsname: Some(dsname.to_string()),
+            inline_data: None,
+            output: Vec::new(),
+            disposition: disp.to_string(),
+            pds_data: None,
+            unload_data: None,
+            dsorg: Some("PS".to_string()),
         }
     }
 
     /// Whether this is a DUMMY allocation.
     pub fn is_dummy(&self) -> bool {
         self.disposition == "DUMMY"
+    }
+
+    /// Whether this DD is allocated to a PDS.
+    pub fn is_pds(&self) -> bool {
+        self.pds_data.is_some()
     }
 }
 
@@ -436,6 +599,7 @@ impl UtilityRegistry {
     pub fn with_builtins() -> Self {
         let mut reg = Self::new();
         reg.register(Box::new(Iefbr14));
+        reg.register(Box::new(iebcopy::Iebcopy));
         reg
     }
 

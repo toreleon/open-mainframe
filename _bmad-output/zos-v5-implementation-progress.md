@@ -1,9 +1,9 @@
 ---
 currentIG: IG-4
-currentEpic: UTIL-100
-epicsComplete: 7
+currentEpic: UTIL-101
+epicsComplete: 8
 epicsTotal: 162
-storiesComplete: 40
+storiesComplete: 46
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -27,7 +27,7 @@ lastUpdated: "2026-02-23"
 ### IG-4: Utilities & DFSORT (NEW: open-mainframe-utilities)
 - [x] Scaffold crate
 - [x] UTIL-110: Utility Framework (4 stories)
-- [ ] UTIL-100: IEBCOPY (6 stories)
+- [x] UTIL-100: IEBCOPY (6 stories)
 - [ ] UTIL-101: IEBGENER Enhancements (4 stories)
 - [ ] UTIL-102: IEBCOMPR (4 stories)
 - [ ] UTIL-103: IEBUPDTE (4 stories)
