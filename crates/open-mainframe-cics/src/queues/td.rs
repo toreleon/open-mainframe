@@ -10,18 +10,13 @@
 use std::collections::{HashMap, VecDeque};
 
 /// Type of transient data destination.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TdDestType {
     /// Intrapartition - internal queue within CICS
+    #[default]
     Intrapartition,
     /// Extrapartition - external file or device
     Extrapartition,
-}
-
-impl Default for TdDestType {
-    fn default() -> Self {
-        TdDestType::Intrapartition
-    }
 }
 
 /// Destination Control Table (DCT) entry.

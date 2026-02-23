@@ -24,13 +24,16 @@
 
 pub mod bms;
 pub mod channels;
+pub mod document;
 pub mod interval;
 pub mod preprocess;
 pub mod queues;
 pub mod runtime;
 pub mod sync;
+pub mod syspr;
 pub mod terminal;
 pub mod time;
+pub mod web;
 
 use thiserror::Error;
 

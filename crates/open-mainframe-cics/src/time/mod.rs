@@ -70,8 +70,7 @@ impl AbsTime {
     pub fn from_packed(packed: &[u8; 8]) -> Self {
         let mut value = 0u64;
 
-        for i in 0..8 {
-            let byte = packed[i];
+        for (i, &byte) in packed.iter().enumerate() {
             if i == 7 {
                 // Last byte has only one digit + sign
                 let digit = (byte >> 4) as u64;

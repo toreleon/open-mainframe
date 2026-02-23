@@ -5,11 +5,11 @@
 //! - SEND TEXT / RECEIVE for basic terminal I/O
 //! - Screen buffer management
 
+mod handler;
 mod screen;
-mod terminal;
 
+pub use handler::{Terminal, TerminalState};
 pub use screen::{ScreenBuffer, ScreenPosition};
-pub use terminal::{Terminal, TerminalState};
 
 use crate::bms::{BmsMap, ScreenSize, MapRenderer};
 use crate::{CicsError, CicsResult};
