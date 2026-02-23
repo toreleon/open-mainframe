@@ -26,6 +26,7 @@
 pub mod error;
 pub mod iebcompr;
 pub mod iebcopy;
+pub mod iebdg;
 pub mod iebgener;
 pub mod iebptpch;
 pub mod iebupdte;
@@ -608,6 +609,7 @@ impl UtilityRegistry {
         reg.register(Box::new(iebcompr::Iebcompr));
         reg.register(Box::new(iebupdte::Iebupdte));
         reg.register(Box::new(iebptpch::Iebptpch));
+        reg.register(Box::new(iebdg::Iebdg));
         reg
     }
 
