@@ -27,6 +27,7 @@ pub mod error;
 pub mod iebcompr;
 pub mod iebcopy;
 pub mod iebgener;
+pub mod iebupdte;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -604,6 +605,7 @@ impl UtilityRegistry {
         reg.register(Box::new(iebcopy::Iebcopy));
         reg.register(Box::new(iebgener::Iebgener));
         reg.register(Box::new(iebcompr::Iebcompr));
+        reg.register(Box::new(iebupdte::Iebupdte));
         reg
     }
 
