@@ -1,9 +1,9 @@
 ---
 currentIG: IG-4
-currentEpic: UTIL-102
-epicsComplete: 9
+currentEpic: UTIL-103
+epicsComplete: 10
 epicsTotal: 162
-storiesComplete: 50
+storiesComplete: 54
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -29,7 +29,7 @@ lastUpdated: "2026-02-23"
 - [x] UTIL-110: Utility Framework (4 stories)
 - [x] UTIL-100: IEBCOPY (6 stories)
 - [x] UTIL-101: IEBGENER Enhancements (4 stories)
-- [ ] UTIL-102: IEBCOMPR (4 stories)
+- [x] UTIL-102: IEBCOMPR (4 stories)
 - [ ] UTIL-103: IEBUPDTE (4 stories)
 - [ ] UTIL-104: DFSORT Enhancements (7 stories)
 - [ ] UTIL-105: IEBPTPCH (4 stories)

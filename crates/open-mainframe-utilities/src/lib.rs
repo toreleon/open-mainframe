@@ -24,6 +24,7 @@
 //! ```
 
 pub mod error;
+pub mod iebcompr;
 pub mod iebcopy;
 pub mod iebgener;
 
@@ -602,6 +603,7 @@ impl UtilityRegistry {
         reg.register(Box::new(Iefbr14));
         reg.register(Box::new(iebcopy::Iebcopy));
         reg.register(Box::new(iebgener::Iebgener));
+        reg.register(Box::new(iebcompr::Iebcompr));
         reg
     }
 
