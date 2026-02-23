@@ -24,6 +24,7 @@
 //! ```
 
 pub mod amaspzap;
+pub mod batch;
 pub mod error;
 pub mod iebcompr;
 pub mod iebcopy;
@@ -616,6 +617,11 @@ impl UtilityRegistry {
         reg.register(Box::new(ieh::Iehlist));
         reg.register(Box::new(ieh::Iehmove));
         reg.register(Box::new(amaspzap::Amaspzap));
+        reg.register(Box::new(batch::Ikjeft01));
+        reg.register(Box::new(batch::Ikjeft1a));
+        reg.register(Box::new(batch::Ikjeft1b));
+        reg.register(Box::new(batch::Irxjcl));
+        reg.register(Box::new(batch::Bpxbatch));
         reg
     }
 
