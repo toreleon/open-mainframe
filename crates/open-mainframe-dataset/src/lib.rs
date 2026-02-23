@@ -30,6 +30,7 @@
 pub mod acs;
 pub mod bsam;
 pub mod catalog;
+pub mod dss;
 pub mod error;
 pub mod gdg;
 pub mod hsm;
@@ -47,6 +48,7 @@ pub use bsam::{
     BpamDirEntry, BsamReader, BsamWriter, Ttr, DIRECTORY_BLOCK_SIZE, TTR_SIZE,
 };
 pub use catalog::{Catalog, CatalogEntry};
+pub use dss::{Dss, DssFilter, DumpDataset, DumpDatasetRecord, DumpHeader};
 pub use error::DatasetError;
 pub use gdg::{GdgBase, GdgGeneration, GdgGenerationInfo, GdgListInfo, GdgOptions, GenerationNumber};
 pub use hsm::{
