@@ -1285,6 +1285,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-crypto"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "thiserror",
+]
+
+[[package]]
 name = "open-mainframe-dataset"
 version = "0.1.0"
 dependencies = [
@@ -1418,6 +1426,14 @@ dependencies = [
 
 [[package]]
 name = "open-mainframe-networking"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "thiserror",
+]
+
+[[package]]
+name = "open-mainframe-parmlib"
 version = "0.1.0"
 dependencies = [
  "miette",

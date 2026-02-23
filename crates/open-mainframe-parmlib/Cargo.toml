@@ -1,0 +1,12 @@
+[package]
+name = "open-mainframe-parmlib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "z/OS PARMLIB — System initialization configuration, symbol substitution, and operator commands"
+
+[dependencies]
+thiserror.workspace = true
+miette.workspace = true
