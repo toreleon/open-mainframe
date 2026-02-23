@@ -35,6 +35,7 @@ pub mod idcams;
 pub mod locking;
 pub mod pds;
 pub mod qsam;
+pub mod sms;
 pub mod types;
 pub mod vsam;
 
@@ -49,6 +50,10 @@ pub use idcams::{Idcams, IdcamsCommand, IdcamsResult};
 pub use locking::{DatasetLockManager, LockEntry, LockManager, LockMode};
 pub use pds::{IspfStats, Pds, PdsMember};
 pub use qsam::{read_all_records, write_records, OpenMode, QsamReader, QsamWriter};
+pub use sms::{
+    ActiveConfiguration, DataClass, ManagementClass, SmsConfiguration, SpaceSpec, SpaceUnit,
+    StorageClass, StorageGroup, StorageGroupType,
+};
 pub use types::{
     DatasetAttributes, DatasetOrg, DatasetRef, DispAction, DispSpec, Disposition, RecordFormat,
 };

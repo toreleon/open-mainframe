@@ -1,9 +1,9 @@
 ---
 currentIG: IG-4
-currentEpic: DFSMS-100
-epicsComplete: 17
+currentEpic: DFSMS-101
+epicsComplete: 18
 epicsTotal: 162
-storiesComplete: 91
+storiesComplete: 98
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -39,7 +39,7 @@ lastUpdated: "2026-02-23"
 - [x] UTIL-109: TSO/REXX/USS Batch (6 stories)
 
 ### IG-5: DFSMS, HSM & Catalog (EXTEND: open-mainframe-dataset)
-- [ ] DFSMS-100: SMS Construct Data Model (7 stories)
+- [x] DFSMS-100: SMS Construct Data Model (7 stories)
 - [ ] DFSMS-101: ACS Routine Interpreter (7 stories)
 - [ ] DFSMS-102: ICF Catalogs (7 stories)
 - [ ] DFSMS-103: IDCAMS Extensions (7 stories)
@@ -253,5 +253,5 @@ lastUpdated: "2026-02-23"
 - Existing crates to extend: 10
 - Total epics: 162
 - Total stories: 949
-- Epics complete: 17
-- Stories complete: 91
+- Epics complete: 18
+- Stories complete: 98
