@@ -59,7 +59,8 @@ pub use error::RacfError;
 pub use profile::{GroupProfile, UserProfile};
 pub use resource::{
     AuthReason, ClassDescriptor, ConditionalAccess, IbmClasses, ListResourceResult,
-    ResourceAuthResult, ResourceManager, ResourceProfile, WhenCondition,
+    ProgramMember, ResourceAuthResult, ResourceManager, ResourceProfile, StartedData,
+    WhenCondition,
 };
 pub use saf::{SafRouter, SafRc, RacfRc, RacrouteResult, ExtractResult};
 pub use setropts::{Setropts, SetroptsListResult, SystemOptions, LogOption, MacSettings, PasswordRules};

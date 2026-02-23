@@ -1,9 +1,9 @@
 ---
 currentIG: IG-2
-currentEpic: SYS-109
-epicsComplete: 2
+currentEpic: SYS-110
+epicsComplete: 3
 epicsTotal: 162
-storiesComplete: 16
+storiesComplete: 23
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -18,7 +18,7 @@ lastUpdated: "2026-02-23"
 - [x] SYS-101: ESTAE/ESPIE Recovery & Extended Services (8 stories)
 
 ### IG-2: RACF Extensions (EXTEND: open-mainframe-racf)
-- [ ] SYS-109: General Resource Class Framework (7 stories)
+- [x] SYS-109: General Resource Class Framework (7 stories)
 - [ ] SYS-110: PassTicket & Digital Certificate Mgmt (7 stories)
 
 ### IG-3: JES2 Extensions (EXTEND: open-mainframe-jes2)
