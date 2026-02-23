@@ -1,0 +1,14 @@
+[package]
+name = "open-mainframe-pgmmgmt"
+description = "z/OS Program Management — Binder, Loader, and Object Module Formats"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+miette.workspace = true
+
+[dev-dependencies]

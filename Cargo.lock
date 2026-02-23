@@ -1409,6 +1409,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-pgmmgmt"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "thiserror",
+]
+
+[[package]]
 name = "open-mainframe-pli"
 version = "0.1.0"
 dependencies = [
