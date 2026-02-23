@@ -42,6 +42,7 @@ pub mod pdse;
 pub mod qsam;
 pub mod rmm;
 pub mod sms;
+pub mod space;
 pub mod types;
 pub mod vsam;
 
@@ -67,6 +68,11 @@ pub use pds::{IspfStats, Pds, PdsMember};
 pub use pdse::{Amode, Eattr, MemberGeneration, Pdse, ProgramObject, Rmode};
 pub use qsam::{read_all_records, write_records, OpenMode, QsamReader, QsamWriter};
 pub use rmm::{Rmm, TapeDataset, TapeVolume, VolumeState, Vrs};
+pub use space::{
+    DscbFormat1, Extent, ExtentList, MultiVolumeDataset, SpaceAllocation, SpaceAllocationUnit,
+    SpaceError, Vtoc, BYTES_PER_CYLINDER_3390, BYTES_PER_TRACK_3390, MAX_EXTENTS,
+    TRACKS_PER_CYLINDER_3390,
+};
 pub use sms::{
     ActiveConfiguration, DataClass, ManagementClass, SmsConfiguration, SpaceSpec, SpaceUnit,
     StorageClass, StorageGroup, StorageGroupType,

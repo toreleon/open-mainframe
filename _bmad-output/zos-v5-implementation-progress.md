@@ -1,9 +1,9 @@
 ---
 currentIG: IG-5
-currentEpic: DFSMS-109
-epicsComplete: 26
+currentEpic: DFSMS-110
+epicsComplete: 27
 epicsTotal: 162
-storiesComplete: 150
+storiesComplete: 156
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -48,7 +48,7 @@ lastUpdated: "2026-02-23"
 - [x] DFSMS-106: DFSMSdss DUMP/RESTORE (7 stories)
 - [x] DFSMS-107: DFSMSrmm Tape Mgmt (5 stories)
 - [x] DFSMS-108: PDSE & Member Generations (5 stories)
-- [ ] DFSMS-109: Space & Volume Mgmt (5 stories)
+- [x] DFSMS-109: Space & Volume Mgmt (6 stories)
 - [ ] DFSMS-110: GDG-to-ICF Integration (4 stories)
 
 ### IG-6: ABEND Framework (EXTEND: open-mainframe-runtime)
