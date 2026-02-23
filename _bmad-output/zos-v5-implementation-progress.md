@@ -1,9 +1,9 @@
 ---
-currentIG: IG-14
-currentEpic: SYS-116
-epicsComplete: 47
+currentIG: COMPLETE
+currentEpic: COMPLETE
+epicsComplete: 162
 epicsTotal: 162
-storiesComplete: 277
+storiesComplete: 949
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -82,44 +82,44 @@ lastUpdated: "2026-02-23"
 ## Phase C — Middleware & Communications
 
 ### IG-10: USS & POSIX (NEW: open-mainframe-uss)
-- [ ] Scaffold crate
-- [ ] USS-100: POSIX Process Model (7 stories)
-- [ ] USS-101: Signal Handling (5 stories)
-- [ ] USS-102: zFS Hierarchical File System (8 stories)
-- [ ] USS-103: Directory & File Metadata (5 stories)
-- [ ] USS-104: Pthreads (5 stories)
-- [ ] USS-105: IPC Mechanisms (6 stories)
-- [ ] USS-106: POSIX Sockets (6 stories)
-- [ ] USS-107: UNIX Shell (/bin/sh) (6 stories)
-- [ ] USS-108: Core UNIX Utilities (5 stories)
-- [ ] USS-109: BPXPRMxx Config & Security (4 stories)
-- [ ] USS-110: Daemon Infrastructure (3 stories)
+- [x] Scaffold crate
+- [x] USS-100: POSIX Process Model (7 stories)
+- [x] USS-101: Signal Handling (5 stories)
+- [x] USS-102: zFS Hierarchical File System (8 stories)
+- [x] USS-103: Directory & File Metadata (5 stories)
+- [x] USS-104: Pthreads (5 stories)
+- [x] USS-105: IPC Mechanisms (6 stories)
+- [x] USS-106: POSIX Sockets (6 stories)
+- [x] USS-107: UNIX Shell (/bin/sh) (6 stories)
+- [x] USS-108: Core UNIX Utilities (5 stories)
+- [x] USS-109: BPXPRMxx Config & Security (4 stories)
+- [x] USS-110: Daemon Infrastructure (3 stories)
 
 ### IG-11: Networking & TCP/IP (NEW: open-mainframe-networking)
-- [ ] Scaffold crate
-- [ ] NET-100: VTAM Application Interface (5 stories)
-- [ ] NET-101: SNA LU Type Support (4 stories)
-- [ ] NET-102: APPC / LU 6.2 / CPI-C (6 stories)
-- [ ] NET-103: TCP/IP Stack Configuration (5 stories)
-- [ ] NET-104: Sockets API Compatibility (6 stories)
-- [ ] NET-105: AT-TLS & Security (5 stories)
-- [ ] NET-106: FTP Client/Server (6 stories)
-- [ ] NET-107: SSH Server & TN3270E (5 stories)
-- [ ] NET-108: Sysplex Networking (5 stories)
-- [ ] NET-109: IP Filtering & IPSec (5 stories)
+- [x] Scaffold crate
+- [x] NET-100: VTAM Application Interface (5 stories)
+- [x] NET-101: SNA LU Type Support (4 stories)
+- [x] NET-102: APPC / LU 6.2 / CPI-C (6 stories)
+- [x] NET-103: TCP/IP Stack Configuration (5 stories)
+- [x] NET-104: Sockets API Compatibility (6 stories)
+- [x] NET-105: AT-TLS & Security (5 stories)
+- [x] NET-106: FTP Client/Server (6 stories)
+- [x] NET-107: SSH Server & TN3270E (5 stories)
+- [x] NET-108: Sysplex Networking (5 stories)
+- [x] NET-109: IP Filtering & IPSec (5 stories)
 
 ### IG-12: SMF Extensions (EXTEND: open-mainframe-smf)
-- [ ] SMF-100: SMF Record Infrastructure (5 stories)
-- [ ] SMF-101: SMFPRMxx Configuration (4 stories)
-- [ ] SMF-102: SMF Record Writing API (5 stories)
-- [ ] SMF-103: SMF Exit Framework (5 stories)
-- [ ] SMF-104: Type 30 — Job Accounting (6 stories)
-- [ ] SMF-105: Types 14/15/17/18 — Dataset Activity (5 stories)
-- [ ] SMF-106: Type 80 — Security Audit (5 stories)
-- [ ] SMF-107: Types 70-79 — Performance (5 stories)
-- [ ] SMF-108: Types 100-120 — Subsystem (5 stories)
-- [ ] SMF-109: SMF Dump Utilities (5 stories)
-- [ ] SMF-110: Observability Bridge (4 stories)
+- [x] SMF-100: SMF Record Infrastructure (5 stories)
+- [x] SMF-101: SMFPRMxx Configuration (4 stories)
+- [x] SMF-102: SMF Record Writing API (5 stories)
+- [x] SMF-103: SMF Exit Framework (5 stories)
+- [x] SMF-104: Type 30 — Job Accounting (6 stories)
+- [x] SMF-105: Types 14/15/17/18 — Dataset Activity (5 stories)
+- [x] SMF-106: Type 80 — Security Audit (5 stories)
+- [x] SMF-107: Types 70-79 — Performance (5 stories)
+- [x] SMF-108: Types 100-120 — Subsystem (5 stories)
+- [x] SMF-109: SMF Dump Utilities (5 stories)
+- [x] SMF-110: Observability Bridge (4 stories)
 
 ### IG-13: COBOL Precompilers (NEW: open-mainframe-precompilers)
 - [x] Scaffold crate
@@ -127,125 +127,125 @@ lastUpdated: "2026-02-23"
 - [x] SYS-113: CICS COBOL Precompiler (6 stories)
 
 ### IG-14: CICS BMS & Extensions (EXTEND: open-mainframe-cics)
-- [ ] SYS-116: CICS Web Services & REST/JSON (7 stories)
-- [ ] CICS-210: DOCUMENT Commands (5 stories)
-- [ ] CICS-211: CICS System Programming (6 stories)
+- [x] SYS-116: CICS Web Services & REST/JSON (7 stories)
+- [x] CICS-210: DOCUMENT Commands (5 stories)
+- [x] CICS-211: CICS System Programming (6 stories)
 
 ## Phase D — Extended Languages
 
 ### IG-15: CLIST (NEW: open-mainframe-clist)
-- [ ] Scaffold crate
-- [ ] CL-100: Lexer & Parser (5 stories)
-- [ ] CL-101: Interpreter Core (6 stories)
-- [ ] CL-102: Built-in Functions (4 stories)
-- [ ] CL-103: I/O and Error Handling (6 stories)
-- [ ] CL-104: TSO/ISPF Integration (6 stories)
+- [x] Scaffold crate
+- [x] CL-100: Lexer & Parser (5 stories)
+- [x] CL-101: Interpreter Core (6 stories)
+- [x] CL-102: Built-in Functions (4 stories)
+- [x] CL-103: I/O and Error Handling (6 stories)
+- [x] CL-104: TSO/ISPF Integration (6 stories)
 
 ### IG-16: System Init & PARMLIB (NEW: open-mainframe-parmlib)
-- [ ] Scaffold crate
-- [ ] SYS-117: PARMLIB Framework & Core Members (8 stories)
-- [ ] SYS-118: System Symbol Substitution (4 stories)
-- [ ] SYS-119: Subsystem Configuration Members (7 stories)
-- [ ] SYS-120: Initialization Sequence & Operator Commands (5 stories)
+- [x] Scaffold crate
+- [x] SYS-117: PARMLIB Framework & Core Members (8 stories)
+- [x] SYS-118: System Symbol Substitution (4 stories)
+- [x] SYS-119: Subsystem Configuration Members (7 stories)
+- [x] SYS-120: Initialization Sequence & Operator Commands (5 stories)
 
 ### IG-17: Crypto, PKI & Security (NEW: open-mainframe-crypto + EXTEND: open-mainframe-racf)
-- [ ] Scaffold crate (open-mainframe-crypto)
-- [ ] CRYPTO-100: ICSF Symmetric & Hashing (6 stories)
-- [ ] CRYPTO-101: ICSF Asymmetric Keys (5 stories)
-- [ ] CRYPTO-102: Key Management & Stores (6 stories)
-- [ ] CRYPTO-103: CSFKEYS/CSFSERV Integration (4 stories)
-- [ ] SEC-107: Security Labels (MAC) (5 stories)
-- [ ] SEC-108: RACF Audit & SMF Integration (6 stories)
-- [ ] SEC-109: RACF Exits, Utilities & Config (6 stories)
+- [x] Scaffold crate (open-mainframe-crypto)
+- [x] CRYPTO-100: ICSF Symmetric & Hashing (6 stories)
+- [x] CRYPTO-101: ICSF Asymmetric Keys (5 stories)
+- [x] CRYPTO-102: Key Management & Stores (6 stories)
+- [x] CRYPTO-103: CSFKEYS/CSFSERV Integration (4 stories)
+- [x] SEC-107: Security Labels (MAC) (5 stories)
+- [x] SEC-108: RACF Audit & SMF Integration (6 stories)
+- [x] SEC-109: RACF Exits, Utilities & Config (6 stories)
 
 ## Phase E — Transaction Monitors & Databases
 
 ### IG-18: IMS TM & MFS (EXTEND: open-mainframe-ims)
-- [ ] IMS-TM100: Alt PCB & Extended Messages (5 stories)
-- [ ] IMS-TM101: Conversational Transactions (4 stories)
-- [ ] IMS-TM102: Advanced System Service Calls (5 stories)
-- [ ] IMS-TM103: Environment Query Calls (4 stories)
-- [ ] IMS-TM104: Region Model & Scheduling (6 stories)
-- [ ] IMS-TM105: Operator Command Framework (6 stories)
-- [ ] IMS-TM106: OTMA Protocol (5 stories)
-- [ ] IMS-TM107: IMS Connect Gateway (6 stories)
-- [ ] IMS-TM108: Fast Path (EMH + IFP) (4 stories)
-- [ ] IMS-TM109: MSC & Shared Queues (4 stories)
-- [ ] MFS-100: MFS Source Language Parser (5 stories)
-- [ ] MFS-101: MFS Control Block Compiler (5 stories)
-- [ ] MFS-102: MFS Runtime Integration (5 stories)
-- [ ] IMS-TM110: EXEC DLI Code Generation (4 stories)
+- [x] IMS-TM100: Alt PCB & Extended Messages (5 stories)
+- [x] IMS-TM101: Conversational Transactions (4 stories)
+- [x] IMS-TM102: Advanced System Service Calls (5 stories)
+- [x] IMS-TM103: Environment Query Calls (4 stories)
+- [x] IMS-TM104: Region Model & Scheduling (6 stories)
+- [x] IMS-TM105: Operator Command Framework (6 stories)
+- [x] IMS-TM106: OTMA Protocol (5 stories)
+- [x] IMS-TM107: IMS Connect Gateway (6 stories)
+- [x] IMS-TM108: Fast Path (EMH + IFP) (4 stories)
+- [x] IMS-TM109: MSC & Shared Queues (4 stories)
+- [x] MFS-100: MFS Source Language Parser (5 stories)
+- [x] MFS-101: MFS Control Block Compiler (5 stories)
+- [x] MFS-102: MFS Runtime Integration (5 stories)
+- [x] IMS-TM110: EXEC DLI Code Generation (4 stories)
 
 ### IG-19: DB2 Utilities & BIND (EXTEND: open-mainframe-db2)
-- [ ] SYS-114: DB2 BIND & Package Mgmt (7 stories)
-- [ ] SYS-115: DB2 Operational Utilities (5 stories)
+- [x] SYS-114: DB2 BIND & Package Mgmt (7 stories)
+- [x] SYS-115: DB2 Operational Utilities (5 stories)
 
 ### IG-20: Easytrieve (NEW: open-mainframe-easytrieve)
-- [ ] Scaffold crate
-- [ ] EZ-100: Lexer & Parser (5 stories)
-- [ ] EZ-101: Interpreter Core (5 stories)
-- [ ] EZ-102: File Processing (5 stories)
-- [ ] EZ-103: Report Generator (6 stories)
-- [ ] EZ-104: SQL/Database Integration (4 stories)
-- [ ] EZ-105: SORT & Utilities (4 stories)
-- [ ] EZ-106: Macros, External Calls & Tests (4 stories)
+- [x] Scaffold crate
+- [x] EZ-100: Lexer & Parser (5 stories)
+- [x] EZ-101: Interpreter Core (5 stories)
+- [x] EZ-102: File Processing (5 stories)
+- [x] EZ-103: Report Generator (6 stories)
+- [x] EZ-104: SQL/Database Integration (4 stories)
+- [x] EZ-105: SORT & Utilities (4 stories)
+- [x] EZ-106: Macros, External Calls & Tests (4 stories)
 
 ### IG-21: IDMS (NEW: open-mainframe-idms)
-- [ ] Scaffold crate
-- [ ] IDMS-100: CODASYL Data Model Core (5 stories)
-- [ ] IDMS-101: Schema & Subschema DDL Parser (5 stories)
-- [ ] IDMS-102: Navigational DML Engine (7 stories)
-- [ ] IDMS-103: Currency Indicator System (4 stories)
-- [ ] IDMS-104: COBOL DML Precompiler (4 stories)
-- [ ] IDMS-105: DMCL & Physical Storage (6 stories)
-- [ ] IDMS-106: IDMS-DC Transaction Processing (6 stories)
-- [ ] IDMS-107: ADS/Online 4GL (4 stories)
-- [ ] IDMS-108: SQL Option (5 stories)
-- [ ] IDMS-109: Recovery & Operations (5 stories)
-- [ ] IDMS-110: Lock Management (5 stories)
+- [x] Scaffold crate
+- [x] IDMS-100: CODASYL Data Model Core (5 stories)
+- [x] IDMS-101: Schema & Subschema DDL Parser (5 stories)
+- [x] IDMS-102: Navigational DML Engine (7 stories)
+- [x] IDMS-103: Currency Indicator System (4 stories)
+- [x] IDMS-104: COBOL DML Precompiler (4 stories)
+- [x] IDMS-105: DMCL & Physical Storage (6 stories)
+- [x] IDMS-106: IDMS-DC Transaction Processing (6 stories)
+- [x] IDMS-107: ADS/Online 4GL (4 stories)
+- [x] IDMS-108: SQL Option (5 stories)
+- [x] IDMS-109: Recovery & Operations (5 stories)
+- [x] IDMS-110: Lock Management (5 stories)
 
 ### IG-22: ADABAS (NEW: open-mainframe-adabas)
-- [ ] Scaffold crate
-- [ ] ADA-100: Inverted-List Storage Engine (6 stories)
-- [ ] ADA-101: FDT & Field System (5 stories)
-- [ ] ADA-102: Descriptor Engine (5 stories)
-- [ ] ADA-103: Direct Call Interface (ACB) (5 stories)
-- [ ] ADA-104: Search Commands (5 stories)
-- [ ] ADA-105: Read Commands (6 stories)
-- [ ] ADA-106: Modification Commands (4 stories)
-- [ ] ADA-107: Transaction Management (5 stories)
-- [ ] ADA-108: Nucleus & Logging (6 stories)
-- [ ] ADA-109: Utilities & DDM (5 stories)
+- [x] Scaffold crate
+- [x] ADA-100: Inverted-List Storage Engine (6 stories)
+- [x] ADA-101: FDT & Field System (5 stories)
+- [x] ADA-102: Descriptor Engine (5 stories)
+- [x] ADA-103: Direct Call Interface (ACB) (5 stories)
+- [x] ADA-104: Search Commands (5 stories)
+- [x] ADA-105: Read Commands (6 stories)
+- [x] ADA-106: Modification Commands (4 stories)
+- [x] ADA-107: Transaction Management (5 stories)
+- [x] ADA-108: Nucleus & Logging (6 stories)
+- [x] ADA-109: Utilities & DDM (5 stories)
 
 ## Phase F — Niche & Legacy
 
 ### IG-23: Natural (NEW: open-mainframe-natural)
-- [ ] Scaffold crate
-- [ ] NAT-100: Lexer & Parser (6 stories)
-- [ ] NAT-101: Data Model & DEFINE DATA (5 stories)
-- [ ] NAT-102: Interpreter Core (5 stories)
-- [ ] NAT-103: Data Manipulation (5 stories)
-- [ ] NAT-104: ADABAS Database Access (6 stories)
-- [ ] NAT-105: SQL Database Access (4 stories)
-- [ ] NAT-106: Output & Reporting (5 stories)
-- [ ] NAT-107: Interactive I/O & Maps (5 stories)
-- [ ] NAT-108: System Variables & Functions (5 stories)
-- [ ] NAT-109: Error Handling & Work Files (4 stories)
-- [ ] NAT-110: Environment & Security (5 stories)
+- [x] Scaffold crate
+- [x] NAT-100: Lexer & Parser (6 stories)
+- [x] NAT-101: Data Model & DEFINE DATA (5 stories)
+- [x] NAT-102: Interpreter Core (5 stories)
+- [x] NAT-103: Data Manipulation (5 stories)
+- [x] NAT-104: ADABAS Database Access (6 stories)
+- [x] NAT-105: SQL Database Access (4 stories)
+- [x] NAT-106: Output & Reporting (5 stories)
+- [x] NAT-107: Interactive I/O & Maps (5 stories)
+- [x] NAT-108: System Variables & Functions (5 stories)
+- [x] NAT-109: Error Handling & Work Files (4 stories)
+- [x] NAT-110: Environment & Security (5 stories)
 
 ### IG-24: FOCUS (NEW: open-mainframe-focus)
-- [ ] Scaffold crate
-- [ ] FOC-100: Multi-Dialect Parser (6 stories)
-- [ ] FOC-101: Master File Descriptor (5 stories)
-- [ ] FOC-102: TABLE Request Engine (6 stories)
-- [ ] FOC-103: GRAPH Engine (4 stories)
-- [ ] FOC-104: MODIFY/MAINTAIN Engine (5 stories)
-- [ ] FOC-105: Dialogue Manager (5 stories)
-- [ ] FOC-106: Built-in Functions (5 stories)
-- [ ] FOC-107: Data Adapters (6 stories)
-- [ ] FOC-108: Output Formatting (5 stories)
-- [ ] FOC-109: Joins & Multi-Source (4 stories)
-- [ ] FOC-110: Mainframe Integration (4 stories)
+- [x] Scaffold crate
+- [x] FOC-100: Multi-Dialect Parser (6 stories)
+- [x] FOC-101: Master File Descriptor (5 stories)
+- [x] FOC-102: TABLE Request Engine (6 stories)
+- [x] FOC-103: GRAPH Engine (4 stories)
+- [x] FOC-104: MODIFY/MAINTAIN Engine (5 stories)
+- [x] FOC-105: Dialogue Manager (5 stories)
+- [x] FOC-106: Built-in Functions (5 stories)
+- [x] FOC-107: Data Adapters (6 stories)
+- [x] FOC-108: Output Formatting (5 stories)
+- [x] FOC-109: Joins & Multi-Source (4 stories)
+- [x] FOC-110: Mainframe Integration (4 stories)
 
 ## Summary
 - Implementation groups: 24
@@ -253,5 +253,5 @@ lastUpdated: "2026-02-23"
 - Existing crates to extend: 10
 - Total epics: 162
 - Total stories: 949
-- Epics complete: 19
-- Stories complete: 105
+- Epics complete: 162
+- Stories complete: 949
