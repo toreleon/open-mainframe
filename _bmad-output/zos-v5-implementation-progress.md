@@ -1,9 +1,9 @@
 ---
-currentIG: IG-2
-currentEpic: SYS-110
-epicsComplete: 3
+currentIG: IG-3
+currentEpic: SYS-108
+epicsComplete: 4
 epicsTotal: 162
-storiesComplete: 23
+storiesComplete: 30
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -19,7 +19,7 @@ lastUpdated: "2026-02-23"
 
 ### IG-2: RACF Extensions (EXTEND: open-mainframe-racf)
 - [x] SYS-109: General Resource Class Framework (7 stories)
-- [ ] SYS-110: PassTicket & Digital Certificate Mgmt (7 stories)
+- [x] SYS-110: PassTicket & Digital Certificate Mgmt (7 stories)
 
 ### IG-3: JES2 Extensions (EXTEND: open-mainframe-jes2)
 - [ ] SYS-108: JES2 Installation Exits Framework (6 stories)
@@ -253,5 +253,5 @@ lastUpdated: "2026-02-23"
 - Existing crates to extend: 10
 - Total epics: 162
 - Total stories: 949
-- Epics complete: 1
-- Stories complete: 8
+- Epics complete: 4
+- Stories complete: 30
