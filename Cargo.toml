@@ -31,6 +31,9 @@ members = [
     "crates/open-mainframe-clist",
     "crates/open-mainframe-crypto",
     "crates/open-mainframe-parmlib",
+    "crates/open-mainframe-idms",
+    "crates/open-mainframe-adabas",
+    "crates/open-mainframe-easytrieve",
 ]
 
 [workspace.package]
@@ -108,3 +111,6 @@ open-mainframe-precompilers = { path = "crates/open-mainframe-precompilers" }
 open-mainframe-clist = { path = "crates/open-mainframe-clist" }
 open-mainframe-crypto = { path = "crates/open-mainframe-crypto" }
 open-mainframe-parmlib = { path = "crates/open-mainframe-parmlib" }
+open-mainframe-idms = { path = "crates/open-mainframe-idms" }
+open-mainframe-adabas = { path = "crates/open-mainframe-adabas" }
+open-mainframe-easytrieve = { path = "crates/open-mainframe-easytrieve" }

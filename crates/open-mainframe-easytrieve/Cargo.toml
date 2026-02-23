@@ -1,0 +1,12 @@
+[package]
+name = "open-mainframe-easytrieve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Easytrieve — lexer, parser, interpreter, report generator, and SQL bridge for z/OS Easytrieve Plus"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true

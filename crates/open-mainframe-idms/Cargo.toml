@@ -1,0 +1,15 @@
+[package]
+name = "open-mainframe-idms"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "z/OS IDMS — CODASYL network database, navigational DML, DC transaction processing, and SQL option"
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
