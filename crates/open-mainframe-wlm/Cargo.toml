@@ -11,4 +11,5 @@ description = "z/OS Workload Manager — service classes, goals, classification 
 miette.workspace = true
 thiserror.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true

@@ -1,9 +1,9 @@
 ---
 currentIG: IG-9
-currentEpic: WLM-100
-epicsComplete: 33
+currentEpic: WLM-101
+epicsComplete: 34
 epicsTotal: 162
-storiesComplete: 201
+storiesComplete: 208
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -67,7 +67,7 @@ lastUpdated: "2026-02-23"
 - [x] SYS-105: Object & Load Module Format (6 stories)
 
 ### IG-9: WLM Extensions (EXTEND: open-mainframe-wlm)
-- [ ] WLM-100: Service Definition Data Model (7 stories)
+- [x] WLM-100: Service Definition Data Model (7 stories)
 - [ ] WLM-101: Classification Rule Engine (6 stories)
 - [ ] WLM-102: Goal Evaluation & PI (6 stories)
 - [ ] WLM-103: Resource Groups & Capping (5 stories)
