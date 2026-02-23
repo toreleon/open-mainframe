@@ -1,9 +1,9 @@
 ---
-currentIG: IG-5
-currentEpic: SYS-111
-epicsComplete: 28
+currentIG: IG-7
+currentEpic: SYS-102
+epicsComplete: 29
 epicsTotal: 162
-storiesComplete: 159
+storiesComplete: 167
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -52,7 +52,7 @@ lastUpdated: "2026-02-23"
 - [x] DFSMS-110: GDG-to-ICF Integration (3 stories)
 
 ### IG-6: ABEND Framework (EXTEND: open-mainframe-runtime)
-- [ ] SYS-111: ABEND Code Framework & Dump Support (8 stories)
+- [x] SYS-111: ABEND Code Framework & Dump Support (8 stories)
 
 ## Phase B — Interactive & Scripting
 

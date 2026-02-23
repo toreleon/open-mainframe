@@ -19,6 +19,7 @@
 //! assert_eq!(String::from_utf8(output).unwrap(), "HELLO WORLD\n");
 //! ```
 
+pub mod abend;
 pub mod condition;
 pub mod date_time;
 pub mod decimal;
@@ -38,6 +39,11 @@ pub mod storage;
 pub mod string;
 pub mod value;
 
+pub use abend::{
+    AbendCode, AbendInfo, AbendRegistry, AbendRegistryEntry, DumpType, FormattedDump,
+    MachineDump, MdumpHeader, RegisterSet, SnapDump, StackFrame, StepCompletion,
+    SystemAreas, ABEND_REGISTRY,
+};
 pub use date_time::{
     cee3dly, ceedate, ceedatm, ceedays, ceedywk, ceegmt, ceegmto, ceeisec, ceeloct,
     ceeseci, ceesecs, date_of_integer, date_to_lilian, day_of_integer, integer_of_date,
