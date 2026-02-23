@@ -11,7 +11,7 @@ pub mod classify;
 pub mod policy;
 pub mod service;
 
-pub use classify::{ClassificationRule, Classifier, WorkAttribute, WorkRequest};
+pub use classify::{ClassificationRule, Classifier, SubsystemType, WorkAttribute, WorkRequest};
 pub use policy::{
     CpuCapType, ReportClass, ResourceGroup, ServiceDefinition, Workload,
 };

@@ -1,9 +1,9 @@
 ---
 currentIG: IG-9
-currentEpic: WLM-101
-epicsComplete: 34
+currentEpic: WLM-102
+epicsComplete: 35
 epicsTotal: 162
-storiesComplete: 208
+storiesComplete: 214
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -68,7 +68,7 @@ lastUpdated: "2026-02-23"
 
 ### IG-9: WLM Extensions (EXTEND: open-mainframe-wlm)
 - [x] WLM-100: Service Definition Data Model (7 stories)
-- [ ] WLM-101: Classification Rule Engine (6 stories)
+- [x] WLM-101: Classification Rule Engine (6 stories)
 - [ ] WLM-102: Goal Evaluation & PI (6 stories)
 - [ ] WLM-103: Resource Groups & Capping (5 stories)
 - [ ] WLM-104: WLM-Managed Initiator Scheduling (6 stories)

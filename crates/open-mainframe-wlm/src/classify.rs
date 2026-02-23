@@ -174,6 +174,81 @@ impl ClassificationRule {
 //  Classifier
 // ---------------------------------------------------------------------------
 
+/// Recognized subsystem types for classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum SubsystemType {
+    /// JES2/JES3 — Batch jobs.
+    Jes,
+    /// TSO — Time Sharing Option.
+    Tso,
+    /// CICS — Customer Information Control System.
+    Cics,
+    /// IMS — Information Management System.
+    Ims,
+    /// DB2 — Database 2.
+    Db2,
+    /// MQ — MQSeries (WebSphere MQ).
+    Mq,
+    /// STC — Started Tasks.
+    Stc,
+    /// ASCH — APPC/MVS Scheduling.
+    Asch,
+    /// OMVS — Unix System Services.
+    Omvs,
+    /// CB — Communications Server (TCP/IP).
+    Cb,
+    /// DDF — DB2 Distributed Data Facility.
+    Ddf,
+    /// WAS — WebSphere Application Server.
+    Was,
+    /// IWEB — HTTP Server.
+    Iweb,
+    /// Other/unknown subsystem type.
+    Other,
+}
+
+impl SubsystemType {
+    /// Parse a subsystem type from a string.
+    pub fn from_str_type(s: &str) -> Self {
+        match s.to_uppercase().as_str() {
+            "JES" | "JES2" | "JES3" => SubsystemType::Jes,
+            "TSO" => SubsystemType::Tso,
+            "CICS" => SubsystemType::Cics,
+            "IMS" => SubsystemType::Ims,
+            "DB2" => SubsystemType::Db2,
+            "MQ" | "WMQM" => SubsystemType::Mq,
+            "STC" => SubsystemType::Stc,
+            "ASCH" => SubsystemType::Asch,
+            "OMVS" => SubsystemType::Omvs,
+            "CB" => SubsystemType::Cb,
+            "DDF" => SubsystemType::Ddf,
+            "WAS" => SubsystemType::Was,
+            "IWEB" => SubsystemType::Iweb,
+            _ => SubsystemType::Other,
+        }
+    }
+
+    /// Primary qualifier types relevant for this subsystem type.
+    pub fn primary_qualifiers(self) -> &'static [QualifierType] {
+        match self {
+            SubsystemType::Jes => &[QualifierType::JobClass, QualifierType::UserId, QualifierType::TransactionName],
+            SubsystemType::Tso => &[QualifierType::UserId, QualifierType::PerformanceGroup, QualifierType::Accounting],
+            SubsystemType::Cics => &[QualifierType::TransactionName, QualifierType::LuName, QualifierType::SubsystemName],
+            SubsystemType::Ims => &[QualifierType::TransactionName, QualifierType::LuName, QualifierType::SubsystemName],
+            SubsystemType::Db2 => &[QualifierType::TransactionName, QualifierType::SubsystemName, QualifierType::UserId],
+            SubsystemType::Mq => &[QualifierType::SubsystemName, QualifierType::TransactionName],
+            SubsystemType::Stc => &[QualifierType::ProcedureName, QualifierType::TransactionName],
+            SubsystemType::Asch => &[QualifierType::TransactionName, QualifierType::UserId],
+            SubsystemType::Omvs => &[QualifierType::UserId, QualifierType::TransactionName],
+            SubsystemType::Cb => &[QualifierType::SubsystemName, QualifierType::TransactionName],
+            SubsystemType::Ddf => &[QualifierType::TransactionName, QualifierType::UserId],
+            SubsystemType::Was => &[QualifierType::SubsystemName, QualifierType::TransactionName],
+            SubsystemType::Iweb => &[QualifierType::SubsystemName, QualifierType::TransactionName],
+            SubsystemType::Other => &[QualifierType::SubsystemType, QualifierType::TransactionName],
+        }
+    }
+}
+
 /// The workload classifier evaluates rules and assigns service classes.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Classifier {
@@ -181,6 +256,8 @@ pub struct Classifier {
     rules: Vec<ClassificationRule>,
     /// Default service class if no rule matches.
     pub default_class: String,
+    /// Per-subsystem-type default service classes.
+    subsystem_defaults: std::collections::HashMap<String, String>,
 }
 
 impl Classifier {
@@ -189,6 +266,7 @@ impl Classifier {
         Self {
             rules: Vec::new(),
             default_class: default_class.to_uppercase(),
+            subsystem_defaults: std::collections::HashMap::new(),
         }
     }
 
@@ -206,7 +284,24 @@ impl Classifier {
         self.rules.len() < before
     }
 
+    /// Set a default service class for a specific subsystem type.
+    pub fn set_subsystem_default(&mut self, subsystem_type: &str, class: &str) {
+        self.subsystem_defaults
+            .insert(subsystem_type.to_uppercase(), class.to_uppercase());
+    }
+
+    /// Get the default for a subsystem type.
+    pub fn subsystem_default(&self, subsystem_type: &str) -> Option<&String> {
+        self.subsystem_defaults.get(&subsystem_type.to_uppercase())
+    }
+
     /// Classify a work request, returning the service class name.
+    ///
+    /// Evaluation order:
+    /// 1. Service class override (explicit assignment)
+    /// 2. Rules in priority order (most specific wins)
+    /// 3. Subsystem-type default
+    /// 4. Global default
     pub fn classify(&self, request: &WorkRequest) -> String {
         // Check for explicit override first.
         if let Some(ref override_class) = request.attributes.service_class_override {
@@ -222,7 +317,12 @@ impl Classifier {
             }
         }
 
-        // Return default.
+        // Check subsystem-type default.
+        if let Some(default) = self.subsystem_defaults.get(&request.attributes.subsystem_type) {
+            return default.clone();
+        }
+
+        // Return global default.
         self.default_class.clone()
     }
 
@@ -409,5 +509,273 @@ mod tests {
         classifier.add_rule(r2);
         let names = classifier.list_rules();
         assert_eq!(names.len(), 2);
+    }
+
+    // ─── WLM-101.2: Subsystem Type Handlers ───
+
+    #[test]
+    fn test_subsystem_type_parsing() {
+        assert_eq!(SubsystemType::from_str_type("JES2"), SubsystemType::Jes);
+        assert_eq!(SubsystemType::from_str_type("JES3"), SubsystemType::Jes);
+        assert_eq!(SubsystemType::from_str_type("CICS"), SubsystemType::Cics);
+        assert_eq!(SubsystemType::from_str_type("DB2"), SubsystemType::Db2);
+        assert_eq!(SubsystemType::from_str_type("TSO"), SubsystemType::Tso);
+        assert_eq!(SubsystemType::from_str_type("IMS"), SubsystemType::Ims);
+        assert_eq!(SubsystemType::from_str_type("MQ"), SubsystemType::Mq);
+        assert_eq!(SubsystemType::from_str_type("STC"), SubsystemType::Stc);
+        assert_eq!(SubsystemType::from_str_type("OMVS"), SubsystemType::Omvs);
+        assert_eq!(SubsystemType::from_str_type("UNKNOWN"), SubsystemType::Other);
+    }
+
+    #[test]
+    fn test_jes_classification() {
+        let mut classifier = Classifier::new("DEFAULT");
+
+        let mut rule = ClassificationRule::new("JES_CLASSA", "BATCHHIGH");
+        rule.add_qualifier(QualifierType::SubsystemType, "JES2");
+        rule.add_qualifier(QualifierType::JobClass, "A");
+        rule.priority = 10;
+        classifier.add_rule(rule);
+
+        let req = WorkRequest::new("JES2", "MYJOB").with_job_class("A");
+        assert_eq!(classifier.classify(&req), "BATCHHIGH");
+    }
+
+    #[test]
+    fn test_cics_transaction_classification() {
+        let mut classifier = Classifier::new("DEFAULT");
+
+        let mut rule = ClassificationRule::new("CICS_INQ", "CICSINQ");
+        rule.add_qualifier(QualifierType::SubsystemType, "CICS");
+        rule.add_qualifier(QualifierType::TransactionName, "INQ*");
+        rule.priority = 10;
+        classifier.add_rule(rule);
+
+        let req = WorkRequest::new("CICS", "INQACCT");
+        assert_eq!(classifier.classify(&req), "CICSINQ");
+    }
+
+    #[test]
+    fn test_db2_plan_classification() {
+        let mut classifier = Classifier::new("DEFAULT");
+
+        let mut rule = ClassificationRule::new("DB2_DDF", "DB2DIST");
+        rule.add_qualifier(QualifierType::SubsystemType, "DB2");
+        rule.add_qualifier(QualifierType::TransactionName, "DDF*");
+        rule.priority = 10;
+        classifier.add_rule(rule);
+
+        let req = WorkRequest::new("DB2", "DDFQUERY");
+        assert_eq!(classifier.classify(&req), "DB2DIST");
+    }
+
+    #[test]
+    fn test_subsystem_primary_qualifiers() {
+        let jes_quals = SubsystemType::Jes.primary_qualifiers();
+        assert!(jes_quals.contains(&QualifierType::JobClass));
+
+        let cics_quals = SubsystemType::Cics.primary_qualifiers();
+        assert!(cics_quals.contains(&QualifierType::TransactionName));
+        assert!(cics_quals.contains(&QualifierType::LuName));
+
+        let db2_quals = SubsystemType::Db2.primary_qualifiers();
+        assert!(db2_quals.contains(&QualifierType::TransactionName));
+    }
+
+    // ─── WLM-101.4: Default Rules and Inheritance ───
+
+    #[test]
+    fn test_subsystem_default() {
+        let mut classifier = Classifier::new("GLOBAL_DEFAULT");
+        classifier.set_subsystem_default("CICS", "CICS_DEFAULT");
+        classifier.set_subsystem_default("TSO", "TSO_DEFAULT");
+
+        // CICS work with no matching rule → subsystem default.
+        let req = WorkRequest::new("CICS", "UNKNOWN_TXN");
+        assert_eq!(classifier.classify(&req), "CICS_DEFAULT");
+
+        // TSO work → TSO subsystem default.
+        let req2 = WorkRequest::new("TSO", "LOGON");
+        assert_eq!(classifier.classify(&req2), "TSO_DEFAULT");
+
+        // Unknown subsystem → global default.
+        let req3 = WorkRequest::new("ASCH", "TASK1");
+        assert_eq!(classifier.classify(&req3), "GLOBAL_DEFAULT");
+    }
+
+    #[test]
+    fn test_rule_overrides_subsystem_default() {
+        let mut classifier = Classifier::new("GLOBAL");
+        classifier.set_subsystem_default("CICS", "CICS_LOW");
+
+        let mut rule = ClassificationRule::new("CICS_HIGH", "CICS_PRIORITY");
+        rule.add_qualifier(QualifierType::SubsystemType, "CICS");
+        rule.add_qualifier(QualifierType::TransactionName, "PAY*");
+        rule.priority = 10;
+        classifier.add_rule(rule);
+
+        // Matching rule → rule wins.
+        let req = WorkRequest::new("CICS", "PAYROLL");
+        assert_eq!(classifier.classify(&req), "CICS_PRIORITY");
+
+        // No matching rule → subsystem default.
+        let req2 = WorkRequest::new("CICS", "OTHER");
+        assert_eq!(classifier.classify(&req2), "CICS_LOW");
+    }
+
+    // ─── WLM-101.5: Classification Performance ───
+
+    #[test]
+    fn test_classification_performance() {
+        let mut classifier = Classifier::new("DEFAULT");
+
+        // Add 100 rules across 5 subsystem types.
+        for i in 0..100 {
+            let subsys = match i % 5 {
+                0 => "CICS",
+                1 => "JES2",
+                2 => "DB2",
+                3 => "TSO",
+                _ => "IMS",
+            };
+            let mut rule = ClassificationRule::new(
+                &format!("RULE{i:03}"),
+                &format!("CLASS{i:03}"),
+            );
+            rule.add_qualifier(QualifierType::SubsystemType, subsys);
+            rule.add_qualifier(QualifierType::TransactionName, &format!("TXN{i:03}"));
+            rule.priority = i;
+            classifier.add_rule(rule);
+        }
+
+        // Classify 1000 work units.
+        let start = std::time::Instant::now();
+        for i in 0..1000 {
+            let subsys = match i % 5 {
+                0 => "CICS",
+                1 => "JES2",
+                2 => "DB2",
+                3 => "TSO",
+                _ => "IMS",
+            };
+            let req = WorkRequest::new(subsys, &format!("TXN{:03}", i % 100));
+            let _ = classifier.classify(&req);
+        }
+        let elapsed = start.elapsed();
+
+        // Average should be < 1ms (we assert < 10ms total for 1000 for safety).
+        assert!(
+            elapsed.as_millis() < 100,
+            "Classification too slow: {:?}",
+            elapsed
+        );
+    }
+
+    // ─── WLM-101.6: Classification Tests (10 scenarios) ───
+
+    #[test]
+    fn test_ten_classification_scenarios() {
+        let mut classifier = Classifier::new("DEFAULT");
+        classifier.set_subsystem_default("TSO", "TSO_STD");
+
+        // JES rules.
+        let mut r = ClassificationRule::new("JES_A", "BATCH_HIGH");
+        r.add_qualifier(QualifierType::SubsystemType, "JES2");
+        r.add_qualifier(QualifierType::JobClass, "A");
+        r.priority = 10;
+        classifier.add_rule(r);
+
+        let mut r = ClassificationRule::new("JES_B", "BATCH_LOW");
+        r.add_qualifier(QualifierType::SubsystemType, "JES2");
+        r.add_qualifier(QualifierType::JobClass, "B");
+        r.priority = 20;
+        classifier.add_rule(r);
+
+        // CICS rules.
+        let mut r = ClassificationRule::new("CICS_PAY", "CICS_HIGH");
+        r.add_qualifier(QualifierType::SubsystemType, "CICS");
+        r.add_qualifier(QualifierType::TransactionName, "PAY*");
+        r.priority = 10;
+        classifier.add_rule(r);
+
+        let mut r = ClassificationRule::new("CICS_INQ", "CICS_MED");
+        r.add_qualifier(QualifierType::SubsystemType, "CICS");
+        r.add_qualifier(QualifierType::TransactionName, "INQ*");
+        r.priority = 20;
+        classifier.add_rule(r);
+
+        // DB2 rules.
+        let mut r = ClassificationRule::new("DB2_DDF", "DB2_DIST");
+        r.add_qualifier(QualifierType::SubsystemType, "DB2");
+        r.add_qualifier(QualifierType::TransactionName, "DDF*");
+        r.priority = 10;
+        classifier.add_rule(r);
+
+        // TSO rules (user-specific).
+        let mut r = ClassificationRule::new("TSO_ADMIN", "TSO_ADMIN");
+        r.add_qualifier(QualifierType::SubsystemType, "TSO");
+        r.add_qualifier(QualifierType::UserId, "ADMIN*");
+        r.priority = 10;
+        classifier.add_rule(r);
+
+        // Scenario 1: JES class A → BATCH_HIGH.
+        assert_eq!(
+            classifier.classify(&WorkRequest::new("JES2", "MYJOB").with_job_class("A")),
+            "BATCH_HIGH"
+        );
+
+        // Scenario 2: JES class B → BATCH_LOW.
+        assert_eq!(
+            classifier.classify(&WorkRequest::new("JES2", "MYJOB").with_job_class("B")),
+            "BATCH_LOW"
+        );
+
+        // Scenario 3: CICS PAYROLL → CICS_HIGH.
+        assert_eq!(
+            classifier.classify(&WorkRequest::new("CICS", "PAYROLL")),
+            "CICS_HIGH"
+        );
+
+        // Scenario 4: CICS INQACCT → CICS_MED.
+        assert_eq!(
+            classifier.classify(&WorkRequest::new("CICS", "INQACCT")),
+            "CICS_MED"
+        );
+
+        // Scenario 5: CICS OTHER → DEFAULT (no subsystem default set for CICS).
+        assert_eq!(
+            classifier.classify(&WorkRequest::new("CICS", "OTHER")),
+            "DEFAULT"
+        );
+
+        // Scenario 6: DB2 DDF → DB2_DIST.
+        assert_eq!(
+            classifier.classify(&WorkRequest::new("DB2", "DDFQUERY")),
+            "DB2_DIST"
+        );
+
+        // Scenario 7: DB2 non-DDF → DEFAULT.
+        assert_eq!(
+            classifier.classify(&WorkRequest::new("DB2", "UTILITY")),
+            "DEFAULT"
+        );
+
+        // Scenario 8: TSO ADMIN user → TSO_ADMIN.
+        assert_eq!(
+            classifier.classify(&WorkRequest::new("TSO", "LOGON").with_user("ADMIN01")),
+            "TSO_ADMIN"
+        );
+
+        // Scenario 9: TSO normal user → TSO_STD (subsystem default).
+        assert_eq!(
+            classifier.classify(&WorkRequest::new("TSO", "LOGON").with_user("USER01")),
+            "TSO_STD"
+        );
+
+        // Scenario 10: Unknown subsystem → DEFAULT.
+        assert_eq!(
+            classifier.classify(&WorkRequest::new("UNKNOWN", "TASK1")),
+            "DEFAULT"
+        );
     }
 }
