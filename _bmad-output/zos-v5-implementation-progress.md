@@ -1,9 +1,9 @@
 ---
-currentIG: IG-10
-currentEpic: USS-100
-epicsComplete: 44
+currentIG: IG-14
+currentEpic: SYS-116
+epicsComplete: 47
 epicsTotal: 162
-storiesComplete: 263
+storiesComplete: 277
 storiesTotal: 949
 lastUpdated: "2026-02-23"
 ---
@@ -122,9 +122,9 @@ lastUpdated: "2026-02-23"
 - [ ] SMF-110: Observability Bridge (4 stories)
 
 ### IG-13: COBOL Precompilers (NEW: open-mainframe-precompilers)
-- [ ] Scaffold crate
-- [ ] SYS-112: DB2 COBOL Precompiler (8 stories)
-- [ ] SYS-113: CICS COBOL Precompiler (6 stories)
+- [x] Scaffold crate
+- [x] SYS-112: DB2 COBOL Precompiler (8 stories)
+- [x] SYS-113: CICS COBOL Precompiler (6 stories)
 
 ### IG-14: CICS BMS & Extensions (EXTEND: open-mainframe-cics)
 - [ ] SYS-116: CICS Web Services & REST/JSON (7 stories)
