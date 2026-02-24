@@ -136,6 +136,17 @@ async fn list_datasets(
 
     let mut all_names = catalog.list(&query.dslevel);
 
+    // Include mounted datasets in listings
+    if let Ok(mount_table) = state.mount_table.read() {
+        let mounted = mount_table.list_mounted_datasets(&query.dslevel);
+        for dsn in mounted {
+            if !all_names.contains(&dsn) {
+                all_names.push(dsn);
+            }
+        }
+        all_names.sort();
+    }
+
     // Apply start filter for pagination.
     if let Some(ref start) = query.start {
         let start_upper = start.to_uppercase();
@@ -245,6 +256,64 @@ async fn list_members(
     let max_items: usize = max_items_raw
         .map(|n| if n == 0 { usize::MAX } else { n })
         .unwrap_or(usize::MAX);
+
+    // Check mount table first for mounted PDS datasets
+    if let Ok(mount_table) = state.mount_table.read() {
+        if let Some(members) = mount_table.list_pds_members(&dsn) {
+            let filtered: Vec<_> = members
+                .into_iter()
+                .filter(|m| {
+                    if let Some(ref pat) = member_query.pattern {
+                        let pat_upper = pat.to_uppercase();
+                        if pat_upper.contains('*') {
+                            let prefix = pat_upper.split('*').next().unwrap_or("");
+                            m.starts_with(prefix)
+                        } else {
+                            *m == pat_upper
+                        }
+                    } else {
+                        true
+                    }
+                })
+                .filter(|m| {
+                    if let Some(ref start) = member_query.start {
+                        *m > start.to_uppercase()
+                    } else {
+                        true
+                    }
+                })
+                .collect();
+
+            let total_rows = filtered.len();
+            let items: Vec<MemberListItem> = filtered
+                .into_iter()
+                .take(max_items)
+                .map(|name| MemberListItem {
+                    member: name,
+                    vers: None,
+                    modification: None,
+                    c4date: None,
+                    m4date: None,
+                    cnorc: None,
+                    inorc: None,
+                })
+                .collect();
+
+            let returned_rows = items.len();
+            let truncated = max_items_raw.is_some() && max_items_raw.unwrap() > 0 && total_rows > returned_rows;
+
+            let resp = MemberListResponse {
+                items,
+                returned_rows,
+                json_version: 1,
+            };
+
+            let status = if truncated { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK };
+            let total_rows_str = total_rows.to_string();
+
+            return Ok((status, [("x-ibm-response-rows", total_rows_str.as_str())], Json(resp)).into_response());
+        }
+    }
 
     let catalog = state
         .catalog
@@ -401,6 +470,24 @@ async fn read_dataset(
         .unwrap_or("text");
     let (ds_name, member) = parse_dsn(&dsn);
 
+    // Check mount table first for mounted datasets
+    if let Ok(mount_table) = state.mount_table.read() {
+        if let Some(mounted) = mount_table.resolve_dataset(ds_name, member) {
+            if mounted.host_path.exists() {
+                if mounted.host_path.is_dir() && member.is_none() {
+                    return Err(ZosmfErrorResponse::bad_request(
+                        "Cannot read PDS as sequential; use /member endpoint or specify member name",
+                    ));
+                }
+                let content = std::fs::read(&mounted.host_path).map_err(|e| {
+                    ZosmfErrorResponse::internal(format!("Failed to read mounted file: {}", e))
+                })?;
+                return build_content_response(&content, data_type, &headers);
+            }
+            // Mount exists but path doesn't — fall through to catalog
+        }
+    }
+
     let catalog = state
         .catalog
         .read()
@@ -529,6 +616,24 @@ async fn write_dataset(
                     },
                 });
             }
+        }
+    }
+
+    // Check mount table for mounted datasets before standard write
+    let (ds_name_check, member_check) = parse_dsn(&dsn);
+    if let Ok(mount_table) = state.mount_table.read() {
+        if let Some(mounted) = mount_table.resolve_dataset(ds_name_check, member_check) {
+            if mounted.read_only {
+                return Err(ZosmfErrorResponse::bad_request("Dataset is mounted read-only"));
+            }
+            if let Some(parent) = mounted.host_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let existed = mounted.host_path.exists();
+            std::fs::write(&mounted.host_path, &bytes).map_err(|e| {
+                ZosmfErrorResponse::internal(format!("Failed to write mounted file: {}", e))
+            })?;
+            return if existed { Ok(StatusCode::NO_CONTENT) } else { Ok(StatusCode::CREATED) };
         }
     }
 
@@ -919,6 +1024,14 @@ async fn execute_ams(
 
     let input = req.input.join("\n");
     let mut idcams = open_mainframe_dataset::Idcams::new(catalog.base_dir());
+
+    // Add mounted dataset names so LISTCAT includes them.
+    if let Ok(mount_table) = state.mount_table.read() {
+        let mounted = mount_table.list_mounted_datasets("*");
+        if !mounted.is_empty() {
+            idcams.add_extra_datasets(mounted);
+        }
+    }
 
     let result = idcams.execute(&input).map_err(|e| {
         ZosmfErrorResponse::internal(format!("IDCAMS execution failed: {}", e))

@@ -54,6 +54,11 @@ pub struct ExecutionConfig {
     pub work_dir: PathBuf,
     /// Sysout files directory.
     pub sysout_dir: PathBuf,
+    /// Dataset overrides: DSN → host path.
+    /// Used by the mount bridge to map specific dataset names to host filesystem paths.
+    /// For PDS mounts the path should be a directory; for sequential mounts a file.
+    /// Keys are uppercase DSN strings (e.g., "MOUNT.COBOL.SRC").
+    pub dataset_overrides: HashMap<String, PathBuf>,
 }
 
 impl Default for ExecutionConfig {
@@ -64,6 +69,7 @@ impl Default for ExecutionConfig {
             dataset_dir: current.join("datasets"),
             work_dir: current.join("work"),
             sysout_dir: current.join("sysout"),
+            dataset_overrides: HashMap::new(),
         }
     }
 }
@@ -535,6 +541,37 @@ impl JobExecutor {
         } else {
             (dsn, None)
         };
+
+        // Check dataset overrides (mount bridge) before standard resolution.
+        let dsn_upper = dsn_path.to_uppercase();
+        if let Some(override_path) = self.config.dataset_overrides.get(&dsn_upper) {
+            if let Some(member_name) = member {
+                // PDS member from override: look for file in host directory
+                let member_upper = member_name.to_uppercase();
+                // Try exact member name first
+                let member_path = override_path.join(&member_upper);
+                if member_path.exists() {
+                    return Ok(member_path);
+                }
+                // Try with common extensions (matching host filenames)
+                for ext in &["cbl", "jcl", "ctl", "prc", "cob", "cpy", "txt"] {
+                    let ext_path = override_path.join(format!("{}.{}", member_upper, ext));
+                    if ext_path.exists() {
+                        return Ok(ext_path);
+                    }
+                    // Also try lowercase extension with uppercase member
+                    let lower_path = override_path.join(format!("{}.{}", member_name.to_lowercase(), ext));
+                    if lower_path.exists() {
+                        return Ok(lower_path);
+                    }
+                }
+                // Default: use the exact member name in the override directory
+                return Ok(override_path.join(member_name));
+            } else {
+                // Sequential dataset or PDS base directory
+                return Ok(override_path.clone());
+            }
+        }
 
         let mut path = self.config.dataset_dir.clone();
         for part in dsn_path.split('.') {
@@ -1265,6 +1302,7 @@ mod tests {
             dataset_dir: temp_dir.clone(),
             work_dir: temp_dir.clone(),
             sysout_dir: temp_dir.clone(),
+            dataset_overrides: HashMap::new(),
         };
         let mut executor = JobExecutor::with_config(config);
 
@@ -1777,6 +1815,42 @@ mod tests {
         assert!(result.is_err());
         let msg = format!("{}", result.unwrap_err());
         assert!(msg.contains("NONEXISTENT"), "Error should mention program name: {}", msg);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Test dataset_overrides: mounted DSN resolves to host path instead of dataset_dir.
+    #[test]
+    fn test_resolve_dataset_with_override() {
+        let temp_dir = std::env::temp_dir().join("jcl_override_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        let mount_dir = temp_dir.join("mounted");
+        fs::create_dir_all(&mount_dir).unwrap();
+
+        // Create a member file in the "mounted" directory (uppercase name, like real mount bridge)
+        fs::write(mount_dir.join("PAYROLL.cbl"), "IDENTIFICATION DIVISION.\n").unwrap();
+
+        let mut overrides = HashMap::new();
+        overrides.insert("MOUNT.COBOL.SRC".to_string(), mount_dir.clone());
+
+        let config = ExecutionConfig {
+            dataset_dir: temp_dir.join("datasets"),
+            dataset_overrides: overrides,
+            ..Default::default()
+        };
+        let mut executor = JobExecutor::with_config(config);
+
+        // Base DSN override should return the mounted directory
+        let path = executor.resolve_dataset("MOUNT.COBOL.SRC", &None).unwrap();
+        assert_eq!(path, mount_dir);
+
+        // PDS member should resolve into the mounted directory with extension
+        let path = executor.resolve_dataset("MOUNT.COBOL.SRC(PAYROLL)", &None).unwrap();
+        assert_eq!(path, mount_dir.join("PAYROLL.cbl"));
+
+        // Non-overridden DSN should resolve normally
+        let path = executor.resolve_dataset("OTHER.DATA.SET", &None).unwrap();
+        assert_eq!(path, temp_dir.join("datasets").join("OTHER").join("DATA").join("SET"));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

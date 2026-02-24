@@ -23,6 +23,30 @@ pub struct ZosmfConfig {
     /// z/OSMF info endpoint values.
     #[serde(default)]
     pub zosmf_info: ZosmfInfoConfig,
+    /// Sysplex configuration (multi-system support).
+    #[serde(default)]
+    pub sysplex: Option<crate::sysplex::SysplexConfig>,
+    /// External filesystem mounts.
+    #[serde(default)]
+    pub mounts: Vec<MountConfig>,
+}
+
+/// Configuration for a single mount entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MountConfig {
+    /// Mount type: "dataset-pds", "dataset-seq", or "uss".
+    #[serde(rename = "type")]
+    pub mount_type: String,
+    /// Host filesystem path.
+    pub host_path: String,
+    /// Virtual path in OpenMainframe (DSN or USS path).
+    pub virtual_path: String,
+    /// Whether the mount is read-only.
+    #[serde(default)]
+    pub read_only: bool,
+    /// Glob pattern to filter files (e.g., "*.cbl").
+    #[serde(default)]
+    pub file_filter: Option<String>,
 }
 
 /// Server binding configuration.

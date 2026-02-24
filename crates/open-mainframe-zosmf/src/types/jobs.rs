@@ -186,4 +186,7 @@ pub struct JobListQuery {
     /// Include execution data (Y/N).
     #[serde(rename = "exec-data", default)]
     pub exec_data: Option<String>,
+    /// Filter by execution system name.
+    #[serde(rename = "exec-member", default)]
+    pub exec_member: Option<String>,
 }

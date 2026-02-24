@@ -161,9 +161,9 @@ fn job_to_response(job: &Job) -> JobResponse {
         phase_name: Some(job_state_to_phase_name(&job.state).to_string()),
         exec_started: None,
         exec_ended: None,
-        exec_member: None,
+        exec_member: job.system.clone(),
         exec_submitted: None,
-        exec_system: None,
+        exec_system: job.system.clone(),
         reason_not_running: None,
         step_data: None,
     }
@@ -217,7 +217,17 @@ async fn list_jobs(
                 .as_ref()
                 .map(|id| format_job_id(job.id) == id.to_uppercase())
                 .unwrap_or(true);
-            owner_match && prefix_match && status_match && jobid_match
+            let system_match = query
+                .exec_member
+                .as_ref()
+                .map(|sys| {
+                    job.system
+                        .as_ref()
+                        .map(|s| s.eq_ignore_ascii_case(sys))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(true);
+            owner_match && prefix_match && status_match && jobid_match && system_match
         })
         .take(max_jobs)
         .map(job_to_response)
@@ -252,6 +262,7 @@ async fn get_job_status(
 async fn submit_job(
     State(state): State<Arc<AppState>>,
     auth: AuthContext,
+    headers: axum::http::HeaderMap,
     body: Body,
 ) -> std::result::Result<(StatusCode, Json<JobResponse>), ZosmfErrorResponse> {
     let bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
@@ -270,12 +281,39 @@ async fn submit_job(
     let job_name = extract_job_name(&jcl).unwrap_or_else(|| "NONAME".to_string());
     let job_class = extract_class(&jcl).unwrap_or('A');
 
-    // Get the dataset base directory from the catalog for JCL execution.
-    let dataset_dir = {
-        let catalog = state
-            .catalog
-            .read()
-            .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
+    // Determine target system: check X-IBM-Target-System header, then /*ROUTE XEQ in JCL.
+    let target_system = headers
+        .get("X-IBM-Target-System")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_uppercase())
+        .or_else(|| extract_route_xeq(&jcl));
+
+    // Get the dataset base directory. If a target system is specified and has its own
+    // dataset_dir, use that; otherwise fall back to the catalog's base directory.
+    let dataset_dir = if let Some(ref sys_name) = target_system {
+        let sysplex = state.sysplex.read().map_err(|_| {
+            ZosmfErrorResponse::internal("Sysplex lock poisoned")
+        })?;
+        if let Some(sys) = sysplex.get_system(sys_name) {
+            if let Some(ref dir) = sys.dataset_dir {
+                let p = std::path::PathBuf::from(dir);
+                let _ = std::fs::create_dir_all(&p);
+                p
+            } else {
+                let catalog = state.catalog.read().map_err(|_| {
+                    ZosmfErrorResponse::internal("Catalog lock poisoned")
+                })?;
+                catalog.base_dir().to_path_buf()
+            }
+        } else {
+            return Err(ZosmfErrorResponse::not_found(format!(
+                "Target system '{}' not found in sysplex", sys_name
+            )));
+        }
+    } else {
+        let catalog = state.catalog.read().map_err(|_| {
+            ZosmfErrorResponse::internal("Catalog lock poisoned")
+        })?;
         catalog.base_dir().to_path_buf()
     };
 
@@ -286,9 +324,10 @@ async fn submit_job(
 
     let job_id = jes.submit(&job_name, job_class, 1, false);
 
-    // Set the job owner.
+    // Set the job owner and target system.
     if let Some(job) = jes.get_job_mut(job_id) {
         job.owner = auth.userid.clone();
+        job.system = target_system.clone();
     }
 
     // Write JCL to spool.
@@ -303,12 +342,19 @@ async fn submit_job(
         job.state = JobState::Running;
     }
 
-    // Configure the JCL executor to use the same dataset directory as the catalog.
+    // Configure the JCL executor with the resolved dataset directory.
+    // Include dataset overrides from the mount table so JCL jobs can access mounted datasets.
+    let dataset_overrides = state
+        .mount_table
+        .read()
+        .map(|mt| mt.dataset_overrides())
+        .unwrap_or_default();
     let exec_config = open_mainframe_jcl::ExecutionConfig {
         program_dir: dataset_dir.join("..").join("bin"),
         dataset_dir: dataset_dir.clone(),
         work_dir: std::env::temp_dir().join(format!("openmainframe-work-{}", job_id.0)),
         sysout_dir: std::env::temp_dir().join(format!("openmainframe-sysout-{}", job_id.0)),
+        dataset_overrides,
     };
 
     // Parse and execute the JCL.
@@ -658,6 +704,21 @@ fn extract_class(jcl: &str) -> Option<char> {
     None
 }
 
+/// Extract target system from JES2 JECL `/*ROUTE XEQ sysname` statement.
+fn extract_route_xeq(jcl: &str) -> Option<String> {
+    for line in jcl.lines() {
+        let trimmed = line.trim().to_uppercase();
+        if trimmed.starts_with("/*ROUTE") {
+            // Parse: /*ROUTE XEQ sysname
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 3 && parts[1] == "XEQ" {
+                return Some(parts[2].to_string());
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -747,5 +808,23 @@ mod tests {
         assert!(json.contains("\"subsystem\":\"JES2\""));
         assert!(json.contains("\"job-correlator\""));
         assert!(json.contains("\"phase-name\":\"Job is actively executing\""));
+    }
+
+    #[test]
+    fn test_extract_route_xeq() {
+        let jcl = "/*ROUTE XEQ SYSA\n//MYJOB JOB (ACCT),'TEST'\n//STEP1 EXEC PGM=IEFBR14";
+        assert_eq!(extract_route_xeq(jcl), Some("SYSA".to_string()));
+    }
+
+    #[test]
+    fn test_extract_route_xeq_missing() {
+        let jcl = "//MYJOB JOB (ACCT),'TEST'\n//STEP1 EXEC PGM=IEFBR14";
+        assert_eq!(extract_route_xeq(jcl), None);
+    }
+
+    #[test]
+    fn test_extract_route_xeq_case_insensitive() {
+        let jcl = "/*route xeq sysb\n//JOB1 JOB (A)";
+        assert_eq!(extract_route_xeq(jcl), Some("SYSB".to_string()));
     }
 }

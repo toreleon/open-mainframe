@@ -49,6 +49,8 @@ pub struct Idcams {
     return_code: u32,
     /// Return code of last executed command (LASTCC).
     last_cc: u32,
+    /// Extra dataset names to include in LISTCAT output (from mount bridge).
+    extra_datasets: Vec<String>,
 }
 
 impl Idcams {
@@ -59,7 +61,13 @@ impl Idcams {
             output: String::new(),
             return_code: 0,
             last_cc: 0,
+            extra_datasets: Vec::new(),
         }
+    }
+
+    /// Add extra dataset names to include in LISTCAT output (e.g., from mount bridge).
+    pub fn add_extra_datasets(&mut self, datasets: Vec<String>) {
+        self.extra_datasets.extend(datasets);
     }
 
     /// Execute IDCAMS commands from a string.
@@ -500,13 +508,40 @@ impl Idcams {
             self.base_dir.clone()
         };
 
+        let prefix = level.or(entry).unwrap_or("*");
+        let mut found_entries = false;
+
         if entry.is_some() && search_dir.exists() {
             // Single entry
             self.list_entry(&search_dir, entry.unwrap())?;
+            found_entries = true;
         } else if search_dir.exists() && search_dir.is_dir() {
             // List directory
-            self.list_directory(&search_dir, level.unwrap_or("*"))?;
-        } else {
+            self.list_directory(&search_dir, prefix)?;
+            found_entries = true;
+        }
+
+        // Also list extra datasets (from mount bridge) matching the level/prefix.
+        let prefix_upper = prefix.to_uppercase();
+        for dsn in &self.extra_datasets {
+            let dsn_upper = dsn.to_uppercase();
+            let matches = if prefix_upper == "*" {
+                true
+            } else {
+                let clean = prefix_upper.trim_end_matches(".*").trim_end_matches('*');
+                if clean.is_empty() {
+                    true
+                } else {
+                    dsn_upper == clean || dsn_upper.starts_with(&format!("{}.", clean))
+                }
+            };
+            if matches {
+                self.output.push_str(&format!("  {} (MOUNTED)\n", dsn_upper));
+                found_entries = true;
+            }
+        }
+
+        if !found_entries {
             self.output
                 .push_str("IDC3002E NO ENTRIES FOUND\n");
             self.last_cc = 4;
@@ -569,6 +604,7 @@ impl Idcams {
 
             self.output.push_str(&format!("  {}\n", name_str));
         }
+
         Ok(())
     }
 

@@ -13,6 +13,8 @@ use open_mainframe_cics::bms::BmsMapset;
 use open_mainframe_cics::terminal::TerminalManager;
 
 use crate::config::ZosmfConfig;
+use crate::mounts::MountTable;
+use crate::sysplex::SysplexManager;
 use crate::types::auth::AuthenticatedUser;
 
 /// A workflow instance tracked by the z/OSMF workflow service.
@@ -88,6 +90,10 @@ pub struct AppState {
     pub provisioning_instances: DashMap<String, ProvisionedInstance>,
     /// CICS terminal sessions: session key → session handle.
     pub cics_sessions: DashMap<String, CicsSessionHandle>,
+    /// Mount table for external filesystem mounts.
+    pub mount_table: RwLock<MountTable>,
+    /// Sysplex manager for multi-system support.
+    pub sysplex: RwLock<SysplexManager>,
 }
 
 /// Handle to a CICS terminal session.
@@ -120,6 +126,25 @@ pub struct TsoSessionHandle {
 impl AppState {
     /// Create a new AppState with default subsystem instances.
     pub fn new(config: ZosmfConfig) -> Self {
+        let sysplex = SysplexManager::from_config(&config);
+        // Build mount table from config mounts
+        let mut mount_table = MountTable::new();
+        for mc in &config.mounts {
+            let mt = match mc.mount_type.as_str() {
+                "dataset-pds" => crate::mounts::MountType::DatasetPds,
+                "dataset-seq" => crate::mounts::MountType::DatasetSeq,
+                "uss" => crate::mounts::MountType::Uss,
+                _ => continue,
+            };
+            mount_table.add_mount(
+                mt,
+                std::path::PathBuf::from(&mc.host_path),
+                mc.virtual_path.clone(),
+                mc.read_only,
+                mc.file_filter.clone(),
+            );
+        }
+
         Self {
             racf: RacfDatabase::new(),
             saf: SafRouter::new(),
@@ -145,6 +170,8 @@ impl AppState {
             provisioning_templates: DashMap::new(),
             provisioning_instances: DashMap::new(),
             cics_sessions: DashMap::new(),
+            mount_table: RwLock::new(mount_table),
+            sysplex: RwLock::new(sysplex),
         }
     }
 }

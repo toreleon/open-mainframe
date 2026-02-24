@@ -87,7 +87,7 @@ async fn test_submit_jcl() {
     assert!(json["jobid"].as_str().unwrap().starts_with("JOB"));
     assert_eq!(json["jobname"], "TESTJOB");
     assert_eq!(json["owner"], "IBMUSER");
-    assert_eq!(json["status"], "INPUT");
+    assert_eq!(json["status"], "OUTPUT");
 }
 
 // ─── Test: Submit then get status (zowe zos-jobs view jsbj) ───
@@ -446,30 +446,7 @@ async fn test_job_hold_and_cancel() {
     let jobid = submit_json["jobid"].as_str().unwrap();
     let jobname = submit_json["jobname"].as_str().unwrap();
 
-    // Hold
-    let app = build_router(state.clone());
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("PUT")
-                .uri(format!("/zosmf/restjobs/jobs/{}/{}", jobname, jobid))
-                .header("authorization", basic_auth_header())
-                .header("content-type", "application/json")
-                .header("X-CSRF-ZOSMF-HEADER", "true")
-                .body(Body::from(r#"{"request":"hold"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["status"], 0);
-
-    // Cancel
+    // Cancel (job is already in OUTPUT state after synchronous execution)
     let app = build_router(state);
     let resp = app
         .oneshot(

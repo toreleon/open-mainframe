@@ -12,6 +12,7 @@ use axum::{Json, Router};
 use serde::Serialize;
 
 use crate::state::AppState;
+use crate::sysplex::SystemInstance;
 use crate::types::auth::AuthContext;
 use crate::types::error::ZosmfErrorResponse;
 
@@ -49,21 +50,25 @@ struct TopologyListResponse {
     num_rows: usize,
 }
 
-/// Build a TopologySystem from current state.
-fn build_system_entry(state: &AppState) -> TopologySystem {
-    let statics = open_mainframe_parmlib::StaticSymbols::default();
+/// Convert a SystemInstance to a TopologySystem for API response.
+fn system_to_topology(sys: &SystemInstance, state: &AppState) -> TopologySystem {
     let hostname = &state.config.zosmf_info.hostname;
     let port = state.config.server.port;
+    let sysplex_name = state
+        .sysplex
+        .read()
+        .map(|s| s.name.clone())
+        .unwrap_or_else(|_| "LOCAL".to_string());
 
     TopologySystem {
-        system_nick_name: statics.sysname.clone(),
+        system_nick_name: sys.sysname.clone(),
         group_names: "SYSPLEX".to_string(),
         url: format!("https://{}:{}/zosmf", hostname, port),
-        sysplex: statics.sysplex.clone(),
-        zos_vr: "V2R5".to_string(),
-        jes_type: "JES2".to_string(),
-        sysname: statics.sysname.clone(),
-        status: "active".to_string(),
+        sysplex: sysplex_name,
+        zos_vr: sys.zos_vr.clone(),
+        jes_type: sys.jes_type.clone(),
+        sysname: sys.sysname.clone(),
+        status: sys.status.clone(),
     }
 }
 
@@ -72,11 +77,15 @@ async fn list_systems(
     State(state): State<Arc<AppState>>,
     _auth: AuthContext,
 ) -> Json<TopologyListResponse> {
-    let system = build_system_entry(&state);
-    Json(TopologyListResponse {
-        num_rows: 1,
-        items: vec![system],
-    })
+    let sysplex = state.sysplex.read().unwrap();
+    let items: Vec<TopologySystem> = sysplex
+        .list_systems()
+        .iter()
+        .map(|sys| system_to_topology(sys, &state))
+        .collect();
+    let num_rows = items.len();
+
+    Json(TopologyListResponse { items, num_rows })
 }
 
 /// GET /zosmf/resttopology/systems/:sysname — get details for a specific system.
@@ -85,10 +94,12 @@ async fn get_system(
     _auth: AuthContext,
     Path(sysname): Path<String>,
 ) -> std::result::Result<Json<TopologySystem>, ZosmfErrorResponse> {
-    let system = build_system_entry(&state);
+    let sysplex = state.sysplex.read().map_err(|_| {
+        ZosmfErrorResponse::internal("Sysplex lock poisoned")
+    })?;
 
-    if system.sysname.eq_ignore_ascii_case(&sysname) {
-        Ok(Json(system))
+    if let Some(sys) = sysplex.get_system(&sysname) {
+        Ok(Json(system_to_topology(sys, &state)))
     } else {
         Err(ZosmfErrorResponse::not_found(format!(
             "System '{}' not found in topology",

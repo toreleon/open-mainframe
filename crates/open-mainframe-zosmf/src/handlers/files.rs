@@ -81,7 +81,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/zosmf/restfiles/fs/{*path}", delete(delete_path))
         // Mounted filesystem routes
         .route("/zosmf/restfiles/mfs", get(list_filesystems))
-        .route("/zosmf/restfiles/mfs/{fsname}", put(mount_filesystem))
+        .route("/zosmf/restfiles/mfs/{*fsname}", put(mount_filesystem))
 }
 
 /// USS directory entry in list responses (matches real z/OSMF format).
@@ -133,7 +133,17 @@ fn compute_etag(content: &[u8]) -> String {
 }
 
 /// Resolve the USS path to the configured root.
+///
+/// Checks the mount table first for USS mounts, then falls back
+/// to the standard USS root directory resolution.
 fn resolve_uss_path(state: &AppState, uss_path: &str) -> PathBuf {
+    // Check mount table for USS mounts
+    if let Ok(mount_table) = state.mount_table.read() {
+        if let Some(mounted) = mount_table.resolve_uss(uss_path) {
+            return mounted.host_path;
+        }
+    }
+
     let root = PathBuf::from(&state.config.uss.root_directory);
     let cleaned = uss_path.trim_start_matches('/');
     root.join(cleaned)
@@ -714,38 +724,158 @@ async fn list_filesystems(
     State(state): State<Arc<AppState>>,
     _auth: AuthContext,
 ) -> Json<MfsListResponse> {
-    // Return the emulated root filesystem.
-    let root = MfsEntry {
+    let mut items = Vec::new();
+
+    // System root filesystem.
+    items.push(MfsEntry {
         name: "OMVS.ROOT".to_string(),
         mount_point: "/".to_string(),
         fstname: "ZFS".to_string(),
         status: "active".to_string(),
         mode: vec!["rdwr".to_string()],
-    };
+    });
 
-    let uss_entry = MfsEntry {
+    items.push(MfsEntry {
         name: "OMVS.USR".to_string(),
         mount_point: state.config.uss.root_directory.clone(),
         fstname: "ZFS".to_string(),
         status: "active".to_string(),
         mode: vec!["rdwr".to_string()],
-    };
+    });
 
+    // Include external mounts from the mount table.
+    if let Ok(mount_table) = state.mount_table.read() {
+        for entry in mount_table.list() {
+            let (name, mount_point, fstname) = match entry.mount_type {
+                crate::mounts::MountType::DatasetPds => {
+                    (format!("EXT.{}", entry.virtual_path), entry.virtual_path.clone(), "EXT".to_string())
+                }
+                crate::mounts::MountType::DatasetSeq => {
+                    (format!("EXT.{}", entry.virtual_path), entry.virtual_path.clone(), "EXT".to_string())
+                }
+                crate::mounts::MountType::Uss => {
+                    (format!("EXT.USS.{}", entry.mount_id), entry.virtual_path.clone(), "EXTUSS".to_string())
+                }
+            };
+            let mode_str = if entry.read_only { "rdonly" } else { "rdwr" };
+            items.push(MfsEntry {
+                name,
+                mount_point,
+                fstname,
+                status: "active".to_string(),
+                mode: vec![mode_str.to_string()],
+            });
+        }
+    }
+
+    let count = items.len();
     Json(MfsListResponse {
-        returned_rows: 2,
-        items: vec![root, uss_entry],
+        returned_rows: count,
+        items,
     })
 }
 
-/// PUT /zosmf/restfiles/mfs/:fsname — mount or unmount a filesystem (stub).
+/// JSON body for mount requests.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct MountRequest {
+    /// Action: "mount" or "unmount".
+    #[serde(default = "default_mount_action")]
+    action: String,
+    /// Mount type: "dataset-pds", "dataset-seq", or "uss".
+    #[serde(default, rename = "mount-type")]
+    mount_type: Option<String>,
+    /// Mount point (virtual path for USS mounts).
+    #[serde(default, rename = "mount-point")]
+    mount_point: Option<String>,
+    /// Host path to mount from.
+    #[serde(default, rename = "host-path")]
+    host_path: Option<String>,
+    /// Read-only mount.
+    #[serde(default)]
+    read_only: bool,
+    /// Glob pattern for which host files to expose (e.g. "*.cbl").
+    #[serde(default, rename = "file-filter")]
+    file_filter: Option<String>,
+}
+
+fn default_mount_action() -> String {
+    "mount".to_string()
+}
+
+/// PUT /zosmf/restfiles/mfs/:fsname — mount or unmount a filesystem.
 async fn mount_filesystem(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     _auth: AuthContext,
     Path(fsname): Path<String>,
-) -> StatusCode {
-    // Mount/unmount is a no-op in our emulation.
-    let _ = fsname;
-    StatusCode::NO_CONTENT
+    body: Body,
+) -> std::result::Result<StatusCode, ZosmfErrorResponse> {
+    let bytes = axum::body::to_bytes(body, 1024 * 1024)
+        .await
+        .map_err(|_| ZosmfErrorResponse::bad_request("Failed to read request body"))?;
+
+    // If body is empty, treat as a no-op for backward compatibility
+    if bytes.is_empty() {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    let req: MountRequest = serde_json::from_slice(&bytes).map_err(|e| {
+        ZosmfErrorResponse::bad_request(format!("Invalid JSON: {}", e))
+    })?;
+
+    match req.action.to_lowercase().as_str() {
+        "mount" => {
+            let host_path = req.host_path.ok_or_else(|| {
+                ZosmfErrorResponse::bad_request("Missing 'host-path' for mount")
+            })?;
+            let mount_type_str = req.mount_type.as_deref().unwrap_or("uss");
+            let mount_point = req.mount_point.unwrap_or_else(|| fsname.clone());
+
+            let mt = match mount_type_str {
+                "dataset-pds" => crate::mounts::MountType::DatasetPds,
+                "dataset-seq" => crate::mounts::MountType::DatasetSeq,
+                "uss" => crate::mounts::MountType::Uss,
+                other => return Err(ZosmfErrorResponse::bad_request(format!("Unknown mount type: {}", other))),
+            };
+
+            let mut mount_table = state.mount_table.write().map_err(|_| {
+                ZosmfErrorResponse::internal("Mount table lock poisoned")
+            })?;
+            mount_table.add_mount(
+                mt,
+                std::path::PathBuf::from(&host_path),
+                mount_point,
+                req.read_only,
+                req.file_filter,
+            );
+
+            Ok(StatusCode::NO_CONTENT)
+        }
+        "unmount" => {
+            let mut mount_table = state.mount_table.write().map_err(|_| {
+                ZosmfErrorResponse::internal("Mount table lock poisoned")
+            })?;
+            // Try to unmount by mount ID first
+            let removed = mount_table.remove_mount(&fsname);
+            if !removed {
+                // Try matching by virtual path
+                let mounts: Vec<_> = mount_table.list().iter()
+                    .filter(|m| m.virtual_path == fsname)
+                    .map(|m| m.mount_id.clone())
+                    .collect();
+                if mounts.is_empty() {
+                    // Try extracting mount ID from EXT.USS.MNTxxxxx format
+                    let maybe_id = fsname.rsplit('.').next().unwrap_or(&fsname);
+                    mount_table.remove_mount(maybe_id);
+                }
+                for mid in mounts {
+                    mount_table.remove_mount(&mid);
+                }
+            }
+            Ok(StatusCode::NO_CONTENT)
+        }
+        other => Err(ZosmfErrorResponse::bad_request(format!("Unknown mount action: {}", other))),
+    }
 }
 
 // ─── Query-param-based route handlers (Zowe CLI sends ?path=/) ───

@@ -227,6 +227,8 @@ pub struct Job {
     pub max_rc: u32,
     /// Spool dataset keys for SYSOUT owned by this job.
     pub spool_keys: Vec<u64>,
+    /// Target system name (from `/*ROUTE XEQ` or API). None = local system.
+    pub system: Option<String>,
 }
 
 impl Job {
@@ -258,6 +260,7 @@ impl Job {
             owner: String::new(),
             max_rc: 0,
             spool_keys: Vec::new(),
+            system: None,
         }
     }
 
@@ -294,6 +297,7 @@ impl Job {
             owner: String::new(),
             max_rc: 0,
             spool_keys: Vec::new(),
+            system: None,
         }
     }
 

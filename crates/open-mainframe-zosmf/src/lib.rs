@@ -34,7 +34,9 @@ pub mod eureka;
 pub mod handlers;
 pub mod jwt;
 pub mod middleware;
+pub mod mounts;
 pub mod state;
+pub mod sysplex;
 pub mod tn3270;
 pub mod types;
 
