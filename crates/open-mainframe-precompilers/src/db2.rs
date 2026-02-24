@@ -4,8 +4,20 @@
 //!
 //! Transforms `EXEC SQL ... END-EXEC` blocks into `CALL 'DSNHLI'` statements,
 //! maps host variables, generates SQLCA, and produces a DBRM for DB2 BIND.
+//!
+//! Uses the scanner from `open-mainframe-db2::preprocess` for block extraction,
+//! then applies precompiler-specific transformation and DBRM generation.
 
 use std::collections::HashMap;
+
+// Re-export upstream preprocessing API for consumers who need the full DB2 preprocessor.
+pub use open_mainframe_db2::preprocess::{
+    SqlPreprocessor, SqlScanner, SqlBlock,
+    SqlStatementType as UpstreamSqlStatementType,
+    HostVariable as UpstreamHostVariable,
+    HostVariableUsage, WheneverState, WheneverAction,
+    PreprocessResult as UpstreamPreprocessResult,
+};
 
 // ─────────────────────── Errors ───────────────────────
 
@@ -23,6 +35,10 @@ pub enum Db2PrecompileError {
     /// Host variable not found.
     #[error("host variable not found: {name}")]
     HostVariableNotFound { name: String },
+
+    /// Upstream DB2 error.
+    #[error("DB2 scanner error: {0}")]
+    Db2Error(#[from] open_mainframe_db2::Db2Error),
 }
 
 // ─────────────────────── Host Variables ───────────────────────
@@ -144,76 +160,23 @@ pub enum SqlStatementType {
 }
 
 /// Parse all EXEC SQL blocks from COBOL source.
+///
+/// Delegates to the upstream `SqlScanner` from `open-mainframe-db2` for block
+/// extraction, then classifies each block with precompiler-specific logic.
 pub fn parse_exec_sql(source: &str) -> Result<Vec<ExecSqlBlock>, Db2PrecompileError> {
+    let mut scanner = SqlScanner::new();
+    let raw_blocks = scanner.scan(source)?;
+
     let mut blocks = Vec::new();
-    let lines: Vec<&str> = source.lines().collect();
-    let mut i = 0;
-
-    while i < lines.len() {
-        let trimmed = lines[i].trim().to_uppercase();
-        if trimmed.contains("EXEC SQL") && !trimmed.starts_with('*') {
-            let start_line = i + 1; // 1-based.
-            let mut sql_parts = Vec::new();
-
-            // Extract the part after EXEC SQL on the same line.
-            if let Some(pos) = trimmed.find("EXEC SQL") {
-                let after = &lines[i].trim()[pos + 8..].trim().to_string();
-                if let Some(end_pos) = after.to_uppercase().find("END-EXEC") {
-                    sql_parts.push(after[..end_pos].trim().to_string());
-                    let sql_text = sql_parts.join(" ").trim().to_string();
-                    let (stmt_type, host_vars, indicators) = classify_sql(&sql_text);
-                    blocks.push(ExecSqlBlock {
-                        line: start_line,
-                        sql_text,
-                        stmt_type,
-                        host_variables: host_vars,
-                        indicators,
-                    });
-                    i += 1;
-                    continue;
-                }
-                if !after.is_empty() {
-                    sql_parts.push(after.clone());
-                }
-            }
-
-            // Multi-line: scan until END-EXEC.
-            i += 1;
-            let mut found_end = false;
-            while i < lines.len() {
-                let line_trimmed = lines[i].trim();
-                if line_trimmed.to_uppercase().contains("END-EXEC") {
-                    if let Some(pos) = line_trimmed.to_uppercase().find("END-EXEC") {
-                        let before = &line_trimmed[..pos];
-                        if !before.trim().is_empty() {
-                            sql_parts.push(before.trim().to_string());
-                        }
-                    }
-                    found_end = true;
-                    break;
-                }
-                // Skip comment lines (column 7 = *).
-                if !line_trimmed.starts_with('*') {
-                    sql_parts.push(line_trimmed.to_string());
-                }
-                i += 1;
-            }
-
-            if !found_end {
-                return Err(Db2PrecompileError::UnterminatedExecSql { line: start_line });
-            }
-
-            let sql_text = sql_parts.join(" ").trim().to_string();
-            let (stmt_type, host_vars, indicators) = classify_sql(&sql_text);
-            blocks.push(ExecSqlBlock {
-                line: start_line,
-                sql_text,
-                stmt_type,
-                host_variables: host_vars,
-                indicators,
-            });
-        }
-        i += 1;
+    for raw in &raw_blocks {
+        let (stmt_type, host_vars, indicators) = classify_sql(&raw.sql);
+        blocks.push(ExecSqlBlock {
+            line: raw.start_line,
+            sql_text: raw.sql.clone(),
+            stmt_type,
+            host_variables: host_vars,
+            indicators,
+        });
     }
 
     Ok(blocks)
@@ -655,6 +618,9 @@ pub fn precompile_db2(
 }
 
 // ─────────────────────── Tests ───────────────────────
+// NOTE: The upstream SqlScanner enforces COBOL column layout (cols 1-6 = seq,
+// col 7 = indicator, cols 8-72 = code). Test data must use proper COBOL
+// formatting with a 7-character prefix and lines within 72 columns.
 
 #[cfg(test)]
 mod tests {
@@ -664,7 +630,12 @@ mod tests {
 
     #[test]
     fn test_parse_single_line_exec_sql() {
-        let source = "       EXEC SQL SELECT ENAME INTO :WS-NAME FROM EMP WHERE EMPNO = :WS-ID END-EXEC";
+        let source = concat!(
+            "       EXEC SQL\n",
+            "         SELECT ENAME INTO :WS-NAME\n",
+            "         FROM EMP WHERE EMPNO = :WS-ID\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_sql(source).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].stmt_type, SqlStatementType::Select);
@@ -674,13 +645,12 @@ mod tests {
 
     #[test]
     fn test_parse_multi_line_exec_sql() {
-        let source = "\
-       EXEC SQL
+        let source = r#"       EXEC SQL
            SELECT ENAME, SALARY
            INTO :WS-NAME, :WS-SALARY
            FROM EMP
            WHERE EMPNO = :WS-ID
-       END-EXEC";
+       END-EXEC."#;
         let blocks = parse_exec_sql(source).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].host_variables.len(), 3);
@@ -688,11 +658,15 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_blocks() {
-        let source = "\
-       EXEC SQL INCLUDE SQLCA END-EXEC
+        let source = r#"       EXEC SQL INCLUDE SQLCA END-EXEC.
        MOVE 100 TO WS-ID.
-       EXEC SQL SELECT ENAME INTO :WS-NAME FROM EMP WHERE EMPNO = :WS-ID END-EXEC
-       EXEC SQL INSERT INTO LOG VALUES(:WS-MSG) END-EXEC";
+       EXEC SQL
+         SELECT ENAME INTO :WS-NAME
+         FROM EMP WHERE EMPNO = :WS-ID
+       END-EXEC.
+       EXEC SQL
+         INSERT INTO LOG VALUES(:WS-MSG)
+       END-EXEC."#;
         let blocks = parse_exec_sql(source).unwrap();
         assert_eq!(blocks.len(), 3);
         assert_eq!(blocks[0].stmt_type, SqlStatementType::IncludeSqlca);
@@ -702,8 +676,13 @@ mod tests {
 
     #[test]
     fn test_parse_indicator_variable() {
-        let source =
-            "       EXEC SQL SELECT ENAME INTO :WS-NAME:WS-NAME-IND FROM EMP END-EXEC";
+        let source = concat!(
+            "       EXEC SQL\n",
+            "         SELECT ENAME\n",
+            "         INTO :WS-NAME:WS-NAME-IND\n",
+            "         FROM EMP\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_sql(source).unwrap();
         assert_eq!(blocks[0].indicators.len(), 1);
         assert_eq!(blocks[0].indicators[0].0, "WS-NAME");
@@ -744,8 +723,12 @@ mod tests {
 
     #[test]
     fn test_transform_select() {
-        let source =
-            "       EXEC SQL SELECT ENAME INTO :WS-NAME FROM EMP WHERE EMPNO = :WS-ID END-EXEC";
+        let source = concat!(
+            "       EXEC SQL\n",
+            "         SELECT ENAME INTO :WS-NAME\n",
+            "         FROM EMP WHERE EMPNO = :WS-ID\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_sql(source).unwrap();
         let calls = transform_sql_blocks(&blocks);
         assert_eq!(calls.len(), 1);
@@ -756,11 +739,15 @@ mod tests {
 
     #[test]
     fn test_transform_cursor_operations() {
-        let source = "\
-       EXEC SQL DECLARE C1 CURSOR FOR SELECT ENAME FROM EMP END-EXEC
-       EXEC SQL OPEN C1 END-EXEC
-       EXEC SQL FETCH C1 INTO :WS-NAME END-EXEC
-       EXEC SQL CLOSE C1 END-EXEC";
+        let source = r#"       EXEC SQL
+         DECLARE C1 CURSOR FOR
+         SELECT ENAME FROM EMP
+       END-EXEC.
+       EXEC SQL OPEN C1 END-EXEC.
+       EXEC SQL
+         FETCH C1 INTO :WS-NAME
+       END-EXEC.
+       EXEC SQL CLOSE C1 END-EXEC."#;
         let blocks = parse_exec_sql(source).unwrap();
         assert_eq!(blocks[0].stmt_type, SqlStatementType::DeclareCursor("C1".to_string()));
         assert_eq!(blocks[1].stmt_type, SqlStatementType::Open("C1".to_string()));
@@ -778,7 +765,11 @@ mod tests {
 
     #[test]
     fn test_dynamic_sql_prepare() {
-        let source = "       EXEC SQL PREPARE STMT1 FROM :WS-SQL-TEXT END-EXEC";
+        let source = concat!(
+            "       EXEC SQL\n",
+            "         PREPARE STMT1 FROM :WS-SQL-TEXT\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_sql(source).unwrap();
         assert_eq!(
             blocks[0].stmt_type,
@@ -788,8 +779,12 @@ mod tests {
 
     #[test]
     fn test_dynamic_sql_execute() {
-        let source =
-            "       EXEC SQL EXECUTE STMT1 USING :WS-PARAM1, :WS-PARAM2 END-EXEC";
+        let source = concat!(
+            "       EXEC SQL\n",
+            "         EXECUTE STMT1\n",
+            "         USING :WS-PARAM1, :WS-PARAM2\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_sql(source).unwrap();
         assert_eq!(
             blocks[0].stmt_type,
@@ -812,7 +807,11 @@ mod tests {
 
     #[test]
     fn test_whenever_sqlerror() {
-        let source = "       EXEC SQL WHENEVER SQLERROR GO TO ERR-HANDLER END-EXEC";
+        let source = concat!(
+            "       EXEC SQL\n",
+            "         WHENEVER SQLERROR GO TO ERR-HANDLER\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_sql(source).unwrap();
         assert_eq!(
             blocks[0].stmt_type,
@@ -831,12 +830,21 @@ mod tests {
 
     #[test]
     fn test_dbrm_generation() {
-        let source = "\
-       EXEC SQL SELECT ENAME INTO :WS-NAME FROM EMP WHERE EMPNO = :WS-ID END-EXEC
-       EXEC SQL INSERT INTO LOG (MSG) VALUES (:WS-MSG) END-EXEC
-       EXEC SQL UPDATE EMP SET SALARY = :WS-SAL WHERE EMPNO = :WS-ID END-EXEC
-       EXEC SQL DELETE FROM TEMP WHERE ID = :WS-TMP END-EXEC
-       EXEC SQL COMMIT END-EXEC";
+        let source = r#"       EXEC SQL
+         SELECT ENAME INTO :WS-NAME
+         FROM EMP WHERE EMPNO = :WS-ID
+       END-EXEC.
+       EXEC SQL
+         INSERT INTO LOG (MSG) VALUES (:WS-MSG)
+       END-EXEC.
+       EXEC SQL
+         UPDATE EMP SET SALARY = :WS-SAL
+         WHERE EMPNO = :WS-ID
+       END-EXEC.
+       EXEC SQL
+         DELETE FROM TEMP WHERE ID = :WS-TMP
+       END-EXEC.
+       EXEC SQL COMMIT END-EXEC."#;
 
         let blocks = parse_exec_sql(source).unwrap();
         let mut hv_map = HashMap::new();
@@ -881,15 +889,16 @@ mod tests {
 
     #[test]
     fn test_line_number_tracking() {
-        let source = "\
-       IDENTIFICATION DIVISION.
+        let source = r#"       IDENTIFICATION DIVISION.
        PROGRAM-ID. TEST.
        DATA DIVISION.
        WORKING-STORAGE SECTION.
-       EXEC SQL INCLUDE SQLCA END-EXEC
+       EXEC SQL INCLUDE SQLCA END-EXEC.
        PROCEDURE DIVISION.
-       EXEC SQL SELECT X INTO :WS-X FROM T END-EXEC
-       STOP RUN.";
+       EXEC SQL
+         SELECT X INTO :WS-X FROM T
+       END-EXEC.
+       STOP RUN."#;
 
         let blocks = parse_exec_sql(source).unwrap();
         assert_eq!(blocks[0].line, 5); // INCLUDE SQLCA
@@ -904,12 +913,11 @@ mod tests {
 
     #[test]
     fn test_full_precompilation() {
-        let source = "\
-       IDENTIFICATION DIVISION.
+        let source = r#"       IDENTIFICATION DIVISION.
        PROGRAM-ID. EMPRPT.
        DATA DIVISION.
        WORKING-STORAGE SECTION.
-       EXEC SQL INCLUDE SQLCA END-EXEC
+       EXEC SQL INCLUDE SQLCA END-EXEC.
        01  WS-NAME    PIC X(30).
        01  WS-ID      PIC 9(6).
        PROCEDURE DIVISION.
@@ -917,9 +925,9 @@ mod tests {
            SELECT ENAME INTO :WS-NAME
            FROM EMP
            WHERE EMPNO = :WS-ID
-       END-EXEC
+       END-EXEC.
        DISPLAY WS-NAME.
-       STOP RUN.";
+       STOP RUN."#;
 
         let mut hv_map = HashMap::new();
         hv_map.insert(

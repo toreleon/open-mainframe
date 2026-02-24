@@ -10,3 +10,5 @@ description = "z/OS COBOL Precompilers — DB2 and CICS source-to-source transfo
 [dependencies]
 thiserror.workspace = true
 miette.workspace = true
+open-mainframe-db2 = { path = "../open-mainframe-db2" }
+open-mainframe-cics = { path = "../open-mainframe-cics" }

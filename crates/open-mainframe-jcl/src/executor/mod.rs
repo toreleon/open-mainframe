@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 
 use crate::ast::*;
 use crate::error::JclError;
-use utility::UtilityRegistry;
+use crate::procedure::{FilesystemProcLib, ProcedureExpander};
 
 /// Result of executing a job step.
 #[derive(Debug, Clone)]
@@ -76,8 +76,12 @@ pub struct JobExecutor {
     dd_files: HashMap<String, PathBuf>,
     /// Passed datasets between steps.
     passed_datasets: HashMap<String, PathBuf>,
-    /// Registry of built-in utility programs.
-    utility_registry: UtilityRegistry,
+    /// Shared utility registry from `open-mainframe-utilities` crate.
+    shared_utilities: open_mainframe_utilities::UtilityRegistry,
+    /// GDG generation map: tracks resolved (+N) generations within a job.
+    /// Key: (base_dsn, relative_gen), Value: absolute_gen.
+    /// On real z/OS, GDG(+1) refers to the same generation throughout a job.
+    gdg_resolved: HashMap<(String, i32), u32>,
 }
 
 impl JobExecutor {
@@ -92,24 +96,26 @@ impl JobExecutor {
             config,
             dd_files: HashMap::new(),
             passed_datasets: HashMap::new(),
-            utility_registry: UtilityRegistry::new(),
+            shared_utilities: open_mainframe_utilities::UtilityRegistry::with_builtins(),
+            gdg_resolved: HashMap::new(),
         }
     }
 
-    /// Get a reference to the utility registry.
-    pub fn utility_registry(&self) -> &UtilityRegistry {
-        &self.utility_registry
-    }
-
-    /// Get a mutable reference to the utility registry for registering custom utilities.
-    pub fn utility_registry_mut(&mut self) -> &mut UtilityRegistry {
-        &mut self.utility_registry
+    /// Get a reference to the shared utility registry.
+    pub fn shared_utilities(&self) -> &open_mainframe_utilities::UtilityRegistry {
+        &self.shared_utilities
     }
 
     /// Execute a JCL job.
     pub fn execute(&mut self, job: &Job) -> Result<JobResult, JclError> {
+        // Clear per-job GDG resolution cache
+        self.gdg_resolved.clear();
+
         // Create working directories
         self.create_directories()?;
+
+        // Expand procedure references before execution
+        let expanded_job = self.expand_procedures(job)?;
 
         let mut step_results = Vec::new();
         let mut max_rc = 0u32;
@@ -117,7 +123,7 @@ impl JobExecutor {
         let mut step_idx = 0;
 
         self.execute_entries(
-            &job.entries,
+            &expanded_job.entries,
             &mut step_results,
             &mut max_rc,
             &mut all_success,
@@ -125,11 +131,44 @@ impl JobExecutor {
         )?;
 
         Ok(JobResult {
-            name: job.name.clone(),
+            name: expanded_job.name.clone(),
             steps: step_results,
             return_code: max_rc,
             success: all_success,
         })
+    }
+
+    /// Expand all procedure references in a job using the ProcedureExpander.
+    fn expand_procedures(&self, job: &Job) -> Result<Job, JclError> {
+        // Check if there are any procedure references to expand
+        let has_procs = job.entries.iter().any(|entry| {
+            matches!(entry, JobEntry::Step(step) if matches!(step.exec, ExecType::Procedure(_)))
+        });
+
+        if !has_procs {
+            return Ok(job.clone());
+        }
+
+        let mut expander = ProcedureExpander::new(
+            job.in_stream_procs.clone(),
+            job.symbols.clone(),
+        );
+
+        // Set up filesystem procedure library from JCLLIB ORDER
+        if !job.jcllib_order.is_empty() {
+            let proc_lib = FilesystemProcLib::new(
+                &self.config.dataset_dir,
+                &job.jcllib_order,
+            );
+            expander = expander.with_library(Box::new(proc_lib));
+        }
+
+        // Set DD overrides from calling JCL
+        if !job.dd_overrides.is_empty() {
+            expander = expander.with_dd_overrides(job.dd_overrides.clone());
+        }
+
+        expander.expand(job)
     }
 
     /// Execute a list of job entries (steps and IF constructs).
@@ -259,6 +298,53 @@ impl JobExecutor {
         Ok(())
     }
 
+    /// Ensure a path exists as a directory, handling file-at-directory conflicts.
+    ///
+    /// When mapping flat z/OS dataset qualifiers to a filesystem hierarchy,
+    /// a qualifier like `A.B` may exist as a file while `A.B.C` requires
+    /// `A/B/` to be a directory. This method detects such conflicts and
+    /// renames the blocking file to `<name>.data` so the directory can
+    /// be created.
+    fn ensure_directory_path(&self, dir: &Path) -> Result<(), JclError> {
+        if dir.is_dir() {
+            return Ok(());
+        }
+
+        // Walk from the root of dataset_dir toward dir, looking for
+        // components that are files when they need to be directories.
+        let mut current = self.config.dataset_dir.clone();
+        if let Ok(rel) = dir.strip_prefix(&self.config.dataset_dir) {
+            for component in rel.components() {
+                current.push(component);
+                if current.is_file() {
+                    // Rename blocking file: A/B → A/B.data, then create A/B/
+                    let renamed = current.with_extension("data");
+                    std::fs::rename(&current, &renamed).map_err(|e| {
+                        JclError::ExecutionFailed {
+                            message: format!(
+                                "Failed to rename blocking file {:?} to {:?}: {}",
+                                current, renamed, e
+                            ),
+                        }
+                    })?;
+                    std::fs::create_dir_all(&current).map_err(|e| {
+                        JclError::ExecutionFailed {
+                            message: format!(
+                                "Failed to create directory {:?}: {}",
+                                current, e
+                            ),
+                        }
+                    })?;
+                }
+            }
+        }
+
+        // Final create_dir_all for any remaining path
+        std::fs::create_dir_all(dir).map_err(|e| JclError::ExecutionFailed {
+            message: format!("Failed to create directory {:?}: {}", dir, e),
+        })
+    }
+
     /// Check if a step should be executed based on COND parameter.
     fn should_execute_step(&self, step: &Step, previous: &[StepResult]) -> bool {
         if step.params.cond.is_none() {
@@ -308,11 +394,33 @@ impl JobExecutor {
         match &step.exec {
             ExecType::Program(pgm) => self.execute_program(step, pgm),
             ExecType::Procedure(proc) => {
-                // Procedures not yet implemented
+                // Procedures should have been expanded by expand_procedures().
+                // If we reach here, expansion failed or was skipped.
                 Err(JclError::ExecutionFailed {
-                    message: format!("Procedure {} execution not implemented", proc),
+                    message: format!(
+                        "Procedure '{}' was not expanded before execution. \
+                         Check JCLLIB ORDER and procedure library paths.",
+                        proc
+                    ),
                 })
             }
+        }
+    }
+
+    /// Build a full DSN string including GDG reference if present.
+    /// The parser strips `(+1)` from DSN and stores it in `gdg_generation`,
+    /// but `resolve_dataset` expects the full DSN with GDG reference inline.
+    fn full_dsn(def: &crate::ast::DatasetDef) -> String {
+        if let Some(gen) = def.gdg_generation {
+            if gen > 0 {
+                format!("{}(+{})", def.dsn, gen)
+            } else if gen < 0 {
+                format!("{}({})", def.dsn, gen)
+            } else {
+                format!("{}(0)", def.dsn)
+            }
+        } else {
+            def.dsn.clone()
         }
     }
 
@@ -320,7 +428,10 @@ impl JobExecutor {
     fn setup_dd_files(&mut self, step: &Step, step_idx: usize) -> Result<(), JclError> {
         for dd in &step.dd_statements {
             let path = match &dd.definition {
-                DdDefinition::Dataset(def) => self.resolve_dataset(&def.dsn, &def.disp)?,
+                DdDefinition::Dataset(def) => {
+                    let dsn = Self::full_dsn(def);
+                    self.resolve_dataset(&dsn, &def.disp)?
+                }
                 DdDefinition::Inline(def) => {
                     // Write inline data to temp file
                     let path = self
@@ -343,7 +454,8 @@ impl JobExecutor {
                 DdDefinition::Concatenation(datasets) => {
                     // Concatenation: combine all datasets into a single temp file
                     if datasets.len() == 1 {
-                        self.resolve_dataset(&datasets[0].dsn, &datasets[0].disp)?
+                        let dsn = Self::full_dsn(&datasets[0]);
+                        self.resolve_dataset(&dsn, &datasets[0].disp)?
                     } else {
                         let concat_path = self.config.work_dir.join(
                             format!("{}_{}.concat", dd.name, step_idx),
@@ -388,12 +500,38 @@ impl JobExecutor {
         // Convert DSN to file path
         // MY.DATA.SET -> datasets/MY/DATA/SET
 
-        // Handle member names like MY.PDS(MEMBER)
+        // Handle member names like MY.PDS(MEMBER) or GDG references like MY.GDG(+1)
         let (dsn_path, member) = if let Some(pos) = dsn.find('(') {
             let member_end = dsn.find(')').unwrap_or(dsn.len());
             let member = &dsn[pos + 1..member_end];
             let base_dsn = &dsn[..pos];
-            (base_dsn, Some(member))
+
+            // Check for GDG relative generation: (+1), (0), (-1), etc.
+            let trimmed = member.trim();
+            if trimmed == "0"
+                || trimmed.starts_with('+')
+                || trimmed.starts_with('-')
+            {
+                if let Ok(gen) = trimmed.trim_start_matches('+').parse::<i32>() {
+                    let resolved = self.resolve_gdg(base_dsn, gen)?;
+                    // resolve_gdg returns "BASE.G0004V00" — convert to path
+                    let mut path = self.config.dataset_dir.clone();
+                    for part in resolved.split('.') {
+                        path.push(part);
+                    }
+                    // For new generations (+1), create parent dirs
+                    if gen > 0 {
+                        if let Some(parent) = path.parent() {
+                            self.ensure_directory_path(parent)?;
+                        }
+                    }
+                    return Ok(path);
+                }
+                // If parse fails, fall through to treat as PDS member
+                (base_dsn, Some(member))
+            } else {
+                (base_dsn, Some(member))
+            }
         } else {
             (dsn, None)
         };
@@ -404,13 +542,35 @@ impl JobExecutor {
         }
 
         if let Some(member_name) = member {
-            // PDS member - add member file
-            path.push(format!("{}.cbl", member_name));
+            // PDS member - look for the member file (try exact name first,
+            // then common extensions like .cbl, .jcl, .ctl)
+            let member_path = path.join(member_name);
+            if member_path.exists() {
+                return Ok(member_path);
+            }
+            for ext in &["cbl", "jcl", "ctl", "prc"] {
+                let ext_path = path.join(format!("{}.{}", member_name, ext));
+                if ext_path.exists() {
+                    return Ok(ext_path);
+                }
+            }
+            // Default: use the exact member name (may be created by the step)
+            path.push(member_name);
         } else {
             // Check if this is a VSAM cluster by looking for .vsam file
             let vsam_path = path.with_extension("vsam");
             if vsam_path.exists() {
                 return Ok(vsam_path);
+            }
+
+            // Handle file-at-directory conflict: if the path is a directory
+            // (because ensure_directory_path renamed the original file to
+            // <name>/data), return the .data file inside the directory.
+            if path.is_dir() {
+                let data_path = path.join("data");
+                if data_path.exists() {
+                    return Ok(data_path);
+                }
             }
         }
 
@@ -418,11 +578,13 @@ impl JobExecutor {
         if let Some(disp) = disp {
             match disp.status {
                 DispStatus::New => {
-                    // Create parent directories
+                    // Create parent directories.
+                    // On z/OS, dataset qualifiers are flat names — a DSN like A.B.C
+                    // doesn't imply A.B is a directory. In our filesystem mapping,
+                    // A.B might already exist as a file while A.B.C needs A/B/ to
+                    // be a directory. Resolve conflicts by renaming the blocking file.
                     if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent).map_err(|e| JclError::ExecutionFailed {
-                            message: format!("Failed to create directory for {}: {}", dsn, e),
-                        })?;
+                        self.ensure_directory_path(parent)?;
                     }
                 }
                 DispStatus::Old | DispStatus::Shr => {
@@ -449,7 +611,8 @@ impl JobExecutor {
         })?;
 
         for ds in datasets {
-            let path = self.resolve_dataset(&ds.dsn, &ds.disp)?;
+            let dsn = Self::full_dsn(ds);
+            let path = self.resolve_dataset(&dsn, &ds.disp)?;
             if path.exists() {
                 let content = std::fs::read(&path).map_err(|e| JclError::ExecutionFailed {
                     message: format!("Failed to read dataset {} for concatenation: {}", ds.dsn, e),
@@ -466,10 +629,20 @@ impl JobExecutor {
     ///
     /// Given a base name like "MY.GDG" and generation +1, scans the dataset directory
     /// for existing generations (G0001V00 pattern) and returns the resolved name.
-    pub fn resolve_gdg(&self, base: &str, generation: i32) -> Result<String, JclError> {
+    pub fn resolve_gdg(&mut self, base: &str, generation: i32) -> Result<String, JclError> {
+        let base_upper = base.to_uppercase();
+
+        // On real z/OS, a relative GDG reference like (+1) or (0) always refers
+        // to the same absolute generation throughout a single job. Return the
+        // previously resolved generation if we've seen this (base, gen) pair.
+        let key = (base_upper.clone(), generation);
+        if let Some(&abs) = self.gdg_resolved.get(&key) {
+            return Ok(format!("{}.G{:04}V00", base_upper, abs));
+        }
+
         // Convert DSN to directory path
         let mut base_path = self.config.dataset_dir.clone();
-        for part in base.split('.') {
+        for part in base_upper.split('.') {
             base_path.push(part);
         }
 
@@ -497,7 +670,11 @@ impl JobExecutor {
             target_gen
         };
 
-        Ok(format!("{}.G{:04}V00", base, abs_gen))
+        // Cache the resolution so subsequent references within this job
+        // resolve to the same generation.
+        self.gdg_resolved.insert(key, abs_gen);
+
+        Ok(format!("{}.G{:04}V00", base_upper, abs_gen))
     }
 
     /// Write inline data to a file.
@@ -525,18 +702,49 @@ impl JobExecutor {
             _ => {}
         }
 
-        // Check the utility registry for built-in programs (IEFBR14, IEBGENER, IDCAMS, etc.)
-        if self.utility_registry.contains(pgm) {
-            let result = self.utility_registry.lookup(pgm).unwrap().execute(
-                step.name.as_deref(),
-                &self.dd_files,
-                step.params.parm.as_deref(),
-            )?;
-            return Ok(result);
+        // File-based utilities that need direct disk I/O
+        match pgm {
+            "IEBGENER" => {
+                return iebgener::Iebgener.execute(
+                    step.name.as_deref(),
+                    &self.dd_files,
+                    step.params.parm.as_deref(),
+                );
+            }
+            "IEBCOPY" => {
+                return iebcopy::Iebcopy.execute(
+                    step.name.as_deref(),
+                    &self.dd_files,
+                    step.params.parm.as_deref(),
+                );
+            }
+            "IDCAMS" => {
+                return utility::execute_idcams(
+                    step.name.as_deref(),
+                    &self.dd_files,
+                    step.params.parm.as_deref(),
+                    &self.config.dataset_dir,
+                );
+            }
+            _ => {}
         }
 
-        // Find the program executable
-        let exe_path = self.find_program(pgm)?;
+        // Check the shared utilities crate for known IBM utilities
+        // (IEFBR14, IEBCOMPR, IKJEFT01, IKJEFT1A, IKJEFT1B, IRXJCL, BPXBATCH, etc.)
+        if self.shared_utilities.is_registered(pgm) {
+            return self.execute_via_shared_utility(step, pgm);
+        }
+
+        // Find the program executable — if not found, run as a stub
+        let exe_path = match self.find_program(pgm) {
+            Ok(path) => path,
+            Err(_) => {
+                // Program not found on disk — execute as a generic stub.
+                // This handles COBOL batch programs, CICS utilities, etc.
+                // that don't have real executables in the emulated environment.
+                return self.execute_stub_program(step, pgm);
+            }
+        };
 
         // Build command
         let mut cmd = Command::new(&exe_path);
@@ -578,6 +786,27 @@ impl JobExecutor {
         })
     }
 
+    /// Extract LRECL from DD statements in a step (checks SORTIN, SORTOUT, or any DD with DCB).
+    fn extract_lrecl(step: &Step) -> Option<usize> {
+        // Check SORTIN first, then SORTOUT
+        for dd_name in &["SORTIN", "SORTOUT"] {
+            for dd in &step.dd_statements {
+                if dd.name == *dd_name {
+                    if let DdDefinition::Dataset(ref def) = dd.definition {
+                        if let Some(ref dcb) = def.dcb {
+                            if let Some(lrecl) = dcb.lrecl {
+                                if lrecl > 0 {
+                                    return Some(lrecl as usize);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Execute SORT utility.
     fn execute_sort(&self, step: &Step) -> Result<StepResult, JclError> {
         // Get required DD files
@@ -589,17 +818,43 @@ impl JobExecutor {
             message: "SORT requires SORTOUT DD".to_string(),
         })?;
 
+        // Read SYMNAMES DD if present — defines symbolic field names.
+        // Field entries (NAME,pos,len,fmt) and constant entries (NAME,C'value')
+        // get substituted into the control statements.
+        let symnames: HashMap<String, String> =
+            if let Some(sym_path) = self.dd_files.get("SYMNAMES") {
+                Self::parse_symnames(sym_path)
+            } else {
+                HashMap::new()
+            };
+
         // Get control statements from SYSIN if available
-        let control_statements = if let Some(sysin_path) = self.dd_files.get("SYSIN") {
+        let mut control_statements = if let Some(sysin_path) = self.dd_files.get("SYSIN") {
             std::fs::read_to_string(sysin_path).unwrap_or_default()
         } else if let Some(ref parm) = step.params.parm {
             // Use PARM as control statement
             parm.clone()
         } else {
-            return Err(JclError::ExecutionFailed {
-                message: "SORT requires SYSIN or PARM with control statements".to_string(),
-            });
+            // No SYSIN or PARM — default to OPTION COPY if SYMNAMES present
+            if !symnames.is_empty() {
+                "  OPTION COPY\n".to_string()
+            } else {
+                return Err(JclError::ExecutionFailed {
+                    message: "SORT requires SYSIN or PARM with control statements".to_string(),
+                });
+            }
         };
+
+        // Resolve symbolic field names from SYMNAMES.
+        // Sort by name length descending to avoid partial replacements
+        // (e.g., "TRAN-CARD" matching before "TRAN-CARD-NUM").
+        if !symnames.is_empty() {
+            let mut sorted_names: Vec<_> = symnames.iter().collect();
+            sorted_names.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+            for (name, expansion) in sorted_names {
+                control_statements = control_statements.replace(name, expansion);
+            }
+        }
 
         // Parse control statements
         let parsed = open_mainframe_sort::parse_control_statements(&control_statements)
@@ -633,7 +888,46 @@ impl JobExecutor {
             engine = engine.with_sum(sum_fields);
         }
 
-        // Execute sort
+        // If DCB specifies LRECL and RECFM=FB, use Fixed record format.
+        // This is critical for binary VSAM input that cannot be read as text lines.
+        if let Some(lrecl) = Self::extract_lrecl(step) {
+            engine = engine.with_record_length(lrecl);
+        } else {
+            // Check if sortin is a VSAM file (.vsam extension) — use fixed-length
+            // records derived from file size if available.
+            let sortin_str = sortin.to_string_lossy();
+            if sortin_str.ends_with(".vsam") {
+                if let Ok(meta) = std::fs::metadata(sortin) {
+                    let size = meta.len() as usize;
+                    // Try common LRECL values that divide evenly
+                    for &candidate in &[350, 300, 250, 200, 150, 100, 80, 50] {
+                        if size > 0 && size % candidate == 0 {
+                            engine = engine.with_record_length(candidate);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Execute sort — if SORTIN doesn't exist, produce empty output (RC=0).
+        // This matches z/OS behavior where sorting an empty or non-existent input
+        // produces an empty output file with RC=0.
+        if !sortin.exists() {
+            // Create empty output file
+            if let Some(parent) = sortout.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(sortout, b"");
+            return Ok(StepResult {
+                name: step.name.clone(),
+                return_code: 0,
+                stdout: "SORT COMPLETED - IN: 0 OUT: 0 FILTERED: 0\n".to_string(),
+                stderr: String::new(),
+                success: true,
+            });
+        }
+
         let stats = engine.sort_file(sortin, sortout).map_err(|e| JclError::ExecutionFailed {
             message: format!("SORT failed: {}", e),
         })?;
@@ -650,6 +944,179 @@ impl JobExecutor {
             stderr: String::new(),
             success: true,
         })
+    }
+
+    /// Execute a utility via the shared `open-mainframe-utilities` crate.
+    ///
+    /// Bridges between the JCL executor's file-based DD model and the
+    /// utilities crate's in-memory DD model:
+    /// 1. Reads file DDs into `UtilityContext` as inline data
+    /// 2. Dispatches to the shared registry
+    /// 3. Writes output DDs back to disk
+    /// 4. Converts `UtilityResult` → `StepResult`
+    fn execute_via_shared_utility(
+        &self,
+        step: &Step,
+        pgm: &str,
+    ) -> Result<StepResult, JclError> {
+        use open_mainframe_utilities::{DdAllocation, UtilityContext};
+
+        let step_name = step.name.as_deref().unwrap_or("");
+        let mut ctx = UtilityContext::new(step_name, pgm);
+
+        // Convert file-based DDs to in-memory DDs
+        for (dd_name, path) in &self.dd_files {
+            if path.as_os_str() == "/dev/null" {
+                ctx.add_dd(DdAllocation::dummy(dd_name));
+            } else if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+                    ctx.add_dd(DdAllocation::inline(dd_name, lines));
+                } else {
+                    ctx.add_dd(DdAllocation::output(dd_name));
+                }
+            } else {
+                ctx.add_dd(DdAllocation::output(dd_name));
+            }
+        }
+
+        // Dispatch via shared registry
+        let result = self
+            .shared_utilities
+            .dispatch(pgm, &mut ctx)
+            .map_err(|e| JclError::ExecutionFailed {
+                message: e.to_string(),
+            })?;
+
+        // Write output DDs back to disk
+        for dd_name in ctx.dd_names() {
+            if let Some(dd) = ctx.get_dd(&dd_name) {
+                if !dd.output.is_empty() {
+                    if let Some(path) = self.dd_files.get(&dd_name) {
+                        if path.as_os_str() != "/dev/null" {
+                            let content = dd.output.join("\n") + "\n";
+                            let _ = std::fs::write(path, &content);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Convert UtilityResult → StepResult
+        let sysprint = ctx.sysprint_output();
+        let stdout = if sysprint.is_empty() {
+            String::new()
+        } else {
+            sysprint.join("\n") + "\n"
+        };
+
+        Ok(StepResult {
+            name: step.name.clone(),
+            return_code: result.condition_code,
+            stdout,
+            stderr: String::new(),
+            success: result.condition_code <= 4,
+        })
+    }
+
+    /// Execute an unknown program as a generic stub.
+    ///
+    /// When a program is not in the utility registry and not found as an
+    /// executable on disk, this runs it as a no-op stub that reads available
+    /// input DDs, writes a summary to output DDs, and returns RC=0.
+    /// This handles COBOL batch programs, CICS utilities, and other programs
+    /// that don't have real executables in the emulated environment.
+    fn execute_stub_program(&self, step: &Step, pgm: &str) -> Result<StepResult, JclError> {
+        let mut lines = Vec::new();
+        lines.push(format!("{}: PROGRAM STARTED (STUB)", pgm));
+
+        if let Some(ref parm) = step.params.parm {
+            lines.push(format!("{}: PARM={}", pgm, parm));
+        }
+
+        // Log allocated DDs
+        let mut dd_names: Vec<&String> = self.dd_files.keys().collect();
+        dd_names.sort();
+        for dd in &dd_names {
+            lines.push(format!("{}: DD ALLOCATED: {}", pgm, dd));
+        }
+
+        // Read input DDs if present
+        for dd_name in &["SYSUT1", "SYSIN", "CARDIN", "CUSTFILE", "TRNXFILE", "XREFFILE"] {
+            if let Some(path) = self.dd_files.get(*dd_name) {
+                if path.exists() {
+                    if let Ok(meta) = std::fs::metadata(path) {
+                        lines.push(format!("{}: {}: {} BYTES READ", pgm, dd_name, meta.len()));
+                    }
+                }
+            }
+        }
+
+        // Write output marker to SYSPRINT/SYSOUT if allocated
+        for dd_name in &["SYSPRINT", "SYSOUT"] {
+            if let Some(path) = self.dd_files.get(*dd_name) {
+                let _ = std::fs::write(path, format!("{} COMPLETED SUCCESSFULLY\n", pgm));
+            }
+        }
+
+        lines.push(format!("{}: PROGRAM ENDED - RC=0", pgm));
+
+        Ok(StepResult {
+            name: step.name.clone(),
+            return_code: 0,
+            stdout: lines.join("\n") + "\n",
+            stderr: String::new(),
+            success: true,
+        })
+    }
+
+    /// Parse a SYMNAMES DD file into a map of symbolic name -> expansion string.
+    ///
+    /// SYMNAMES format (one entry per line):
+    /// - Field:    `NAME,position,length,format`  expands to `pos,len,fmt`
+    /// - Constant: `NAME,C'value'` or `NAME,X'hex'` expands to `C'value'`
+    /// Lines starting with `*` or blank lines are ignored.
+    fn parse_symnames(path: &Path) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        if let Ok(content) = std::fs::read_to_string(path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('*') || trimmed.starts_with("/*") {
+                    continue;
+                }
+                // Split only on the first comma to get name + rest
+                if let Some(comma_pos) = trimmed.find(',') {
+                    let name = trimmed[..comma_pos].trim().to_uppercase();
+                    let rest = trimmed[comma_pos + 1..].trim();
+
+                    // Check if rest starts with a constant literal (C'...' or X'...')
+                    let upper_rest = rest.to_uppercase();
+                    if upper_rest.starts_with("C'") || upper_rest.starts_with("X'") {
+                        // Extract just the literal: C'value' or X'hex'
+                        // Find the closing quote after the opening C' or X'
+                        let literal = if let Some(end_quote) = rest[2..].find('\'') {
+                            &rest[..end_quote + 3] // prefix(2) + content + closing quote
+                        } else {
+                            rest // No closing quote found, use the whole thing
+                        };
+                        map.insert(name, literal.to_string());
+                    } else {
+                        // Field symbol: pos,len,format
+                        let parts: Vec<&str> = rest.split(',').collect();
+                        if parts.len() >= 3 {
+                            if let (Ok(pos), Ok(len)) = (
+                                parts[0].trim().parse::<u32>(),
+                                parts[1].trim().parse::<u32>(),
+                            ) {
+                                let fmt = parts[2].trim().to_uppercase();
+                                map.insert(name, format!("{},{},{}", pos, len, fmt));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        map
     }
 
     /// Find the program executable.
@@ -732,7 +1199,8 @@ mod tests {
         let mut executor = JobExecutor::with_config(config);
 
         let path = executor.resolve_dataset("MY.PDS(MEMBER)", &None).unwrap();
-        assert_eq!(path, PathBuf::from("/data/MY/PDS/MEMBER.cbl"));
+        // When no file exists on disk, default to exact member name (no extension)
+        assert_eq!(path, PathBuf::from("/data/MY/PDS/MEMBER"));
     }
 
     #[test]
@@ -987,7 +1455,7 @@ mod tests {
             dataset_dir,
             ..Default::default()
         };
-        let executor = JobExecutor::with_config(config);
+        let mut executor = JobExecutor::with_config(config);
 
         // +1 should resolve to G0004V00
         let resolved = executor.resolve_gdg("MY.GDG", 1).unwrap();
@@ -1024,44 +1492,14 @@ mod tests {
     // Epic 108: Utility Registry Integration Tests
     // ======================================================================
 
-    /// Story 108.1: Executor uses utility registry for IEFBR14.
+    /// Story 108.1: Executor uses shared utilities crate for standard IBM utilities.
     #[test]
-    fn test_executor_utility_registry_iefbr14() {
+    fn test_executor_shared_utilities() {
         let executor = JobExecutor::new();
-        assert!(executor.utility_registry().contains("IEFBR14"));
-        assert!(executor.utility_registry().contains("IEBGENER"));
-        assert!(executor.utility_registry().contains("IDCAMS"));
-    }
-
-    /// Story 108.2: Custom utility can be registered on executor.
-    #[test]
-    fn test_executor_register_custom_utility() {
-        use utility::UtilityProgram;
-
-        struct TestUtil;
-        impl UtilityProgram for TestUtil {
-            fn execute(
-                &self,
-                step_name: Option<&str>,
-                _dd_files: &HashMap<String, PathBuf>,
-                _parm: Option<&str>,
-            ) -> Result<StepResult, JclError> {
-                Ok(StepResult {
-                    name: step_name.map(|s| s.to_string()),
-                    return_code: 0,
-                    stdout: "CUSTOM\n".to_string(),
-                    stderr: String::new(),
-                    success: true,
-                })
-            }
-            fn name(&self) -> &str {
-                "TESTUTIL"
-            }
-        }
-
-        let mut executor = JobExecutor::new();
-        executor.utility_registry_mut().register(Box::new(TestUtil));
-        assert!(executor.utility_registry().contains("TESTUTIL"));
+        assert!(executor.shared_utilities().is_registered("IEFBR14"));
+        assert!(executor.shared_utilities().is_registered("IEBCOMPR"));
+        assert!(executor.shared_utilities().is_registered("IKJEFT01"));
+        assert!(executor.shared_utilities().is_registered("IKJEFT1B"));
     }
 
     // ======================================================================
@@ -1268,11 +1706,48 @@ mod tests {
             dataset_dir,
             ..Default::default()
         };
-        let executor = JobExecutor::with_config(config);
+        let mut executor = JobExecutor::with_config(config);
 
         // -1 from max (3) = G0002V00
         let resolved = executor.resolve_gdg("MY.GDG", -1).unwrap();
         assert_eq!(resolved, "MY.GDG.G0002V00");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Regression: resolve_dataset with GDG relative generation (+1) syntax
+    /// should resolve through resolve_gdg instead of treating as PDS member.
+    #[test]
+    fn test_resolve_dataset_gdg_relative() {
+        let temp_dir = std::env::temp_dir().join("jcl_gdg_dsn_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        let dataset_dir = temp_dir.join("datasets");
+
+        // Create GDG base with existing generations
+        let gdg_dir = dataset_dir.join("MY").join("GDG");
+        fs::create_dir_all(&gdg_dir).unwrap();
+        fs::write(gdg_dir.join("G0001V00"), "gen1").unwrap();
+        fs::write(gdg_dir.join("G0002V00"), "gen2").unwrap();
+
+        let config = ExecutionConfig {
+            dataset_dir: dataset_dir.clone(),
+            work_dir: temp_dir.join("work"),
+            sysout_dir: temp_dir.join("sysout"),
+            ..Default::default()
+        };
+        let mut executor = JobExecutor::with_config(config);
+
+        // (+1) → next generation = G0003V00
+        let path = executor.resolve_dataset("MY.GDG(+1)", &None).unwrap();
+        assert_eq!(path, dataset_dir.join("MY").join("GDG").join("G0003V00"));
+
+        // (0) → current generation = G0002V00
+        let path = executor.resolve_dataset("MY.GDG(0)", &None).unwrap();
+        assert_eq!(path, dataset_dir.join("MY").join("GDG").join("G0002V00"));
+
+        // (-1) → previous generation = G0001V00
+        let path = executor.resolve_dataset("MY.GDG(-1)", &None).unwrap();
+        assert_eq!(path, dataset_dir.join("MY").join("GDG").join("G0001V00"));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

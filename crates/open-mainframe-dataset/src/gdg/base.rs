@@ -257,6 +257,27 @@ impl GdgBase {
 
         // Create directory structure: base_dir/NAME (replace dots with /)
         let data_dir = Self::name_to_dir(&name, base_dir);
+
+        // On z/OS, dataset qualifiers are flat — A.B.C doesn't imply A.B is a
+        // directory. In our filesystem mapping, A.B might already exist as a file
+        // while A.B.C needs A/B/ to be a directory. Resolve conflicts by renaming
+        // the blocking file into a "data" file inside the new directory.
+        {
+            let mut current = base_dir.to_path_buf();
+            if let Ok(rel) = data_dir.strip_prefix(base_dir) {
+                for component in rel.components() {
+                    current.push(component);
+                    if current.is_file() {
+                        // Move file to temp, create dir, move file into dir as "data"
+                        let tmp = current.with_extension("__gdg_tmp__");
+                        let _ = fs::rename(&current, &tmp);
+                        let _ = fs::create_dir_all(&current);
+                        let _ = fs::rename(&tmp, current.join("data"));
+                    }
+                }
+            }
+        }
+
         fs::create_dir_all(&data_dir).map_err(|e| DatasetError::IoError {
             message: format!("Failed to create GDG directory: {}", e),
         })?;

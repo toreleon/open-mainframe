@@ -237,7 +237,7 @@ fn parse_jes2_command(input: &str) -> SystemCommand {
 // ─────────────────────── Command Registry ───────────────────────
 
 /// Handler function type for registered commands.
-pub type CommandHandler = Box<dyn Fn(&SystemCommand, &SystemState) -> CommandOutput>;
+pub type CommandHandler = Box<dyn Fn(&SystemCommand, &SystemState) -> CommandOutput + Send + Sync>;
 
 /// Registry of command handlers.
 pub struct CommandRegistry {

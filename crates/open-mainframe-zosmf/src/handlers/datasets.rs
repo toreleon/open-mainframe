@@ -67,6 +67,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/zosmf/restfiles/ds/{dsn}", post(create_dataset))
         .route("/zosmf/restfiles/ds/{dsn}", delete(delete_dataset))
         .route("/zosmf/restfiles/ds/{dsn}/member", get(list_members))
+        .route("/zosmf/restfiles/ams", put(execute_ams))
 }
 
 /// Map RecordFormat enum to z/OSMF string.
@@ -888,6 +889,47 @@ async fn delete_dataset(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Request body for IDCAMS (AMS) command execution.
+#[derive(Debug, Deserialize)]
+struct AmsRequest {
+    /// IDCAMS command input lines.
+    input: Vec<String>,
+}
+
+/// Response body for IDCAMS execution.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AmsResponse {
+    /// IDCAMS return code.
+    return_code: u32,
+    /// IDCAMS output text.
+    output: String,
+}
+
+/// PUT /zosmf/restfiles/ams — execute IDCAMS (Access Method Services) commands.
+async fn execute_ams(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Json(req): Json<AmsRequest>,
+) -> std::result::Result<Json<AmsResponse>, ZosmfErrorResponse> {
+    let catalog = state
+        .catalog
+        .read()
+        .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
+
+    let input = req.input.join("\n");
+    let mut idcams = open_mainframe_dataset::Idcams::new(catalog.base_dir());
+
+    let result = idcams.execute(&input).map_err(|e| {
+        ZosmfErrorResponse::internal(format!("IDCAMS execution failed: {}", e))
+    })?;
+
+    Ok(Json(AmsResponse {
+        return_code: result.return_code,
+        output: result.output,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -975,5 +1017,24 @@ mod tests {
         assert!(json.contains("\"member\":\"PAYROLL\""));
         assert!(json.contains("\"mod\":5"));
         assert!(json.contains("\"vers\":1"));
+    }
+
+    #[test]
+    fn test_ams_response_serialization() {
+        let resp = AmsResponse {
+            return_code: 0,
+            output: "IDC0001I FUNCTION COMPLETED".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"returnCode\":0"));
+        assert!(json.contains("\"output\":\"IDC0001I FUNCTION COMPLETED\""));
+    }
+
+    #[test]
+    fn test_ams_request_deserialization() {
+        let json = r#"{"input": ["DEFINE CLUSTER (NAME(MY.CLUSTER) INDEXED)"]}"#;
+        let req: AmsRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.input.len(), 1);
+        assert!(req.input[0].contains("DEFINE CLUSTER"));
     }
 }

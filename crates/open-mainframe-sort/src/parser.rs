@@ -2,7 +2,7 @@
 
 use crate::error::SortError;
 use crate::fields::{DataType, SortField, SortOrder, SortSpec};
-use crate::filter::{CompareOp, Condition, FilterSpec, FilterType};
+use crate::filter::{BooleanLogic, CompareOp, Condition, FilterSpec, FilterType};
 use crate::reformat::{OutrecField, OutrecSpec};
 
 /// Parsed control statements.
@@ -82,22 +82,56 @@ pub fn parse_control_statements(input: &str) -> Result<ControlStatements, SortEr
     Ok(result)
 }
 
+/// Check whether a trimmed line starts with a DFSORT statement keyword,
+/// which means it is a new statement rather than a continuation.
+fn is_statement_keyword(trimmed: &str) -> bool {
+    let upper = trimmed.to_uppercase();
+    upper.starts_with("SORT ")
+        || upper.starts_with("INCLUDE ")
+        || upper.starts_with("OMIT ")
+        || upper.starts_with("INREC ")
+        || upper.starts_with("OUTREC ")
+        || upper.starts_with("SUM ")
+        || upper.starts_with("OPTION ")
+        || upper.starts_with("MERGE ")
+}
+
 /// Normalize continuation lines (lines starting with spaces are continuations).
+///
+/// In DFSORT control cards, lines starting with a space are normally
+/// continuations of the previous statement. However, if the trimmed
+/// content starts with a known statement keyword (SORT, INCLUDE, etc.)
+/// it is a new statement, not a continuation.
 fn normalize_continuations(input: &str) -> String {
     let mut result = String::new();
     let mut current_statement = String::new();
 
     for line in input.lines() {
-        if line.starts_with(' ') || line.starts_with('\t') {
-            // Continuation - append to current statement
-            current_statement.push_str(line.trim());
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('*') {
+            // Blank / comment — flush current and pass through
+            if !current_statement.is_empty() {
+                result.push_str(&current_statement);
+                result.push('\n');
+                current_statement.clear();
+            }
+            result.push_str(trimmed);
+            result.push('\n');
+            continue;
+        }
+
+        let is_indented = line.starts_with(' ') || line.starts_with('\t');
+
+        if is_indented && !is_statement_keyword(trimmed) {
+            // Continuation — append to current statement
+            current_statement.push_str(trimmed);
         } else {
-            // New statement
+            // New statement (either not indented, or starts with a keyword)
             if !current_statement.is_empty() {
                 result.push_str(&current_statement);
                 result.push('\n');
             }
-            current_statement = line.to_string();
+            current_statement = trimmed.to_string();
         }
     }
 
@@ -152,13 +186,16 @@ fn parse_sort_fields(input: &str, line: usize) -> Result<SortSpec, SortError> {
     Ok(spec)
 }
 
-/// Parse INCLUDE/OMIT condition.
+/// Parse INCLUDE/OMIT condition, supporting compound conditions with AND/OR.
+///
+/// Formats:
+/// - Simple:   `(pos,len,type,op,value)`
+/// - Compound: `(pos,len,type,op,value,AND,pos,len,type,op,value)`
 fn parse_filter(input: &str, filter_type: FilterType, line: usize) -> Result<FilterSpec, SortError> {
     let input = input.trim_start_matches('(').trim_end_matches(')');
 
-    // Simple single condition: pos,len,type,op,value
-    // Example: 10,2,CH,EQ,C'NY'
-    let parts: Vec<&str> = input.split(',').map(|s| s.trim()).collect();
+    // Split respecting quoted literals (C'...' may contain commas in theory)
+    let parts: Vec<&str> = split_filter_parts(input);
 
     if parts.len() < 5 {
         return Err(SortError::ParseError {
@@ -167,42 +204,87 @@ fn parse_filter(input: &str, filter_type: FilterType, line: usize) -> Result<Fil
         });
     }
 
-    let position: usize = parts[0].parse().map_err(|_| SortError::ParseError {
-        line,
-        message: format!("Invalid position: {}", parts[0]),
-    })?;
+    let mut conditions = Vec::new();
+    let mut logic = None;
+    let mut i = 0;
 
-    let length: usize = parts[1].parse().map_err(|_| SortError::ParseError {
-        line,
-        message: format!("Invalid length: {}", parts[1]),
-    })?;
+    while i + 4 < parts.len() {
+        let position: usize = parts[i].parse().map_err(|_| SortError::ParseError {
+            line,
+            message: format!("Invalid position: {}", parts[i]),
+        })?;
 
-    let data_type = DataType::from_code(parts[2]).ok_or_else(|| SortError::ParseError {
-        line,
-        message: format!("Invalid data type: {}", parts[2]),
-    })?;
+        let length: usize = parts[i + 1].parse().map_err(|_| SortError::ParseError {
+            line,
+            message: format!("Invalid length: {}", parts[i + 1]),
+        })?;
 
-    let op = CompareOp::from_code(parts[3]).ok_or_else(|| SortError::ParseError {
-        line,
-        message: format!("Invalid comparison operator: {}", parts[3]),
-    })?;
+        let data_type = DataType::from_code(parts[i + 2]).ok_or_else(|| SortError::ParseError {
+            line,
+            message: format!("Invalid data type: {}", parts[i + 2]),
+        })?;
 
-    // Parse the value - could be C'literal' or numeric
-    let value = parse_condition_value(parts[4], line)?;
+        let op = CompareOp::from_code(parts[i + 3]).ok_or_else(|| SortError::ParseError {
+            line,
+            message: format!("Invalid comparison operator: {}", parts[i + 3]),
+        })?;
 
-    let condition = Condition {
-        position,
-        length,
-        data_type,
-        op,
-        value,
-    };
+        let value = parse_condition_value(parts[i + 4], line)?;
+
+        conditions.push(Condition {
+            position,
+            length,
+            data_type,
+            op,
+            value,
+        });
+        i += 5;
+
+        // Check for AND/OR between conditions
+        if i < parts.len() {
+            let connector = parts[i].to_uppercase();
+            match connector.as_str() {
+                "AND" => { logic = Some(BooleanLogic::And); i += 1; }
+                "OR"  => { logic = Some(BooleanLogic::Or);  i += 1; }
+                _ => break,
+            }
+        }
+    }
+
+    if conditions.is_empty() {
+        return Err(SortError::ParseError {
+            line,
+            message: "No valid conditions found".to_string(),
+        });
+    }
 
     Ok(FilterSpec {
         filter_type,
-        conditions: vec![condition],
-        logic: None, // Simple single condition
+        conditions,
+        logic,
     })
+}
+
+/// Split filter condition parts by comma, respecting quoted literals.
+fn split_filter_parts(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut in_quote = false;
+
+    for (i, c) in input.char_indices() {
+        match c {
+            '\'' => in_quote = !in_quote,
+            ',' if !in_quote => {
+                parts.push(input[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < input.len() {
+        parts.push(input[start..].trim());
+    }
+    parts
 }
 
 /// Parse a condition value (C'literal' or numeric).
@@ -430,5 +512,26 @@ mod tests {
         let input = "SORT FIELDS=(1,10,XX,A)";
         let result = parse_control_statements(input);
         assert!(result.is_err());
+    }
+
+    /// Regression: multi-line control cards where both SORT and INCLUDE are
+    /// indented (as in typical SYSIN inline data) must be parsed as separate
+    /// statements, not concatenated into one.
+    #[test]
+    fn test_multiline_sort_and_include() {
+        let input = " SORT FIELDS=(1,10,CH,A)\n INCLUDE COND=(20,2,CH,EQ,C'NY')\n";
+        let result = parse_control_statements(input).unwrap();
+
+        let sort = result.sort.unwrap();
+        assert_eq!(sort.fields.len(), 1);
+        assert_eq!(sort.fields[0].position, 1);
+        assert_eq!(sort.fields[0].length, 10);
+        assert_eq!(sort.fields[0].order, SortOrder::Ascending);
+
+        let include = result.include.unwrap();
+        assert_eq!(include.conditions.len(), 1);
+        assert_eq!(include.conditions[0].position, 20);
+        assert_eq!(include.conditions[0].length, 2);
+        assert_eq!(include.conditions[0].op, CompareOp::Eq);
     }
 }

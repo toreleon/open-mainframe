@@ -3,7 +3,7 @@
 //! Parses IDCAMS control statements with continuation support.
 
 use crate::error::DatasetError;
-use crate::idcams::commands::IdcamsCommand;
+use crate::idcams::commands::{ConditionOp, ConditionVariable, IdcamsCommand};
 use crate::vsam::VsamType;
 
 /// Parse IDCAMS commands from input text.
@@ -87,6 +87,12 @@ fn parse_single_command(input: &str) -> Result<Option<IdcamsCommand>, DatasetErr
     if input.starts_with("DIAGNOSE") {
         return parse_diagnose(&input);
     }
+    if input.starts_with("SET") {
+        return parse_set(&input);
+    }
+    if input.starts_with("IF") {
+        return parse_if_then(&input);
+    }
 
     // Unknown command - skip
     Ok(None)
@@ -114,7 +120,7 @@ fn parse_define(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
     if input.contains("CLUSTER") {
         return parse_define_cluster(input);
     }
-    if input.contains("GDG") {
+    if input.contains("GDG") || input.contains("GENERATIONDATAGROUP") {
         return parse_define_gdg(input);
     }
 
@@ -470,6 +476,88 @@ fn parse_diagnose(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
     Ok(Some(IdcamsCommand::Diagnose { name }))
 }
 
+/// Parse SET command (e.g., SET MAXCC=0).
+fn parse_set(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    // SET MAXCC = value
+    if let Some(rest) = input.strip_prefix("SET") {
+        let rest = rest.trim();
+        if let Some(rest) = rest.strip_prefix("MAXCC") {
+            let rest = rest.trim().trim_start_matches('=').trim();
+            if let Ok(value) = rest.parse::<u32>() {
+                return Ok(Some(IdcamsCommand::SetMaxcc { value }));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Parse IF/THEN conditional (e.g., IF LASTCC=12 THEN SET MAXCC=0).
+fn parse_if_then(input: &str) -> Result<Option<IdcamsCommand>, DatasetError> {
+    // Pattern: IF LASTCC|MAXCC op value THEN action
+    let rest = input.strip_prefix("IF").unwrap_or(input).trim();
+
+    // Parse variable name
+    let (variable, rest) = if rest.starts_with("LASTCC") {
+        (ConditionVariable::LastCc, rest[6..].trim())
+    } else if rest.starts_with("MAXCC") {
+        (ConditionVariable::MaxCc, rest[5..].trim())
+    } else {
+        return Ok(None);
+    };
+
+    // Parse operator and value: =12, >=4, <=8, LE 08, GT 4, etc.
+    let (operator, rest) = if let Some(r) = rest.strip_prefix(">=") {
+        (ConditionOp::Ge, r)
+    } else if let Some(r) = rest.strip_prefix("<=") {
+        (ConditionOp::Le, r)
+    } else if let Some(r) = rest.strip_prefix('>') {
+        (ConditionOp::Gt, r)
+    } else if let Some(r) = rest.strip_prefix('<') {
+        (ConditionOp::Lt, r)
+    } else if let Some(r) = rest.strip_prefix("NE") {
+        (ConditionOp::Ne, r.trim())
+    } else if let Some(r) = rest.strip_prefix("LE") {
+        (ConditionOp::Le, r.trim())
+    } else if let Some(r) = rest.strip_prefix("GE") {
+        (ConditionOp::Ge, r.trim())
+    } else if let Some(r) = rest.strip_prefix("GT") {
+        (ConditionOp::Gt, r.trim())
+    } else if let Some(r) = rest.strip_prefix("LT") {
+        (ConditionOp::Lt, r.trim())
+    } else if let Some(r) = rest.strip_prefix("EQ") {
+        (ConditionOp::Eq, r.trim())
+    } else if let Some(r) = rest.strip_prefix('=') {
+        (ConditionOp::Eq, r)
+    } else {
+        return Ok(None);
+    };
+
+    let rest = rest.trim();
+
+    // Parse the numeric value — it ends at whitespace or THEN
+    let value_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    let value: u32 = rest[..value_end].parse().unwrap_or(0);
+
+    let rest = rest[value_end..].trim();
+
+    // Expect THEN
+    let rest = rest.strip_prefix("THEN").unwrap_or(rest).trim();
+
+    // Parse the action (typically SET MAXCC=0)
+    if let Some(action) = parse_single_command(rest)? {
+        Ok(Some(IdcamsCommand::IfThen {
+            variable,
+            operator,
+            value,
+            action: Box::new(action),
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Extract a parameter value from IDCAMS syntax.
 /// Handles: NAME(VALUE), NAME(VALUE1 VALUE2), etc.
 fn extract_param(input: &str, param: &str) -> Option<String> {
@@ -503,8 +591,12 @@ fn extract_param(input: &str, param: &str) -> Option<String> {
 }
 
 /// Parse KEYS(length offset) parameter.
+/// Handles both space-separated (`KEYS(10 0)`) and comma-separated (`KEYS(11,25)`) forms.
 fn parse_keys(s: &str) -> Option<(u16, u16)> {
-    let parts: Vec<&str> = s.split_whitespace().collect();
+    // Split on whitespace or commas
+    let parts: Vec<&str> = s.split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|p| !p.is_empty())
+        .collect();
     if parts.len() >= 2 {
         let len: u16 = parts[0].parse().ok()?;
         let off: u16 = parts[1].parse().ok()?;
@@ -518,8 +610,11 @@ fn parse_keys(s: &str) -> Option<(u16, u16)> {
 }
 
 /// Parse RECORDSIZE(avg max) parameter.
+/// Handles both space-separated (`RECORDSIZE(100 200)`) and comma-separated (`RECORDSIZE(50,50)`) forms.
 fn parse_recordsize(s: &str) -> Option<(u32, u32)> {
-    let parts: Vec<&str> = s.split_whitespace().collect();
+    let parts: Vec<&str> = s.split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|p| !p.is_empty())
+        .collect();
     if parts.len() >= 2 {
         let avg: u32 = parts[0].parse().ok()?;
         let max: u32 = parts[1].parse().ok()?;
@@ -588,6 +683,48 @@ mod tests {
             } => {
                 assert_eq!(name, "MY.GDG.BASE");
                 assert_eq!(*limit, 10);
+                assert!(*scratch);
+            }
+            _ => panic!("Expected DefineGdg"),
+        }
+    }
+
+    #[test]
+    fn test_parse_define_generationdatagroup() {
+        let input = "DEFINE GENERATIONDATAGROUP (NAME(MY.GDG.BASE) LIMIT(5) SCRATCH)";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::DefineGdg {
+                name,
+                limit,
+                scratch,
+                ..
+            } => {
+                assert_eq!(name, "MY.GDG.BASE");
+                assert_eq!(*limit, 5);
+                assert!(*scratch);
+            }
+            _ => panic!("Expected DefineGdg"),
+        }
+    }
+
+    #[test]
+    fn test_parse_define_generationdatagroup_with_continuation() {
+        let input = "DEFINE GENERATIONDATAGROUP -\n   (NAME(AWS.M2.CARDDEMO.TRANSACT.BKUP) -\n    LIMIT(5) -\n    SCRATCH -\n   )";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::DefineGdg {
+                name,
+                limit,
+                scratch,
+                ..
+            } => {
+                assert_eq!(name, "AWS.M2.CARDDEMO.TRANSACT.BKUP");
+                assert_eq!(*limit, 5);
                 assert!(*scratch);
             }
             _ => panic!("Expected DefineGdg"),
@@ -925,7 +1062,69 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_param() {
+    fn test_parse_if_lastcc_set_maxcc() {
+        let input = "IF LASTCC=12 THEN SET MAXCC=0";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::IfThen {
+                variable,
+                operator,
+                value,
+                action,
+            } => {
+                assert_eq!(*variable, ConditionVariable::LastCc);
+                assert_eq!(*operator, ConditionOp::Eq);
+                assert_eq!(*value, 12);
+                match action.as_ref() {
+                    IdcamsCommand::SetMaxcc { value } => assert_eq!(*value, 0),
+                    _ => panic!("Expected SetMaxcc action"),
+                }
+            }
+            _ => panic!("Expected IfThen"),
+        }
+    }
+
+    #[test]
+    fn test_parse_if_maxcc_le_set_maxcc() {
+        let input = "IF MAXCC LE 08 THEN SET MAXCC = 0";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::IfThen {
+                variable,
+                operator,
+                value,
+                action,
+            } => {
+                assert_eq!(*variable, ConditionVariable::MaxCc);
+                assert_eq!(*operator, ConditionOp::Le);
+                assert_eq!(*value, 8);
+                match action.as_ref() {
+                    IdcamsCommand::SetMaxcc { value } => assert_eq!(*value, 0),
+                    _ => panic!("Expected SetMaxcc action"),
+                }
+            }
+            _ => panic!("Expected IfThen"),
+        }
+    }
+
+    #[test]
+    fn test_parse_set_maxcc() {
+        let input = "SET MAXCC = 0";
+        let cmds = parse_commands(input).unwrap();
+        assert_eq!(cmds.len(), 1);
+
+        match &cmds[0] {
+            IdcamsCommand::SetMaxcc { value } => assert_eq!(*value, 0),
+            _ => panic!("Expected SetMaxcc"),
+        }
+    }
+
+    #[test]
+    fn test_parse_extract_param() {
         assert_eq!(
             extract_param("NAME(MY.TEST)", "NAME"),
             Some("MY.TEST".to_string())

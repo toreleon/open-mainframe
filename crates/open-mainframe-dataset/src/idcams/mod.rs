@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::DatasetError;
 use crate::gdg::{GdgBase, GdgOptions};
+use crate::idcams::commands::{ConditionOp, ConditionVariable};
 use crate::vsam::{ClusterParams, VsamCluster, VsamType};
 
 /// IDCAMS utility executor.
@@ -44,8 +45,10 @@ pub struct Idcams {
     base_dir: PathBuf,
     /// Output buffer.
     output: String,
-    /// Return code (0 = success, 4 = warning, 8+ = error).
+    /// Return code / MAXCC (0 = success, 4 = warning, 8+ = error).
     return_code: u32,
+    /// Return code of last executed command (LASTCC).
+    last_cc: u32,
 }
 
 impl Idcams {
@@ -55,18 +58,32 @@ impl Idcams {
             base_dir: base_dir.as_ref().to_path_buf(),
             output: String::new(),
             return_code: 0,
+            last_cc: 0,
         }
     }
 
     /// Execute IDCAMS commands from a string.
+    ///
+    /// Tracks LASTCC (return code of last command) and MAXCC (maximum
+    /// return code across all commands, i.e. `self.return_code`).
+    /// Supports `IF LASTCC=n THEN SET MAXCC=0` to suppress expected errors.
     pub fn execute(&mut self, input: &str) -> Result<IdcamsResult, DatasetError> {
         self.output.clear();
         self.return_code = 0;
+        self.last_cc = 0;
 
         let commands = parse_commands(input)?;
 
         for cmd in commands {
-            self.execute_command(&cmd)?;
+            // In real IDCAMS, individual command failures set LASTCC/MAXCC
+            // but don't abort subsequent commands. Catch errors and convert
+            // them to return code 12 (severe error).
+            if let Err(e) = self.execute_command(&cmd) {
+                self.output
+                    .push_str(&format!("IDC3009I COMMAND FAILED: {}\n", e));
+                self.last_cc = 12;
+                self.return_code = self.return_code.max(12);
+            }
         }
 
         Ok(IdcamsResult {
@@ -75,8 +92,15 @@ impl Idcams {
         })
     }
 
-    /// Execute a single command.
+    /// Execute a single command, tracking LASTCC and MAXCC.
     fn execute_command(&mut self, cmd: &IdcamsCommand) -> Result<(), DatasetError> {
+        // Reset LASTCC for data commands only — IF/SET are control flow
+        // and should see the LASTCC from the previous data command.
+        let is_control_flow = matches!(cmd, IdcamsCommand::IfThen { .. } | IdcamsCommand::SetMaxcc { .. });
+        if !is_control_flow {
+            self.last_cc = 0;
+        }
+
         match cmd {
             IdcamsCommand::DefineCluster {
                 name,
@@ -154,7 +178,44 @@ impl Idcams {
             IdcamsCommand::Examine { name } => self.examine_cmd(name),
 
             IdcamsCommand::Diagnose { name } => self.diagnose_cmd(name),
+
+            IdcamsCommand::SetMaxcc { value } => {
+                self.return_code = *value;
+                Ok(())
+            }
+
+            IdcamsCommand::IfThen {
+                variable,
+                operator,
+                value,
+                action,
+            } => {
+                let test_value = match variable {
+                    ConditionVariable::LastCc => self.last_cc,
+                    ConditionVariable::MaxCc => self.return_code,
+                };
+                let condition_met = match operator {
+                    ConditionOp::Eq => test_value == *value,
+                    ConditionOp::Ne => test_value != *value,
+                    ConditionOp::Gt => test_value > *value,
+                    ConditionOp::Ge => test_value >= *value,
+                    ConditionOp::Lt => test_value < *value,
+                    ConditionOp::Le => test_value <= *value,
+                };
+                if condition_met {
+                    self.execute_command(action)?;
+                }
+                Ok(())
+            }
+        }?;
+
+        // Update MAXCC = max(MAXCC, LASTCC) after data commands only.
+        // SetMaxcc and IfThen manage return_code directly.
+        if !is_control_flow {
+            self.return_code = self.return_code.max(self.last_cc);
         }
+
+        Ok(())
     }
 
     /// DEFINE CLUSTER command.
@@ -170,6 +231,17 @@ impl Idcams {
 
         let record_size = recordsize.map(|(_, max)| max as usize).unwrap_or(256);
         let path = self.name_to_path(name).with_extension("vsam");
+
+        // Check if cluster already exists — return LASTCC=12 (duplicate define)
+        // rather than a fatal error. JCL patterns use IF LASTCC/MAXCC to suppress.
+        if path.exists() {
+            self.output.push_str(&format!(
+                "IDC0004I CLUSTER {} ALREADY EXISTS\n",
+                name
+            ));
+            self.last_cc = 12;
+            return Ok(());
+        }
 
         let params = match cluster_type {
             VsamType::Ksds => {
@@ -207,10 +279,40 @@ impl Idcams {
             ..Default::default()
         };
 
-        GdgBase::create(name, &self.base_dir, options)?;
+        // Check if GDG already exists
+        let gdg_path = self.name_to_path(name);
+        if gdg_path.join(".gdg").exists() {
+            self.output.push_str(&format!(
+                "IDC0004I GDG {} ALREADY EXISTS, DEFINITION SKIPPED\n",
+                name
+            ));
+            self.last_cc = 12;
+            return Ok(());
+        }
 
-        self.output
-            .push_str(&format!("IDC0002I GDG {} DEFINED\n", name));
+        // If the target path exists as a file (e.g., from data setup copying
+        // AWS.M2.CARDDEMO.TRANTYPE.BKUP as a flat file), rename it so the
+        // GDG directory can be created.
+        if gdg_path.is_file() {
+            let renamed = gdg_path.with_extension("data");
+            let _ = std::fs::rename(&gdg_path, &renamed);
+        }
+
+        match GdgBase::create(name, &self.base_dir, options) {
+            Ok(_) => {
+                self.output
+                    .push_str(&format!("IDC0002I GDG {} DEFINED\n", name));
+            }
+            Err(e) => {
+                self.output.push_str(&format!(
+                    "IDC3009I COMMAND FAILED: {}\n",
+                    e
+                ));
+                self.last_cc = 12;
+                return Ok(());
+            }
+        }
+
         Ok(())
     }
 
@@ -219,7 +321,8 @@ impl Idcams {
         self.output
             .push_str(&format!("IDC0001I DELETE - {}\n", name));
 
-        let path = self.name_to_path(name);
+        let raw_path = self.name_to_path(name);
+        let path = self.resolve_read_path(&raw_path);
 
         // Check if it's a GDG
         let gdg_path = path.join(".gdg");
@@ -230,22 +333,38 @@ impl Idcams {
                     "IDC3001E DELETE FAILED - GDG HAS {} GENERATIONS\n",
                     base.generation_count()
                 ));
-                self.return_code = 8;
+                self.last_cc = 8;
                 return Ok(());
             }
             base.delete()?;
         } else if path.exists() {
-            // Regular file or VSAM cluster
+            // Regular file or directory (e.g. plain dataset)
             if path.is_dir() {
                 std::fs::remove_dir_all(&path)?;
             } else {
                 std::fs::remove_file(&path)?;
             }
-        } else if !force {
-            self.output
-                .push_str(&format!("IDC3002E DELETE FAILED - {} NOT FOUND\n", name));
-            self.return_code = 8;
-            return Ok(());
+        } else {
+            // Check for files with known extensions (.vsam, .aix, .path, .nonvsam, .alias)
+            // DEFINE CLUSTER creates files at path.vsam, DELETE must find them.
+            let mut found = false;
+            for ext in &["vsam", "aix", "aix.built", "path", "nonvsam", "alias"] {
+                let ext_path = path.with_extension(ext);
+                if ext_path.exists() {
+                    if ext_path.is_dir() {
+                        std::fs::remove_dir_all(&ext_path)?;
+                    } else {
+                        std::fs::remove_file(&ext_path)?;
+                    }
+                    found = true;
+                }
+            }
+            if !found && !force {
+                self.output
+                    .push_str(&format!("IDC3002E DELETE FAILED - {} NOT FOUND\n", name));
+                self.last_cc = 8;
+                return Ok(());
+            }
         }
 
         self.output
@@ -341,7 +460,7 @@ impl Idcams {
             if !renamed {
                 self.output
                     .push_str(&format!("IDC3002E ALTER FAILED - {} NOT FOUND\n", name));
-                self.return_code = 8;
+                self.last_cc = 8;
                 return Ok(());
             }
 
@@ -390,7 +509,7 @@ impl Idcams {
         } else {
             self.output
                 .push_str("IDC3002E NO ENTRIES FOUND\n");
-            self.return_code = 4;
+            self.last_cc = 4;
         }
 
         Ok(())
@@ -465,11 +584,12 @@ impl Idcams {
         self.output
             .push_str(&format!("IDC0001I PRINT - {}\n", dataset));
 
-        let path = self.name_to_path(dataset);
+        let raw_path = self.name_to_path(dataset);
+        let path = self.resolve_read_path(&raw_path);
         if !path.exists() {
             self.output
                 .push_str(&format!("IDC3002E PRINT FAILED - {} NOT FOUND\n", dataset));
-            self.return_code = 8;
+            self.last_cc = 8;
             return Ok(());
         }
 
@@ -537,13 +657,14 @@ impl Idcams {
         self.output
             .push_str(&format!("IDC0001I REPRO - {} TO {}\n", indataset, outdataset));
 
-        let in_path = self.name_to_path(indataset);
+        let raw_in = self.name_to_path(indataset);
+        let in_path = self.resolve_read_path(&raw_in);
         let out_path = self.name_to_path(outdataset);
 
         if !in_path.exists() {
             self.output
                 .push_str(&format!("IDC3002E REPRO FAILED - {} NOT FOUND\n", indataset));
-            self.return_code = 8;
+            self.last_cc = 8;
             return Ok(());
         }
 
@@ -627,7 +748,7 @@ impl Idcams {
             } else {
                 self.output
                     .push_str(&format!("IDC3003E {} VERIFY FAILED\n", dataset));
-                self.return_code = 8;
+                self.last_cc = 8;
             }
         } else if path.exists() {
             self.output
@@ -635,7 +756,7 @@ impl Idcams {
         } else {
             self.output
                 .push_str(&format!("IDC3002E VERIFY FAILED - {} NOT FOUND\n", dataset));
-            self.return_code = 8;
+            self.last_cc = 8;
         }
 
         Ok(())
@@ -702,7 +823,7 @@ impl Idcams {
                 "IDC3002E BLDINDEX FAILED - BASE CLUSTER {} NOT FOUND\n",
                 indataset
             ));
-            self.return_code = 8;
+            self.last_cc = 8;
             return Ok(());
         }
 
@@ -711,7 +832,7 @@ impl Idcams {
                 "IDC3002E BLDINDEX FAILED - AIX {} NOT FOUND\n",
                 outdataset
             ));
-            self.return_code = 8;
+            self.last_cc = 8;
             return Ok(());
         }
 
@@ -759,7 +880,7 @@ impl Idcams {
                     "IDC3002E EXPORT FAILED - {} NOT FOUND\n",
                     dataset
                 ));
-                self.return_code = 8;
+                self.last_cc = 8;
                 return Ok(());
             }
         };
@@ -801,7 +922,7 @@ impl Idcams {
                 "IDC3002E IMPORT FAILED - {} NOT FOUND\n",
                 infile
             ));
-            self.return_code = 8;
+            self.last_cc = 8;
             return Ok(());
         }
 
@@ -859,7 +980,7 @@ impl Idcams {
                 "IDC3002E EXAMINE FAILED - {} NOT FOUND\n",
                 name
             ));
-            self.return_code = 8;
+            self.last_cc = 8;
         }
         Ok(())
     }
@@ -878,18 +999,47 @@ impl Idcams {
                 "IDC3002E DIAGNOSE FAILED - {} NOT FOUND\n",
                 name
             ));
-            self.return_code = 8;
+            self.last_cc = 8;
         }
         Ok(())
     }
 
     /// Convert dataset name to file path.
+    ///
+    /// Handles both dataset names (`MY.DATA.SET` → `base_dir/MY/DATA/SET`)
+    /// and absolute filesystem paths (returned as-is, useful when DD file
+    /// paths are substituted for INFILE/OUTFILE references).
     fn name_to_path(&self, name: &str) -> PathBuf {
+        // If name looks like a filesystem path, use it directly.
+        // This handles cases where INFILE(dd) was resolved to INDATASET(path).
+        if name.starts_with('/') || name.contains('/') {
+            return PathBuf::from(name);
+        }
         let mut path = self.base_dir.clone();
         for component in name.split('.') {
             path.push(component);
         }
         path
+    }
+
+    /// Resolve a path for reading, handling file-at-directory conflicts.
+    ///
+    /// On z/OS, dataset qualifiers are flat: `A.B` and `A.B.C` coexist.
+    /// In filesystem mapping, `A.B` may have been renamed to `A/B/data`
+    /// when `A.B.C` required `A/B/` to be a directory. This method checks
+    /// for that fallback.
+    fn resolve_read_path(&self, path: &Path) -> PathBuf {
+        if !path.exists() && path.is_dir() {
+            // Shouldn't happen — directory exists but path doesn't — skip
+            return path.to_path_buf();
+        }
+        if path.is_dir() {
+            let data_path = path.join("data");
+            if data_path.exists() {
+                return data_path;
+            }
+        }
+        path.to_path_buf()
     }
 }
 
@@ -1568,6 +1718,142 @@ mod tests {
         assert!(result.is_success());
         assert!(result.output.contains("GDG MY.GDG DEFINED"));
         assert!(result.output.contains("TYPE: GDG"));
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_if_lastcc_set_maxcc_pattern() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut idcams = Idcams::new(&dir);
+
+        // First define should succeed
+        let result = idcams
+            .execute(
+                "DEFINE GENERATIONDATAGROUP -\n\
+                 (NAME(MY.GDG1) -\n\
+                 LIMIT(5) -\n\
+                 SCRATCH)\n\
+                 IF LASTCC=12 THEN SET MAXCC=0\n\
+                 DEFINE GENERATIONDATAGROUP -\n\
+                 (NAME(MY.GDG2) -\n\
+                 LIMIT(5) -\n\
+                 SCRATCH)\n\
+                 IF LASTCC=12 THEN SET MAXCC=0",
+            )
+            .unwrap();
+
+        assert!(result.is_success(), "Expected RC=0, got RC={}", result.return_code);
+        assert!(result.output.contains("GDG MY.GDG1 DEFINED"));
+        assert!(result.output.contains("GDG MY.GDG2 DEFINED"));
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_if_lastcc_suppresses_error() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut idcams = Idcams::new(&dir);
+
+        // Delete a non-existent dataset — would normally set RC=8
+        // but IF LASTCC=8 THEN SET MAXCC=0 suppresses it
+        let result = idcams
+            .execute(
+                "DELETE NO.SUCH.DATASET\n\
+                 IF LASTCC=8 THEN SET MAXCC=0",
+            )
+            .unwrap();
+
+        assert!(result.is_success(), "Expected RC=0 after suppression, got RC={}", result.return_code);
+
+        cleanup(&dir);
+    }
+
+    /// Test the DEFCUST scenario: DELETE of nonexistent dataset followed by
+    /// DEFINE CLUSTER. The DELETE returns RC=8 but the DEFINE should succeed (RC=0).
+    /// Overall MAXCC is 8 (DELETE failure). On a second run with cleanup, DEFINE
+    /// should succeed because the cluster was removed.
+    #[test]
+    fn test_defcust_scenario_delete_then_define() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        let mut idcams = Idcams::new(&dir);
+
+        // Simulate DEFCUST.jcl: DELETE nonexistent + DEFINE CLUSTER
+        let result = idcams
+            .execute(
+                "DELETE AWS.CCDA.CUSTDATA.CLUSTER CLUSTER",
+            )
+            .unwrap();
+        assert_eq!(result.return_code, 8, "DELETE of nonexistent should give RC=8");
+
+        // Fresh IDCAMS for the second step (separate JCL step)
+        let mut idcams2 = Idcams::new(&dir);
+        let result = idcams2
+            .execute(
+                "DEFINE CLUSTER (NAME(AWS.CUSTDATA.CLUSTER) -\n\
+                 CYLINDERS(1 5) -\n\
+                 KEYS(10 0) -\n\
+                 RECORDSIZE(500 500) -\n\
+                 INDEXED -\n\
+                 ) -\n\
+                 DATA (NAME(AWS.CUSTDATA.CLUSTER.DATA) -\n\
+                 ) -\n\
+                 INDEX (NAME(AWS.CUSTDATA.CLUSTER.INDEX) -\n\
+                 )",
+            )
+            .unwrap();
+        assert!(result.is_success(), "DEFINE CLUSTER should succeed, got RC={}: {}", result.return_code, result.output);
+
+        // Verify VSAM file was created
+        let vsam_path = dir.join("AWS/CUSTDATA/CLUSTER.vsam");
+        assert!(vsam_path.exists(), "VSAM file should exist at {:?}", vsam_path);
+
+        cleanup(&dir);
+    }
+
+    /// Test REPRO with a file that was moved into a directory due to
+    /// file-at-directory conflict (e.g. DALYTRAN.PS was a file, but
+    /// DALYTRAN.PS.INIT needs PS to be a directory).
+    #[test]
+    fn test_repro_with_data_file_in_directory() {
+        let dir = test_dir();
+        cleanup(&dir);
+
+        // Simulate the conflict: DALYTRAN/PS is a directory with the original
+        // file renamed to DALYTRAN/PS/data, and DALYTRAN/PS/INIT is the child file.
+        let dalytran_dir = dir.join("AWS/M2/CARDDEMO/DALYTRAN/PS");
+        fs::create_dir_all(&dalytran_dir).unwrap();
+        fs::write(dalytran_dir.join("data"), "original PS data").unwrap();
+        fs::write(dalytran_dir.join("INIT"), "init file content").unwrap();
+
+        let mut idcams = Idcams::new(&dir);
+
+        // REPRO from DALYTRAN.PS.INIT (should find the file at DALYTRAN/PS/INIT)
+        let result = idcams
+            .execute("REPRO INDATASET(AWS.M2.CARDDEMO.DALYTRAN.PS.INIT) OUTDATASET(AWS.M2.CARDDEMO.TRANSACT.COPY)")
+            .unwrap();
+        assert!(result.is_success(), "REPRO should succeed, got RC={}: {}", result.return_code, result.output);
+
+        // Verify the copy was made
+        let target = dir.join("AWS/M2/CARDDEMO/TRANSACT/COPY");
+        assert!(target.exists());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "init file content");
+
+        // Also test reading from the renamed .data file (DALYTRAN.PS)
+        let result2 = idcams
+            .execute("REPRO INDATASET(AWS.M2.CARDDEMO.DALYTRAN.PS) OUTDATASET(AWS.M2.CARDDEMO.DALYTRAN.COPY)")
+            .unwrap();
+        assert!(result2.is_success(), "REPRO from directory with data file should succeed, got RC={}: {}", result2.return_code, result2.output);
+
+        let target2 = dir.join("AWS/M2/CARDDEMO/DALYTRAN/COPY");
+        assert!(target2.exists());
+        assert_eq!(fs::read_to_string(&target2).unwrap(), "original PS data");
 
         cleanup(&dir);
     }

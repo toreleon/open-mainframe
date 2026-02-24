@@ -5,6 +5,11 @@
 
 use crate::dbd::{FieldDefinition, FieldType, SegmentDefinition};
 
+use open_mainframe_encoding::decimal::{
+    pack_from_i64, unpack_to_i64,
+    unzone_to_i64, zone_from_i64,
+};
+
 /// Extracts and packs field data from/to raw segment byte buffers.
 pub struct SegmentExtractor<'a> {
     /// The segment definition describing the field layout
@@ -153,135 +158,27 @@ impl<'a> SegmentExtractor<'a> {
 }
 
 /// Unpack a packed decimal (BCD) to i64.
-///
-/// Packed decimal format: each byte contains two decimal digits (4 bits each),
-/// except the last nibble which is the sign (C=positive, D=negative, F=unsigned).
+/// Delegates to `open_mainframe_encoding::decimal::unpack_to_i64`.
 fn unpack_packed_decimal(bytes: &[u8]) -> i64 {
-    if bytes.is_empty() {
-        return 0;
-    }
-
-    let mut result: i64 = 0;
-
-    // Process all bytes except last nibble (sign)
-    for (i, &b) in bytes.iter().enumerate() {
-        let high = (b >> 4) & 0x0F;
-        let low = b & 0x0F;
-
-        if i < bytes.len() - 1 {
-            // Both nibbles are digits
-            result = result * 10 + high as i64;
-            result = result * 10 + low as i64;
-        } else {
-            // Last byte: high nibble is digit, low is sign
-            result = result * 10 + high as i64;
-            if low == 0x0D {
-                result = -result;
-            }
-        }
-    }
-
-    result
+    unpack_to_i64(bytes)
 }
 
 /// Pack an i64 into packed decimal format.
+/// Delegates to `open_mainframe_encoding::decimal::pack_from_i64`.
 fn pack_packed_decimal(target: &mut [u8], value: i64) {
-    if target.is_empty() {
-        return;
-    }
-
-    let is_negative = value < 0;
-    let abs_val = value.unsigned_abs();
-
-    // Calculate total digits: (len * 2 - 1) digits
-    let total_digits = target.len() * 2 - 1;
-
-    // Extract digits
-    let mut digits = vec![0u8; total_digits];
-    let mut v = abs_val;
-    for d in digits.iter_mut().rev() {
-        *d = (v % 10) as u8;
-        v /= 10;
-    }
-
-    // Pack into bytes
-    let mut digit_idx = 0;
-    let last_idx = target.len() - 1;
-    for (i, byte) in target.iter_mut().enumerate() {
-        if i < last_idx {
-            let high = digits.get(digit_idx).copied().unwrap_or(0);
-            let low = digits.get(digit_idx + 1).copied().unwrap_or(0);
-            *byte = (high << 4) | low;
-            digit_idx += 2;
-        } else {
-            // Last byte: digit + sign
-            let high = digits.get(digit_idx).copied().unwrap_or(0);
-            let sign = if is_negative { 0x0D } else { 0x0C };
-            *byte = (high << 4) | sign;
-        }
-    }
+    pack_from_i64(value, target);
 }
 
 /// Unpack a zoned decimal to i64.
-///
-/// Zoned format: each byte has a zone nibble (F) and digit nibble.
-/// Last byte: zone nibble indicates sign (C=+, D=-, F=unsigned).
+/// Delegates to `open_mainframe_encoding::decimal::unzone_to_i64`.
 fn unpack_zoned_decimal(bytes: &[u8]) -> i64 {
-    if bytes.is_empty() {
-        return 0;
-    }
-
-    let mut result: i64 = 0;
-    let mut is_negative = false;
-
-    for (i, &b) in bytes.iter().enumerate() {
-        let digit = b & 0x0F;
-        result = result * 10 + digit as i64;
-
-        if i == bytes.len() - 1 {
-            let zone = (b >> 4) & 0x0F;
-            if zone == 0x0D {
-                is_negative = true;
-            }
-        }
-    }
-
-    if is_negative { -result } else { result }
+    unzone_to_i64(bytes)
 }
 
 /// Pack an i64 into zoned decimal format.
+/// Delegates to `open_mainframe_encoding::decimal::zone_from_i64`.
 fn pack_zoned_decimal(target: &mut [u8], value: i64) {
-    let is_negative = value < 0;
-    let abs_val = value.unsigned_abs();
-
-    let mut digits = Vec::new();
-    let mut v = abs_val;
-    if v == 0 {
-        digits.push(0u8);
-    }
-    while v > 0 {
-        digits.push((v % 10) as u8);
-        v /= 10;
-    }
-    digits.reverse();
-
-    // Right-justify
-    let target_len = target.len();
-    let start = target_len.saturating_sub(digits.len());
-    for (i, byte) in target.iter_mut().enumerate() {
-        let digit = if i >= start {
-            digits[i - start]
-        } else {
-            0
-        };
-
-        if i == target_len - 1 {
-            let sign = if is_negative { 0xD0 } else { 0xC0 };
-            *byte = sign | digit;
-        } else {
-            *byte = 0xF0 | digit;
-        }
-    }
+    zone_from_i64(value, target, true);
 }
 
 /// Unpack binary bytes to i64 (big-endian).

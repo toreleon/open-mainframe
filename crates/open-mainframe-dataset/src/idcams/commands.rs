@@ -172,6 +172,50 @@ pub enum IdcamsCommand {
         /// Catalog name.
         name: String,
     },
+
+    /// SET MAXCC - Set the maximum condition code.
+    SetMaxcc {
+        /// Value to set MAXCC to.
+        value: u32,
+    },
+
+    /// IF/THEN conditional - if condition met, execute the action.
+    IfThen {
+        /// Which variable to test (LASTCC or MAXCC).
+        variable: ConditionVariable,
+        /// Comparison operator.
+        operator: ConditionOp,
+        /// Value to compare against.
+        value: u32,
+        /// Action to execute if condition is true.
+        action: Box<IdcamsCommand>,
+    },
+}
+
+/// Variable names for IDCAMS IF conditions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConditionVariable {
+    /// LASTCC - return code of last command.
+    LastCc,
+    /// MAXCC - maximum return code so far.
+    MaxCc,
+}
+
+/// Comparison operators for IDCAMS IF conditions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConditionOp {
+    /// Equal.
+    Eq,
+    /// Not equal.
+    Ne,
+    /// Greater than.
+    Gt,
+    /// Greater than or equal.
+    Ge,
+    /// Less than.
+    Lt,
+    /// Less than or equal.
+    Le,
 }
 
 /// Result of executing IDCAMS commands.

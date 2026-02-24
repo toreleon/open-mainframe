@@ -246,7 +246,7 @@ impl<'a> Parser<'a> {
                 let end = rest.find(')').unwrap_or(rest.len());
                 let inner = &rest[1..end];
                 for lib in inner.split(',') {
-                    let lib = lib.trim();
+                    let lib = lib.trim().trim_matches('\'');
                     if !lib.is_empty() {
                         libs.push(lib.to_string());
                     }
@@ -256,7 +256,7 @@ impl<'a> Parser<'a> {
                 let end = rest
                     .find(|c: char| c == ',' || c.is_whitespace())
                     .unwrap_or(rest.len());
-                let lib = rest[..end].trim();
+                let lib = rest[..end].trim().trim_matches('\'');
                 if !lib.is_empty() {
                     libs.push(lib.to_string());
                 }
@@ -1051,12 +1051,36 @@ impl<'a> Parser<'a> {
                                 }
                             }
                             _ => {
+                                // Collect dotted names (e.g., AWS.M2.CARDDEMO.CNTL)
+                                // for symbolic parameter overrides in procedures.
                                 if let Token::Ident(v) | Token::String(v) = &tokens[idx] {
-                                    params.other.insert(key.clone(), v.clone());
+                                    let mut full_name = v.clone();
+                                    idx += 1;
+                                    while idx + 1 < tokens.len() {
+                                        if matches!(tokens[idx], Token::Period) {
+                                            if let Token::Ident(ref next) = tokens[idx + 1] {
+                                                full_name.push('.');
+                                                full_name.push_str(next);
+                                                idx += 2;
+                                            } else {
+                                                break;
+                                            }
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    params.other.insert(key.clone(), full_name);
+                                } else {
+                                    idx += 1;
                                 }
                             }
                         }
-                        idx += 1;
+                        // Advance past the value token for standard keywords.
+                        // The _ (default) case already advanced idx in its loop.
+                        match key.as_str() {
+                            "PGM" | "PROC" | "PARM" | "REGION" | "COND" | "TIME" => { idx += 1; }
+                            _ => {} // already advanced
+                        }
                     }
                 } else if exec_type.is_none() {
                     // Bare name could be procedure name
@@ -1288,7 +1312,8 @@ impl<'a> Parser<'a> {
 
         // Check for inline data (*)
         if matches!(&tokens[0], Token::Asterisk) {
-            let mut dd = DdStatement::inline(dd_name, Vec::new());
+            let inline_data = self.statements[self.current].inline_data.clone();
+            let mut dd = DdStatement::inline(dd_name, inline_data);
             dd.span = dd_span;
             return Ok(dd);
         }
@@ -2467,10 +2492,7 @@ mod tests {
 
     #[test]
     fn test_parse_vsam_with_amp() {
-        let jcl = r#"//MYJOB    JOB CLASS=A
-//STEP1    EXEC PGM=VSAMPROC
-//VSAMDD   DD DSN=MY.KSDS.CLUSTER,DISP=SHR,AMP=(BUFND=10,BUFNI=5,MODE=DIR)
-//"#;
+        let jcl = "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=VSAMPROC\n//VSAMDD   DD DSN=MY.KSDS.CLUSTER,DISP=SHR,\n//             AMP=(BUFND=10,BUFNI=5,MODE=DIR)\n//\n";
 
         let job = parse(jcl).unwrap();
         let steps = job.steps();
@@ -3612,16 +3634,49 @@ mod tests {
         }
     }
 
-    /// Story 109.2: Inline data DD parsed as Inline definition.
+    /// Story 109.2: Inline data DD parsed as Inline definition with data lines.
     #[test]
     fn test_parse_inline_data_default_delim() {
         let jcl = "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=T\n//SYSIN    DD *\n  SORT FIELDS=(1,10,CH,A)\n/*\n//";
         let job = parse(jcl).unwrap();
         let dd = &job.steps()[0].dd_statements[0];
         assert_eq!(dd.name, "SYSIN");
-        // Parser creates an Inline definition; data lines are consumed by the lexer
-        assert!(matches!(dd.definition, DdDefinition::Inline(_)),
-            "Expected Inline definition, got {:?}", dd.definition);
+        if let DdDefinition::Inline(ref def) = dd.definition {
+            assert_eq!(def.data.len(), 1);
+            assert!(def.data[0].contains("SORT FIELDS"));
+        } else {
+            panic!("Expected Inline definition, got {:?}", dd.definition);
+        }
+    }
+
+    /// Story 109.2: Multiple inline data DDs — SYMNAMES terminated by next // statement.
+    #[test]
+    fn test_parse_multiple_inline_dds() {
+        let jcl = "//MYJOB    JOB CLASS=A\n//STEP1    EXEC PGM=SORT\n//SYMNAMES DD *\nTRAN-ID,1,16,CH\n//SYSIN    DD *\n SORT FIELDS=(TRAN-ID,A)\n/*\n//SYSOUT   DD SYSOUT=*\n//";
+        let job = parse(jcl).unwrap();
+        let dds = &job.steps()[0].dd_statements;
+
+        // SYMNAMES should have 1 line of inline data
+        assert_eq!(dds[0].name, "SYMNAMES");
+        if let DdDefinition::Inline(ref def) = dds[0].definition {
+            assert_eq!(def.data.len(), 1);
+            assert!(def.data[0].contains("TRAN-ID"), "Expected TRAN-ID in SYMNAMES data, got: {:?}", def.data);
+        } else {
+            panic!("Expected Inline definition for SYMNAMES");
+        }
+
+        // SYSIN should have 1 line of inline data
+        assert_eq!(dds[1].name, "SYSIN");
+        if let DdDefinition::Inline(ref def) = dds[1].definition {
+            assert_eq!(def.data.len(), 1);
+            assert!(def.data[0].contains("SORT FIELDS"), "Expected SORT FIELDS in SYSIN data, got: {:?}", def.data);
+        } else {
+            panic!("Expected Inline definition for SYSIN");
+        }
+
+        // SYSOUT should be parsed as Sysout
+        assert_eq!(dds[2].name, "SYSOUT");
+        assert!(matches!(dds[2].definition, DdDefinition::Sysout(_)));
     }
 
     /// Story 109.2: SYSOUT with writer and form.
@@ -3701,5 +3756,47 @@ mod tests {
         } else {
             panic!("Expected Dataset");
         }
+    }
+
+    /// JCLLIB ORDER with quoted dataset names should strip single quotes.
+    #[test]
+    fn test_jcllib_strips_single_quotes() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//         JCLLIB ORDER=('AWS.M2.CARDDEMO.PROC','SYS1.PROCLIB')
+//STEP1    EXEC PGM=IEFBR14
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(
+            job.jcllib_order,
+            vec![
+                "AWS.M2.CARDDEMO.PROC".to_string(),
+                "SYS1.PROCLIB".to_string(),
+            ]
+        );
+    }
+
+    /// JCLLIB ORDER with a single unquoted library name.
+    #[test]
+    fn test_jcllib_single_unquoted() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//         JCLLIB ORDER=MY.PROC.LIB
+//STEP1    EXEC PGM=IEFBR14
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.jcllib_order, vec!["MY.PROC.LIB".to_string()]);
+    }
+
+    /// JCLLIB ORDER with a single quoted library name.
+    #[test]
+    fn test_jcllib_single_quoted() {
+        let jcl = r#"//MYJOB    JOB CLASS=A
+//         JCLLIB ORDER='MY.PROC.LIB'
+//STEP1    EXEC PGM=IEFBR14
+//"#;
+
+        let job = parse(jcl).unwrap();
+        assert_eq!(job.jcllib_order, vec!["MY.PROC.LIB".to_string()]);
     }
 }

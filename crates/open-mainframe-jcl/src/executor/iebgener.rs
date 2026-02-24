@@ -26,6 +26,10 @@ use super::utility::{
     read_sysin_statements, UtilityOutput,
     RC_ERROR, RC_CTRL_ERROR,
 };
+use open_mainframe_encoding::decimal::{
+    pack_from_i64, unpack_to_i64,
+    unzone_to_i64, zone_from_i64,
+};
 
 // =========================================================================
 // Control statement types
@@ -120,8 +124,9 @@ enum IebgenerStmt {
 /// IEBGENER — Enhanced sequential copy/generate utility.
 pub struct Iebgener;
 
-impl super::utility::UtilityProgram for Iebgener {
-    fn execute(
+impl Iebgener {
+    /// Execute the IEBGENER utility with file-based DD mappings.
+    pub fn execute(
         &self,
         step_name: Option<&str>,
         dd_files: &HashMap<String, PathBuf>,
@@ -161,9 +166,6 @@ impl super::utility::UtilityProgram for Iebgener {
         record_reformat(sysut1, sysut2, &stmts, step_name, out)
     }
 
-    fn name(&self) -> &str {
-        "IEBGENER"
-    }
 }
 
 // =========================================================================
@@ -467,82 +469,23 @@ fn apply_conversion(data: &[u8], conv: FieldConversion) -> Vec<u8> {
 }
 
 /// Convert packed decimal to zoned decimal.
-///
-/// Packed: each byte has two digits (high nibble, low nibble), last byte
-/// has digit + sign nibble. Sign: C=positive, D=negative, F=unsigned.
-///
-/// Zoned: each byte = zone nibble (F) + digit nibble. Last byte has sign
-/// in zone nibble.
+/// Delegates to encoding crate: unpack → i64 → zone.
 fn packed_to_zoned(packed: &[u8]) -> Vec<u8> {
-    let mut digits = Vec::new();
-    let mut sign: u8 = 0xF0; // Default: unsigned (F zone)
-
-    for (i, &b) in packed.iter().enumerate() {
-        let hi = (b >> 4) & 0x0F;
-        let lo = b & 0x0F;
-
-        if i == packed.len() - 1 {
-            // Last byte: hi is digit, lo is sign
-            digits.push(hi);
-            sign = match lo {
-                0x0C => 0xC0, // positive
-                0x0D => 0xD0, // negative
-                _ => 0xF0,    // unsigned
-            };
-        } else {
-            digits.push(hi);
-            digits.push(lo);
-        }
-    }
-
-    // Build zoned: F0+digit for all but last, sign+digit for last
-    let mut result = Vec::with_capacity(digits.len());
-    for (i, &d) in digits.iter().enumerate() {
-        if i == digits.len() - 1 {
-            result.push(sign | d);
-        } else {
-            result.push(0xF0 | d);
-        }
-    }
-    result
+    let value = unpack_to_i64(packed);
+    let zoned_len = packed.len() * 2 - 1;
+    let mut buf = vec![0u8; zoned_len];
+    zone_from_i64(value, &mut buf, true);
+    buf
 }
 
 /// Convert zoned decimal to packed decimal.
-///
-/// Zoned: each byte = zone nibble + digit nibble.
-/// Packed: pairs of digits, last byte = last digit + sign nibble.
+/// Delegates to encoding crate: unzone → i64 → pack.
 fn zoned_to_packed(zoned: &[u8]) -> Vec<u8> {
-    let mut digits: Vec<u8> = Vec::new();
-    let mut sign: u8 = 0x0F; // Default: unsigned
-
-    for (i, &b) in zoned.iter().enumerate() {
-        let digit = b & 0x0F;
-        digits.push(digit);
-        if i == zoned.len() - 1 {
-            let zone = (b >> 4) & 0x0F;
-            sign = match zone {
-                0x0C => 0x0C,
-                0x0D => 0x0D,
-                _ => 0x0F,
-            };
-        }
-    }
-
-    // Pack: two digits per byte, last byte = last digit + sign
-    // If odd number of digits, prepend a zero
-    if digits.len() % 2 == 0 {
-        digits.insert(0, 0);
-    }
-
-    let mut result = Vec::new();
-    let mut i = 0;
-    while i < digits.len() - 1 {
-        result.push((digits[i] << 4) | digits[i + 1]);
-        i += 2;
-    }
-    // Last digit + sign
-    result.push((digits[digits.len() - 1] << 4) | sign);
-    result
+    let value = unzone_to_i64(zoned);
+    let packed_len = (zoned.len() + 1) / 2;
+    let mut buf = vec![0u8; packed_len];
+    pack_from_i64(value, &mut buf);
+    buf
 }
 
 /// Convert hex representation to EBCDIC characters.
@@ -772,7 +715,7 @@ fn parse_kv_pairs(s: &str) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::executor::utility::{UtilityProgram, RC_WARNING};
+    use crate::executor::utility::RC_WARNING;
     use std::fs;
 
     #[test]

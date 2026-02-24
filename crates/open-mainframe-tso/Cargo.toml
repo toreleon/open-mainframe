@@ -14,3 +14,4 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 open-mainframe-jes2 = { path = "../open-mainframe-jes2" }
+open-mainframe-rexx = { path = "../open-mainframe-rexx" }

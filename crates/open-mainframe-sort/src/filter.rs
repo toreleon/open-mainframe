@@ -2,6 +2,11 @@
 
 use crate::fields::DataType;
 
+use open_mainframe_encoding::decimal::{
+    unpack_to_i64,
+    unzone_to_i64,
+};
+
 /// Type of filter operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterType {
@@ -127,49 +132,12 @@ fn compare_values(a: &[u8], b: &[u8], data_type: DataType) -> std::cmp::Ordering
 
 /// Parse zoned decimal.
 fn parse_zoned_decimal(data: &[u8]) -> i64 {
-    if data.is_empty() {
-        return 0;
-    }
-
-    let mut value: i64 = 0;
-    let mut negative = false;
-
-    for (i, &byte) in data.iter().enumerate() {
-        let digit = (byte & 0x0F) as i64;
-        if i == data.len() - 1 {
-            let sign = byte >> 4;
-            negative = sign == 0x0D || sign == 0x0B;
-        }
-        value = value * 10 + digit;
-    }
-
-    if negative { -value } else { value }
+    unzone_to_i64(data)
 }
 
 /// Parse packed decimal.
 fn parse_packed_decimal(data: &[u8]) -> i64 {
-    if data.is_empty() {
-        return 0;
-    }
-
-    let mut value: i64 = 0;
-
-    for (i, &byte) in data.iter().enumerate() {
-        if i == data.len() - 1 {
-            let digit = (byte >> 4) as i64;
-            value = value * 10 + digit;
-            let sign = byte & 0x0F;
-            if sign == 0x0D || sign == 0x0B {
-                value = -value;
-            }
-        } else {
-            let high = (byte >> 4) as i64;
-            let low = (byte & 0x0F) as i64;
-            value = value * 100 + high * 10 + low;
-        }
-    }
-
-    value
+    unpack_to_i64(data)
 }
 
 /// Parse binary.

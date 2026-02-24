@@ -261,6 +261,77 @@ pub fn unpack_decimal(bytes: &[u8], decimal_digits: usize) -> Result<(Decimal, S
     Ok((value, sign))
 }
 
+// ─────────────────────── i64 helpers ───────────────────────
+
+/// Parse packed decimal bytes directly to i64.
+///
+/// Lightweight version for use cases that don't need fractional
+/// decimal places (e.g., SORT field comparison, IMS segment extraction).
+///
+/// Sign nibble: 0x0C/0x0A/0x0E = positive, 0x0D/0x0B = negative, 0x0F = unsigned.
+pub fn unpack_to_i64(bytes: &[u8]) -> i64 {
+    if bytes.is_empty() {
+        return 0;
+    }
+
+    let mut value: i64 = 0;
+
+    for (i, &byte) in bytes.iter().enumerate() {
+        let high = (byte >> 4) & 0x0F;
+        let low = byte & 0x0F;
+
+        if i == bytes.len() - 1 {
+            // Last byte: high nibble is digit, low nibble is sign
+            value = value * 10 + high as i64;
+            if low == 0x0D || low == 0x0B {
+                value = -value;
+            }
+        } else {
+            // Non-last bytes: both nibbles are digits
+            value = value * 100 + high as i64 * 10 + low as i64;
+        }
+    }
+
+    value
+}
+
+/// Pack an i64 value into packed decimal bytes.
+///
+/// The target slice determines the field width. Digits are right-justified
+/// with leading zeros. The sign nibble is written in the last byte's low nibble.
+pub fn pack_from_i64(value: i64, target: &mut [u8]) {
+    if target.is_empty() {
+        return;
+    }
+
+    let is_negative = value < 0;
+    let abs_val = value.unsigned_abs();
+
+    // Total digit capacity: (len * 2) - 1 (last nibble is sign)
+    let total_digits = target.len() * 2 - 1;
+    let mut digits = vec![0u8; total_digits];
+    let mut v = abs_val;
+    for d in digits.iter_mut().rev() {
+        *d = (v % 10) as u8;
+        v /= 10;
+    }
+
+    let mut digit_idx = 0;
+    let last_idx = target.len() - 1;
+    for (i, byte) in target.iter_mut().enumerate() {
+        if i < last_idx {
+            let high = digits.get(digit_idx).copied().unwrap_or(0);
+            let low = digits.get(digit_idx + 1).copied().unwrap_or(0);
+            *byte = (high << 4) | low;
+            digit_idx += 2;
+        } else {
+            let high = digits.get(digit_idx).copied().unwrap_or(0);
+            let sign: u8 = if is_negative { 0x0D } else { 0x0C };
+            *byte = (high << 4) | sign;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,5 +473,58 @@ mod tests {
 
         let (unpacked, _sign) = unpack_decimal(&packed, 0).unwrap();
         assert_eq!(unpacked, Decimal::from(5));
+    }
+
+    // ─── i64 helper tests ───
+
+    #[test]
+    fn test_unpack_to_i64_positive() {
+        assert_eq!(unpack_to_i64(&[0x12, 0x34, 0x5C]), 12345);
+    }
+
+    #[test]
+    fn test_unpack_to_i64_negative() {
+        assert_eq!(unpack_to_i64(&[0x12, 0x34, 0x5D]), -12345);
+    }
+
+    #[test]
+    fn test_unpack_to_i64_unsigned() {
+        assert_eq!(unpack_to_i64(&[0x12, 0x34, 0x5F]), 12345);
+    }
+
+    #[test]
+    fn test_unpack_to_i64_empty() {
+        assert_eq!(unpack_to_i64(&[]), 0);
+    }
+
+    #[test]
+    fn test_pack_from_i64_positive() {
+        let mut buf = [0u8; 3];
+        pack_from_i64(12345, &mut buf);
+        assert_eq!(buf, [0x12, 0x34, 0x5C]);
+    }
+
+    #[test]
+    fn test_pack_from_i64_negative() {
+        let mut buf = [0u8; 3];
+        pack_from_i64(-12345, &mut buf);
+        assert_eq!(buf, [0x12, 0x34, 0x5D]);
+    }
+
+    #[test]
+    fn test_pack_from_i64_even_digits() {
+        let mut buf = [0u8; 4];
+        pack_from_i64(123456, &mut buf);
+        assert_eq!(buf, [0x01, 0x23, 0x45, 0x6C]);
+    }
+
+    #[test]
+    fn test_i64_roundtrip() {
+        let mut buf = [0u8; 3];
+        pack_from_i64(12345, &mut buf);
+        assert_eq!(unpack_to_i64(&buf), 12345);
+
+        pack_from_i64(-999, &mut buf);
+        assert_eq!(unpack_to_i64(&buf), -999);
     }
 }

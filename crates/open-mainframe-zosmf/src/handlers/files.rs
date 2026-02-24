@@ -79,6 +79,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/zosmf/restfiles/fs/{*path}", put(write_file))
         .route("/zosmf/restfiles/fs/{*path}", post(create_dir))
         .route("/zosmf/restfiles/fs/{*path}", delete(delete_path))
+        // Mounted filesystem routes
+        .route("/zosmf/restfiles/mfs", get(list_filesystems))
+        .route("/zosmf/restfiles/mfs/{fsname}", put(mount_filesystem))
 }
 
 /// USS directory entry in list responses (matches real z/OSMF format).
@@ -680,6 +683,71 @@ async fn delete_path_impl(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ─── Mounted Filesystem (MFS) handlers ───
+
+/// A mounted filesystem entry.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MfsEntry {
+    /// Filesystem name.
+    pub name: String,
+    /// Mount point.
+    pub mount_point: String,
+    /// Filesystem type (e.g., "ZFS", "HFS", "TFS").
+    pub fstname: String,
+    /// Status.
+    pub status: String,
+    /// Mode (read-write or read-only).
+    pub mode: Vec<String>,
+}
+
+/// Response for listing mounted filesystems.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MfsListResponse {
+    pub items: Vec<MfsEntry>,
+    pub returned_rows: usize,
+}
+
+/// GET /zosmf/restfiles/mfs — list mounted filesystems.
+async fn list_filesystems(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+) -> Json<MfsListResponse> {
+    // Return the emulated root filesystem.
+    let root = MfsEntry {
+        name: "OMVS.ROOT".to_string(),
+        mount_point: "/".to_string(),
+        fstname: "ZFS".to_string(),
+        status: "active".to_string(),
+        mode: vec!["rdwr".to_string()],
+    };
+
+    let uss_entry = MfsEntry {
+        name: "OMVS.USR".to_string(),
+        mount_point: state.config.uss.root_directory.clone(),
+        fstname: "ZFS".to_string(),
+        status: "active".to_string(),
+        mode: vec!["rdwr".to_string()],
+    };
+
+    Json(MfsListResponse {
+        returned_rows: 2,
+        items: vec![root, uss_entry],
+    })
+}
+
+/// PUT /zosmf/restfiles/mfs/:fsname — mount or unmount a filesystem (stub).
+async fn mount_filesystem(
+    State(_state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Path(fsname): Path<String>,
+) -> StatusCode {
+    // Mount/unmount is a no-op in our emulation.
+    let _ = fsname;
+    StatusCode::NO_CONTENT
+}
+
 // ─── Query-param-based route handlers (Zowe CLI sends ?path=/) ───
 
 /// GET /zosmf/restfiles/fs?path=/ — list directory or read file.
@@ -793,5 +861,37 @@ mod tests {
         assert!(json.contains("\"returnedRows\":2"));
         assert!(!json.contains("\"totalRows\""));
         assert!(json.contains("\"JSONversion\":1"));
+    }
+
+    #[test]
+    fn test_mfs_entry_serialization() {
+        let entry = MfsEntry {
+            name: "OMVS.ROOT".to_string(),
+            mount_point: "/".to_string(),
+            fstname: "ZFS".to_string(),
+            status: "active".to_string(),
+            mode: vec!["rdwr".to_string()],
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"name\":\"OMVS.ROOT\""));
+        assert!(json.contains("\"mountPoint\":\"/\""));
+        assert!(json.contains("\"fstname\":\"ZFS\""));
+    }
+
+    #[test]
+    fn test_mfs_list_response() {
+        let resp = MfsListResponse {
+            items: vec![MfsEntry {
+                name: "OMVS.ROOT".to_string(),
+                mount_point: "/".to_string(),
+                fstname: "ZFS".to_string(),
+                status: "active".to_string(),
+                mode: vec!["rdwr".to_string()],
+            }],
+            returned_rows: 1,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"returnedRows\":1"));
+        assert!(json.contains("\"mountPoint\":\"/\""));
     }
 }

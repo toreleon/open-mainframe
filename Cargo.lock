@@ -1394,6 +1394,7 @@ dependencies = [
 name = "open-mainframe-ims"
 version = "0.1.0"
 dependencies = [
+ "open-mainframe-encoding",
  "postgres",
  "serde",
  "serde_json",
@@ -1416,8 +1417,10 @@ version = "0.1.0"
 dependencies = [
  "miette",
  "open-mainframe-dataset",
+ "open-mainframe-encoding",
  "open-mainframe-lang-core",
  "open-mainframe-sort",
+ "open-mainframe-utilities",
  "thiserror",
 ]
 
@@ -1509,6 +1512,8 @@ name = "open-mainframe-precompilers"
 version = "0.1.0"
 dependencies = [
  "miette",
+ "open-mainframe-cics",
+ "open-mainframe-db2",
  "thiserror",
 ]
 
@@ -1558,6 +1563,7 @@ dependencies = [
 name = "open-mainframe-sort"
 version = "0.1.0"
 dependencies = [
+ "open-mainframe-encoding",
  "thiserror",
 ]
 
@@ -1575,6 +1581,7 @@ version = "0.1.0"
 dependencies = [
  "miette",
  "open-mainframe-jes2",
+ "open-mainframe-rexx",
  "serde",
  "serde_json",
  "thiserror",
@@ -1634,12 +1641,15 @@ dependencies = [
  "dashmap",
  "hmac",
  "miette",
+ "open-mainframe-cics",
  "open-mainframe-dataset",
  "open-mainframe-encoding",
  "open-mainframe-jcl",
  "open-mainframe-jes2",
+ "open-mainframe-parmlib",
  "open-mainframe-racf",
  "open-mainframe-tso",
+ "open-mainframe-wlm",
  "serde",
  "serde_json",
  "sha2",

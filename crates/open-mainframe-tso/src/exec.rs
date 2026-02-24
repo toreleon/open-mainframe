@@ -95,13 +95,7 @@ fn cmd_exec(session: &mut TsoSession, cmd: &ParsedCommand) -> CommandResult {
 
     match exec_type {
         ExecType::Rexx => {
-            // REXX execution placeholder — actual engine is in the REXX crate (R100-R109).
-            // For now, produce a stub result.
-            CommandResult::ok(vec![
-                format!("IKJ56471I EXECUTING {dsn} (REXX)"),
-                format!("IKJ56472I REXX EXEC ARGS: {args}"),
-                "IKJ56473I REXX INTERPRETER NOT YET AVAILABLE".to_string(),
-            ])
+            execute_rexx_source(&dsn, &source, &args)
         }
         ExecType::Clist | ExecType::Unknown => {
             // CLIST execution — execute each line as a TSO command.
@@ -149,6 +143,45 @@ fn execute_clist(
     }
 
     ExecResult { rc: max_rc, output }
+}
+
+// ---------------------------------------------------------------------------
+// REXX execution — delegates to open-mainframe-rexx interpreter
+// ---------------------------------------------------------------------------
+
+/// Lex, parse, and interpret a REXX source string using the REXX crate.
+fn execute_rexx_source(dsn: &str, source: &str, _args: &str) -> CommandResult {
+    let mut lines = vec![format!("IKJ56471I EXECUTING {dsn} (REXX)")];
+
+    let tokens = match open_mainframe_rexx::lex(source) {
+        Ok(t) => t,
+        Err(e) => {
+            lines.push(format!("IKJ56500I REXX LEXER ERROR: {e}"));
+            return CommandResult { output: lines, rc: 20 };
+        }
+    };
+
+    let program = match open_mainframe_rexx::parse(&tokens) {
+        Ok(p) => p,
+        Err(e) => {
+            lines.push(format!("IKJ56501I REXX PARSE ERROR: {e}"));
+            return CommandResult { output: lines, rc: 20 };
+        }
+    };
+
+    match open_mainframe_rexx::interpret(&program) {
+        Ok(result) => {
+            lines.extend(result.output);
+            CommandResult {
+                output: lines,
+                rc: result.rc.max(0) as u32,
+            }
+        }
+        Err(e) => {
+            lines.push(format!("IKJ56502I REXX RUNTIME ERROR: {e}"));
+            CommandResult { output: lines, rc: 20 }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -239,9 +272,11 @@ pub fn batch_rexx(
 
     match exec_type {
         ExecType::Rexx => {
-            io.putline(&format!("IKJ56471I EXECUTING {dsn} (REXX)"));
-            io.putline("IKJ56473I REXX INTERPRETER NOT YET AVAILABLE");
-            8
+            let result = execute_rexx_source(&dsn, &source, "");
+            for line in &result.output {
+                io.putline(line);
+            }
+            result.rc
         }
         ExecType::Clist | ExecType::Unknown => {
             io.putline(&format!("IKJ56471I EXECUTING {dsn} (CLIST)"));

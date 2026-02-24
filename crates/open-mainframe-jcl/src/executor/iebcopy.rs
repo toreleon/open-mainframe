@@ -51,8 +51,9 @@ struct SelectEntry {
 /// IEBCOPY utility implementation.
 pub struct Iebcopy;
 
-impl super::utility::UtilityProgram for Iebcopy {
-    fn execute(
+impl Iebcopy {
+    /// Execute the IEBCOPY utility with file-based DD mappings.
+    pub fn execute(
         &self,
         step_name: Option<&str>,
         dd_files: &HashMap<String, PathBuf>,
@@ -291,9 +292,6 @@ impl super::utility::UtilityProgram for Iebcopy {
         Ok(out.into_step_result(step_name))
     }
 
-    fn name(&self) -> &str {
-        "IEBCOPY"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +517,7 @@ fn parse_kv(s: &str) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::executor::utility::{UtilityProgram, RC_WARNING};
+    use crate::executor::utility::RC_WARNING;
     use std::fs;
 
     fn create_test_pds(dir: &std::path::Path, members: &[(&str, &str)]) -> PathBuf {

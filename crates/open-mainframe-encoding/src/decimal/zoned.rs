@@ -245,6 +245,75 @@ pub fn unzone_decimal(bytes: &[u8], decimal_digits: usize) -> Result<(Decimal, S
     Ok((value, sign))
 }
 
+// ─────────────────────── i64 helpers ───────────────────────
+
+/// Parse zoned decimal bytes directly to i64.
+///
+/// Lightweight version for use cases that don't need fractional
+/// decimal places (e.g., SORT field comparison, IMS segment extraction).
+///
+/// Zone nibble of last byte determines sign: 0xD/0xB = negative, others = positive/unsigned.
+pub fn unzone_to_i64(bytes: &[u8]) -> i64 {
+    if bytes.is_empty() {
+        return 0;
+    }
+
+    let mut value: i64 = 0;
+    let mut negative = false;
+
+    for (i, &byte) in bytes.iter().enumerate() {
+        let digit = (byte & 0x0F) as i64;
+        value = value * 10 + digit;
+
+        if i == bytes.len() - 1 {
+            let sign = (byte >> 4) & 0x0F;
+            negative = sign == 0x0D || sign == 0x0B;
+        }
+    }
+
+    if negative { -value } else { value }
+}
+
+/// Pack an i64 value into zoned decimal bytes.
+///
+/// The target slice determines the field width. Digits are right-justified
+/// with leading zeros. The sign is encoded in the zone nibble of the last byte:
+/// 0xC0 = positive, 0xD0 = negative, 0xF0 = unsigned (when `signed` is false).
+pub fn zone_from_i64(value: i64, target: &mut [u8], signed: bool) {
+    let is_negative = value < 0;
+    let abs_val = value.unsigned_abs();
+
+    let mut digits = Vec::new();
+    let mut v = abs_val;
+    if v == 0 {
+        digits.push(0u8);
+    } else {
+        while v > 0 {
+            digits.push((v % 10) as u8);
+            v /= 10;
+        }
+    }
+    digits.reverse();
+
+    let len = target.len();
+    let start = len.saturating_sub(digits.len());
+    for (i, byte) in target.iter_mut().enumerate() {
+        let digit = if i >= start { digits[i - start] } else { 0 };
+        if i == len - 1 {
+            let zone = if !signed {
+                0xF0
+            } else if is_negative {
+                0xD0
+            } else {
+                0xC0
+            };
+            *byte = zone | digit;
+        } else {
+            *byte = 0xF0 | digit;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +381,58 @@ mod tests {
         let encoded = zd.encode().unwrap();
         let decoded = ZonedDecimal::decode(&encoded, 0).unwrap();
         assert_eq!(zd.value, decoded.value);
+    }
+
+    // ─── i64 helper tests ───
+
+    #[test]
+    fn test_unzone_to_i64_positive() {
+        assert_eq!(unzone_to_i64(&[0xF1, 0xF2, 0xF3, 0xF4, 0xC5]), 12345);
+    }
+
+    #[test]
+    fn test_unzone_to_i64_negative() {
+        assert_eq!(unzone_to_i64(&[0xF1, 0xF2, 0xF3, 0xF4, 0xD5]), -12345);
+    }
+
+    #[test]
+    fn test_unzone_to_i64_unsigned() {
+        assert_eq!(unzone_to_i64(&[0xF1, 0xF2, 0xF3, 0xF4, 0xF5]), 12345);
+    }
+
+    #[test]
+    fn test_unzone_to_i64_empty() {
+        assert_eq!(unzone_to_i64(&[]), 0);
+    }
+
+    #[test]
+    fn test_zone_from_i64_positive() {
+        let mut buf = [0u8; 5];
+        zone_from_i64(12345, &mut buf, true);
+        assert_eq!(buf, [0xF1, 0xF2, 0xF3, 0xF4, 0xC5]);
+    }
+
+    #[test]
+    fn test_zone_from_i64_negative() {
+        let mut buf = [0u8; 5];
+        zone_from_i64(-12345, &mut buf, true);
+        assert_eq!(buf, [0xF1, 0xF2, 0xF3, 0xF4, 0xD5]);
+    }
+
+    #[test]
+    fn test_zone_from_i64_unsigned() {
+        let mut buf = [0u8; 5];
+        zone_from_i64(12345, &mut buf, false);
+        assert_eq!(buf, [0xF1, 0xF2, 0xF3, 0xF4, 0xF5]);
+    }
+
+    #[test]
+    fn test_i64_zoned_roundtrip() {
+        let mut buf = [0u8; 5];
+        zone_from_i64(12345, &mut buf, true);
+        assert_eq!(unzone_to_i64(&buf), 12345);
+
+        zone_from_i64(-999, &mut buf, true);
+        assert_eq!(unzone_to_i64(&buf), -999);
     }
 }

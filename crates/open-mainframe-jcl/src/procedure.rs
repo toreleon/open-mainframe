@@ -243,6 +243,8 @@ impl ProcedureExpander {
     /// Parse a cataloged procedure JCL text into an InStreamProc.
     ///
     /// Cataloged procedures may or may not have PROC/PEND wrappers.
+    /// Handles JCL continuation lines: when operands end with a trailing
+    /// comma, the next `//` line (with a blank name field) is a continuation.
     fn parse_cataloged_proc(
         &self,
         name: &str,
@@ -251,30 +253,82 @@ impl ProcedureExpander {
         let mut defaults = SymbolTable::new();
         let mut statements = Vec::new();
 
-        // Parse line by line
-        for line in jcl_text.lines() {
-            let trimmed = line.trim();
+        // First pass: collect logical lines by joining continuations.
+        // A JCL line ending with ',' (after trimming trailing spaces) means
+        // the next '//' line with a blank name field is a continuation.
+        let mut logical_lines: Vec<(Option<String>, String, String)> = Vec::new(); // (name, operation, operands)
+
+        let lines: Vec<&str> = jcl_text.lines().collect();
+        let mut i = 0;
+        while i < lines.len() {
+            let trimmed = lines[i].trim();
             if trimmed.is_empty() || trimmed.starts_with("//*") || trimmed.starts_with("/*") {
+                i += 1;
                 continue;
             }
             if !trimmed.starts_with("//") {
+                i += 1;
                 continue;
             }
             let content = &trimmed[2..];
             if content.trim().is_empty() {
+                i += 1;
                 continue;
             }
 
-            // Parse name and operation
             let (stmt_name, rest) = parse_name_field(content);
             let rest_trimmed = rest.trim_start();
             if rest_trimmed.is_empty() {
+                i += 1;
                 continue;
             }
 
             let (operation, operands) = split_operation(rest_trimmed);
-            let operation_upper = operation.to_uppercase();
 
+            // Check if this is a continuation line (no name, no recognized operation)
+            // rather than a new statement. If so, skip — it was already consumed.
+            // We only process lines that start a new statement.
+            if stmt_name.is_none() && !is_jcl_operation(operation) {
+                i += 1;
+                continue;
+            }
+
+            let mut full_operands = operands.trim_end().to_string();
+
+            // Collect continuation lines while operands end with ','
+            while full_operands.ends_with(',') && i + 1 < lines.len() {
+                i += 1;
+                let next_trimmed = lines[i].trim();
+                if next_trimmed.is_empty()
+                    || next_trimmed.starts_with("//*")
+                    || next_trimmed.starts_with("/*")
+                {
+                    continue; // Skip comments between continuations
+                }
+                if !next_trimmed.starts_with("//") {
+                    break;
+                }
+                let next_content = &next_trimmed[2..];
+                let cont_text = next_content.trim();
+                if cont_text.is_empty() {
+                    continue;
+                }
+                // Continuation lines have blank name field (start with spaces)
+                if !next_content.starts_with(' ') && !next_content.starts_with('\t') {
+                    // This is a new named statement, not a continuation
+                    // Back up so the outer loop processes it
+                    i -= 1;
+                    break;
+                }
+                full_operands.push_str(cont_text);
+            }
+
+            logical_lines.push((stmt_name, operation.to_uppercase(), full_operands));
+            i += 1;
+        }
+
+        // Second pass: process logical lines
+        for (stmt_name, operation_upper, operands) in logical_lines {
             match operation_upper.as_str() {
                 "PROC" => {
                     // Parse defaults from PROC statement
@@ -291,14 +345,13 @@ impl ProcedureExpander {
                     }
                 }
                 "PEND" => {
-                    // End of procedure
                     break;
                 }
                 _ => {
                     statements.push(ProcStatement {
                         name: stmt_name,
                         operation: operation_upper,
-                        operands: operands.to_string(),
+                        operands,
                     });
                 }
             }
@@ -518,6 +571,15 @@ fn parse_exec_tokens(tokens: &[Token], context: &str) -> Result<(ExecType, ExecP
     Ok((exec_type, params))
 }
 
+/// Check if a string is a recognized JCL operation keyword.
+fn is_jcl_operation(op: &str) -> bool {
+    matches!(
+        op.to_uppercase().as_str(),
+        "DD" | "EXEC" | "PROC" | "PEND" | "SET" | "IF" | "THEN" | "ELSE" | "ENDIF"
+            | "INCLUDE" | "JCLLIB" | "OUTPUT" | "CNTL" | "ENDCNTL"
+    )
+}
+
 /// Parse name field from JCL content (used for cataloged procedure parsing).
 fn parse_name_field(content: &str) -> (Option<String>, &str) {
     if content.is_empty() || content.starts_with(' ') {
@@ -732,24 +794,30 @@ fn parse_dd_from_operands(
                         }
                         "DISP" => {
                             let mut status = DispStatus::Shr;
-                            if matches!(tokens[idx], Token::LParen) {
+                            let has_paren = matches!(tokens[idx], Token::LParen);
+                            if has_paren {
                                 idx += 1;
                             }
-                            if let Token::Ident(s) = &tokens[idx] {
-                                status = match s.as_str() {
-                                    "NEW" => DispStatus::New,
-                                    "OLD" => DispStatus::Old,
-                                    "SHR" => DispStatus::Shr,
-                                    "MOD" => DispStatus::Mod,
-                                    _ => DispStatus::Shr,
-                                };
-                                idx += 1;
+                            if idx < tokens.len() {
+                                if let Token::Ident(s) = &tokens[idx] {
+                                    status = match s.as_str() {
+                                        "NEW" => DispStatus::New,
+                                        "OLD" => DispStatus::Old,
+                                        "SHR" => DispStatus::Shr,
+                                        "MOD" => DispStatus::Mod,
+                                        _ => DispStatus::Shr,
+                                    };
+                                    idx += 1;
+                                }
                             }
-                            while idx < tokens.len() && !matches!(tokens[idx], Token::RParen) {
-                                idx += 1;
-                            }
-                            if idx < tokens.len() && matches!(tokens[idx], Token::RParen) {
-                                idx += 1;
+                            // Only scan for closing paren if DISP had an opening paren
+                            if has_paren {
+                                while idx < tokens.len() && !matches!(tokens[idx], Token::RParen) {
+                                    idx += 1;
+                                }
+                                if idx < tokens.len() && matches!(tokens[idx], Token::RParen) {
+                                    idx += 1;
+                                }
                             }
                             disp = Some(Disposition {
                                 status,

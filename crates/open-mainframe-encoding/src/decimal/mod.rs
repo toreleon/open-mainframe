@@ -28,8 +28,8 @@ pub use national::{decode_national, ebcdic_to_national, encode_national, nationa
 pub use native_binary::{
     decode_native_binary, encode_native_binary, validate_native_range, NativeBinaryInteger,
 };
-pub use packed::{pack_decimal, unpack_decimal, PackedDecimal};
-pub use zoned::{unzone_decimal, zone_decimal, ZonedDecimal};
+pub use packed::{pack_decimal, pack_from_i64, unpack_decimal, unpack_to_i64, PackedDecimal};
+pub use zoned::{unzone_decimal, unzone_to_i64, zone_decimal, zone_from_i64, ZonedDecimal};
 
 use crate::error::EncodingError;
 

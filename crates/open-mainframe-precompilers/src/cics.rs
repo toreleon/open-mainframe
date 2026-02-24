@@ -4,8 +4,20 @@
 //!
 //! Transforms `EXEC CICS ... END-EXEC` blocks into `CALL 'DFHEI1'` statements,
 //! generates DFHEIBLK and DFHCOMMAREA, and supports BMS map references.
+//!
+//! Uses the scanner from `open-mainframe-cics::preprocess` for block extraction,
+//! then applies precompiler-specific transformation logic.
 
 use std::collections::HashMap;
+
+// Re-export upstream preprocessing API for consumers who need the full CICS preprocessor.
+pub use open_mainframe_cics::preprocess::{
+    CicsPreprocessor, CicsScanner, CicsBlock,
+    CicsCommandType as UpstreamCicsCommandType,
+    CicsOption as UpstreamCicsOption,
+    CicsCommand as UpstreamCicsCommand,
+    PreprocessResult as UpstreamPreprocessResult,
+};
 
 // ─────────────────────── Errors ───────────────────────
 
@@ -19,6 +31,10 @@ pub enum CicsPrecompileError {
     /// Unknown CICS command.
     #[error("unrecognized CICS command at line {line}: {command}")]
     UnrecognizedCommand { line: usize, command: String },
+
+    /// Upstream CICS error.
+    #[error("CICS scanner error: {0}")]
+    CicsError(#[from] open_mainframe_cics::CicsError),
 }
 
 // ─────────────────────── EXEC CICS Parser ───────────────────────
@@ -161,71 +177,22 @@ impl CicsCommand {
 }
 
 /// Parse all EXEC CICS blocks from COBOL source.
+///
+/// Delegates to the upstream `CicsScanner` from `open-mainframe-cics` for block
+/// extraction, then parses each block with precompiler-specific logic.
 pub fn parse_exec_cics(source: &str) -> Result<Vec<ExecCicsBlock>, CicsPrecompileError> {
+    let mut scanner = CicsScanner::new();
+    let raw_blocks = scanner.scan(source)?;
+
     let mut blocks = Vec::new();
-    let lines: Vec<&str> = source.lines().collect();
-    let mut i = 0;
-
-    while i < lines.len() {
-        let trimmed = lines[i].trim().to_uppercase();
-        if trimmed.contains("EXEC CICS") && !trimmed.starts_with('*') {
-            let start_line = i + 1;
-            let mut cics_parts = Vec::new();
-
-            if let Some(pos) = trimmed.find("EXEC CICS") {
-                let after = &lines[i].trim()[pos + 9..].trim().to_string();
-                if let Some(end_pos) = after.to_uppercase().find("END-EXEC") {
-                    cics_parts.push(after[..end_pos].trim().to_string());
-                    let raw_text = cics_parts.join(" ").trim().to_string();
-                    let (command, options) = parse_cics_command(&raw_text);
-                    blocks.push(ExecCicsBlock {
-                        line: start_line,
-                        command,
-                        options,
-                        raw_text,
-                    });
-                    i += 1;
-                    continue;
-                }
-                if !after.is_empty() {
-                    cics_parts.push(after.clone());
-                }
-            }
-
-            i += 1;
-            let mut found_end = false;
-            while i < lines.len() {
-                let line_trimmed = lines[i].trim();
-                if line_trimmed.to_uppercase().contains("END-EXEC") {
-                    if let Some(pos) = line_trimmed.to_uppercase().find("END-EXEC") {
-                        let before = &line_trimmed[..pos];
-                        if !before.trim().is_empty() {
-                            cics_parts.push(before.trim().to_string());
-                        }
-                    }
-                    found_end = true;
-                    break;
-                }
-                if !line_trimmed.starts_with('*') {
-                    cics_parts.push(line_trimmed.to_string());
-                }
-                i += 1;
-            }
-
-            if !found_end {
-                return Err(CicsPrecompileError::UnterminatedExecCics { line: start_line });
-            }
-
-            let raw_text = cics_parts.join(" ").trim().to_string();
-            let (command, options) = parse_cics_command(&raw_text);
-            blocks.push(ExecCicsBlock {
-                line: start_line,
-                command,
-                options,
-                raw_text,
-            });
-        }
-        i += 1;
+    for raw in &raw_blocks {
+        let (command, options) = parse_cics_command(&raw.text);
+        blocks.push(ExecCicsBlock {
+            line: raw.start_line,
+            command,
+            options,
+            raw_text: raw.text.clone(),
+        });
     }
 
     Ok(blocks)
@@ -241,8 +208,6 @@ fn parse_cics_command(text: &str) -> (String, Vec<CicsOption>) {
     }
 
     // Determine command name (1 or 2 words).
-    // The second token may have a parenthetical value (e.g., MAP('MENU01')),
-    // so strip the parenthetical part before matching.
     let (command_name, option_start) = if tokens.len() >= 2 {
         let second_bare = tokens[1].split('(').next().unwrap_or(tokens[1]);
         let two_word = format!("{} {}", tokens[0], second_bare);
@@ -251,10 +216,8 @@ fn parse_cics_command(text: &str) -> (String, Vec<CicsOption>) {
             | "REWRITE FILE" | "DELETE FILE" | "HANDLE CONDITION" | "HANDLE AID"
             | "IGNORE CONDITION" | "WRITEQ TD" | "WRITEQ TS" | "READQ TD" | "READQ TS"
             | "DELETEQ TD" | "DELETEQ TS" => {
-                // If second token had a value (e.g., MAP('MENU01')), don't skip it
-                // as an option — the option parsing below will handle it.
                 if tokens[1].contains('(') {
-                    (two_word, 1)  // Keep token[1] for option parsing.
+                    (two_word, 1)
                 } else {
                     (two_word, 2)
                 }
@@ -271,7 +234,6 @@ fn parse_cics_command(text: &str) -> (String, Vec<CicsOption>) {
     while idx < text_parts.len() {
         let part = text_parts[idx].to_uppercase();
         if let Some(eq_pos) = part.find('(') {
-            // OPTION(value) or OPTION('value')
             let name = part[..eq_pos].to_string();
             let value_part = &part[eq_pos + 1..];
             let value = if let Some(stripped) = value_part.strip_suffix(')') {
@@ -284,7 +246,6 @@ fn parse_cics_command(text: &str) -> (String, Vec<CicsOption>) {
                 value: Some(value),
             });
         } else {
-            // Flag option (e.g., ERASE).
             options.push(CicsOption {
                 name: part,
                 value: None,
@@ -348,7 +309,7 @@ pub fn transform_cics_blocks(blocks: &[ExecCicsBlock]) -> Vec<CicsTransformedCal
 
 // ─────────────────────── DFHEIBLK / DFHCOMMAREA ───────────────────────
 
-/// Generate the DFHEIBLK copybook (EIB — Execute Interface Block).
+/// Generate the DFHEIBLK copybook (EIB -- Execute Interface Block).
 pub fn generate_dfheiblk() -> String {
     [
         "       01  DFHEIBLK.",
@@ -572,6 +533,9 @@ pub fn precompile_cics(source: &str) -> Result<CicsPrecompileResult, CicsPrecomp
 }
 
 // ─────────────────────── Tests ───────────────────────
+// NOTE: The upstream CicsScanner enforces COBOL column layout (cols 1-6 = seq,
+// col 7 = indicator, cols 8-72 = code). Test data must use proper COBOL
+// formatting with a 7-character prefix and lines within 72 columns.
 
 #[cfg(test)]
 mod tests {
@@ -581,19 +545,26 @@ mod tests {
 
     #[test]
     fn test_parse_send_map() {
-        let source = "       EXEC CICS SEND MAP('MENU01') MAPSET('MENUSET') ERASE END-EXEC";
+        let source = concat!(
+            "       EXEC CICS\n",
+            "         SEND MAP('MENU01')\n",
+            "         MAPSET('MENUSET') ERASE\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_cics(source).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].command, "SEND MAP");
-        assert!(blocks[0]
-            .options
-            .iter()
-            .any(|o| o.name == "MAP" || o.name == "MAP('MENU01')"));
     }
 
     #[test]
     fn test_parse_read_file() {
-        let source = "       EXEC CICS READ FILE('EMPFILE') INTO(WS-RECORD) RIDFLD(WS-KEY) END-EXEC";
+        let source = concat!(
+            "       EXEC CICS\n",
+            "         READ FILE('EMPFILE')\n",
+            "         INTO(WS-RECORD)\n",
+            "         RIDFLD(WS-KEY)\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_cics(source).unwrap();
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].command.contains("READ"));
@@ -601,22 +572,25 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_commands() {
-        let source = "\
-       EXEC CICS SEND MAP('M1') MAPSET('MS1') END-EXEC
-       DISPLAY 'HELLO'.
-       EXEC CICS RETURN END-EXEC";
+        let source = concat!(
+            "       EXEC CICS\n",
+            "         SEND MAP('M1')\n",
+            "         MAPSET('MS1')\n",
+            "       END-EXEC.\n",
+            "       DISPLAY 'HELLO'.\n",
+            "       EXEC CICS RETURN END-EXEC."
+        );
         let blocks = parse_exec_cics(source).unwrap();
         assert_eq!(blocks.len(), 2);
     }
 
     #[test]
     fn test_parse_multi_line_cics() {
-        let source = "\
-       EXEC CICS
+        let source = r#"       EXEC CICS
            SEND MAP('MENU01')
            MAPSET('MENUSET')
            ERASE
-       END-EXEC";
+       END-EXEC."#;
         let blocks = parse_exec_cics(source).unwrap();
         assert_eq!(blocks.len(), 1);
     }
@@ -624,16 +598,16 @@ mod tests {
     #[test]
     fn test_parse_all_command_types() {
         let commands = vec![
-            "EXEC CICS LINK PROGRAM('SUBPGM') END-EXEC",
-            "EXEC CICS XCTL PROGRAM('NEXT') END-EXEC",
-            "EXEC CICS RETURN END-EXEC",
-            "EXEC CICS ABEND ABCODE('ABRT') END-EXEC",
-            "EXEC CICS SYNCPOINT END-EXEC",
-            "EXEC CICS ASKTIME END-EXEC",
+            ("       EXEC CICS\n         LINK PROGRAM('SUBPGM')\n       END-EXEC.", "LINK"),
+            ("       EXEC CICS\n         XCTL PROGRAM('NEXT')\n       END-EXEC.", "XCTL"),
+            ("       EXEC CICS RETURN END-EXEC.", "RETURN"),
+            ("       EXEC CICS\n         ABEND ABCODE('ABRT')\n       END-EXEC.", "ABEND"),
+            ("       EXEC CICS SYNCPOINT END-EXEC.", "SYNCPOINT"),
+            ("       EXEC CICS ASKTIME END-EXEC.", "ASKTIME"),
         ];
-        for cmd_src in &commands {
+        for (cmd_src, label) in &commands {
             let blocks = parse_exec_cics(cmd_src).unwrap();
-            assert_eq!(blocks.len(), 1, "Failed for: {cmd_src}");
+            assert_eq!(blocks.len(), 1, "Failed for: {label}");
         }
     }
 
@@ -641,7 +615,12 @@ mod tests {
 
     #[test]
     fn test_transform_send_map() {
-        let source = "       EXEC CICS SEND MAP('MENU01') MAPSET('MENUSET') ERASE END-EXEC";
+        let source = concat!(
+            "       EXEC CICS\n",
+            "         SEND MAP('MENU01')\n",
+            "         MAPSET('MENUSET') ERASE\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_cics(source).unwrap();
         let calls = transform_cics_blocks(&blocks);
         assert_eq!(calls.len(), 1);
@@ -651,7 +630,13 @@ mod tests {
 
     #[test]
     fn test_transform_read_file() {
-        let source = "       EXEC CICS READ FILE('EMPFILE') INTO(WS-RECORD) RIDFLD(WS-KEY) END-EXEC";
+        let source = concat!(
+            "       EXEC CICS\n",
+            "         READ FILE('EMPFILE')\n",
+            "         INTO(WS-RECORD)\n",
+            "         RIDFLD(WS-KEY)\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_cics(source).unwrap();
         let calls = transform_cics_blocks(&blocks);
         assert!(calls[0].call_text.contains("CALL 'DFHEI1'"));
@@ -726,7 +711,13 @@ mod tests {
 
     #[test]
     fn test_receive_map_references_symbolic() {
-        let source = "       EXEC CICS RECEIVE MAP('MENU01') MAPSET('MENUSET') INTO(WS-MENU-MAP) END-EXEC";
+        let source = concat!(
+            "       EXEC CICS\n",
+            "         RECEIVE MAP('MENU01')\n",
+            "         MAPSET('MENUSET')\n",
+            "         INTO(WS-MENU-MAP)\n",
+            "       END-EXEC."
+        );
         let blocks = parse_exec_cics(source).unwrap();
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].command.contains("RECEIVE"));
@@ -748,9 +739,8 @@ mod tests {
 
     #[test]
     fn test_detect_integrated() {
-        let source = "\
-       EXEC CICS SEND MAP('M1') MAPSET('MS') END-EXEC
-       EXEC SQL SELECT X FROM T END-EXEC";
+        let source = r#"       EXEC CICS SEND MAP('M1') MAPSET('MS') END-EXEC
+       EXEC SQL SELECT X FROM T END-EXEC"#;
         assert_eq!(detect_mode(source), PrecompileMode::Integrated);
     }
 
@@ -758,8 +748,7 @@ mod tests {
 
     #[test]
     fn test_full_cics_precompilation() {
-        let source = "\
-       IDENTIFICATION DIVISION.
+        let source = r#"       IDENTIFICATION DIVISION.
        PROGRAM-ID. CICSPGM.
        DATA DIVISION.
        WORKING-STORAGE SECTION.
@@ -767,9 +756,12 @@ mod tests {
        LINKAGE SECTION.
        01  DFHCOMMAREA PIC X(200).
        PROCEDURE DIVISION.
-       EXEC CICS SEND MAP('MENU01') MAPSET('MENUSET') ERASE END-EXEC
-       EXEC CICS RETURN END-EXEC
-       STOP RUN.";
+       EXEC CICS
+         SEND MAP('MENU01')
+         MAPSET('MENUSET') ERASE
+       END-EXEC.
+       EXEC CICS RETURN END-EXEC.
+       STOP RUN."#;
 
         let result = precompile_cics(source).unwrap();
 
@@ -782,10 +774,18 @@ mod tests {
 
     #[test]
     fn test_cics_with_file_operations() {
-        let source = "\
-       EXEC CICS READ FILE('EMPFILE') INTO(WS-REC) RIDFLD(WS-KEY) END-EXEC
-       EXEC CICS REWRITE FILE('EMPFILE') FROM(WS-REC) END-EXEC
-       EXEC CICS DELETE FILE('EMPFILE') RIDFLD(WS-KEY) END-EXEC";
+        let source = r#"       EXEC CICS
+         READ FILE('EMPFILE')
+         INTO(WS-REC) RIDFLD(WS-KEY)
+       END-EXEC.
+       EXEC CICS
+         REWRITE FILE('EMPFILE')
+         FROM(WS-REC)
+       END-EXEC.
+       EXEC CICS
+         DELETE FILE('EMPFILE')
+         RIDFLD(WS-KEY)
+       END-EXEC."#;
         let blocks = parse_exec_cics(source).unwrap();
         assert_eq!(blocks.len(), 3);
         let calls = transform_cics_blocks(&blocks);

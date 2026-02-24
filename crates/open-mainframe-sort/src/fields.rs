@@ -2,6 +2,11 @@
 
 use std::cmp::Ordering;
 
+use open_mainframe_encoding::decimal::{
+    pack_from_i64 as pack_packed, unpack_to_i64 as unpack_packed,
+    unzone_to_i64 as unpack_zoned, zone_from_i64 as pack_zoned,
+};
+
 /// Data types for sort fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataType {
@@ -161,69 +166,12 @@ pub(crate) fn pack_numeric(value: i64, target: &mut [u8], data_type: DataType) {
 
 /// Pack a zoned decimal value into bytes.
 fn pack_zoned_decimal(value: i64, target: &mut [u8]) {
-    let is_negative = value < 0;
-    let abs_val = value.unsigned_abs();
-
-    let mut digits = Vec::new();
-    let mut v = abs_val;
-    if v == 0 {
-        digits.push(0u8);
-    } else {
-        while v > 0 {
-            digits.push((v % 10) as u8);
-            v /= 10;
-        }
-    }
-    digits.reverse();
-
-    let len = target.len();
-    let start = len.saturating_sub(digits.len());
-    for (i, byte) in target.iter_mut().enumerate() {
-        let digit = if i >= start {
-            digits[i - start]
-        } else {
-            0
-        };
-        if i == len - 1 {
-            let sign = if is_negative { 0xD0 } else { 0xF0 };
-            *byte = sign | digit;
-        } else {
-            *byte = 0xF0 | digit;
-        }
-    }
+    pack_zoned(value, target, true);
 }
 
 /// Pack a packed decimal value into bytes.
 fn pack_packed_decimal(value: i64, target: &mut [u8]) {
-    if target.is_empty() {
-        return;
-    }
-    let is_negative = value < 0;
-    let abs_val = value.unsigned_abs();
-
-    // Total digit capacity: (len * 2) - 1 (last nibble is sign)
-    let total_digits = target.len() * 2 - 1;
-    let mut digits = vec![0u8; total_digits];
-    let mut v = abs_val;
-    for d in digits.iter_mut().rev() {
-        *d = (v % 10) as u8;
-        v /= 10;
-    }
-
-    let mut digit_idx = 0;
-    let last_idx = target.len() - 1;
-    for (i, byte) in target.iter_mut().enumerate() {
-        if i < last_idx {
-            let high = digits.get(digit_idx).copied().unwrap_or(0);
-            let low = digits.get(digit_idx + 1).copied().unwrap_or(0);
-            *byte = (high << 4) | low;
-            digit_idx += 2;
-        } else {
-            let high = digits.get(digit_idx).copied().unwrap_or(0);
-            let sign = if is_negative { 0x0D } else { 0x0C };
-            *byte = (high << 4) | sign;
-        }
-    }
+    pack_packed(value, target);
 }
 
 /// Pack a binary value into bytes (big-endian).
@@ -244,32 +192,7 @@ fn compare_zoned_decimal(a: &[u8], b: &[u8]) -> Ordering {
 
 /// Parse a zoned decimal value.
 fn parse_zoned_decimal(data: &[u8]) -> i64 {
-    if data.is_empty() {
-        return 0;
-    }
-
-    let mut value: i64 = 0;
-    let mut negative = false;
-
-    for (i, &byte) in data.iter().enumerate() {
-        // Extract digit (low nibble)
-        let digit = (byte & 0x0F) as i64;
-
-        // Check sign in last byte's high nibble
-        if i == data.len() - 1 {
-            let sign = byte >> 4;
-            // 0xD = negative, 0xB = negative, others = positive
-            negative = sign == 0x0D || sign == 0x0B;
-        }
-
-        value = value * 10 + digit;
-    }
-
-    if negative {
-        -value
-    } else {
-        value
-    }
+    unpack_zoned(data)
 }
 
 /// Compare packed decimal values.
@@ -281,32 +204,7 @@ fn compare_packed_decimal(a: &[u8], b: &[u8]) -> Ordering {
 
 /// Parse a packed decimal value.
 fn parse_packed_decimal(data: &[u8]) -> i64 {
-    if data.is_empty() {
-        return 0;
-    }
-
-    let mut value: i64 = 0;
-
-    for (i, &byte) in data.iter().enumerate() {
-        if i == data.len() - 1 {
-            // Last byte: high nibble is last digit, low nibble is sign
-            let digit = (byte >> 4) as i64;
-            value = value * 10 + digit;
-
-            let sign = byte & 0x0F;
-            // 0x0D = negative, 0x0B = negative
-            if sign == 0x0D || sign == 0x0B {
-                value = -value;
-            }
-        } else {
-            // Other bytes: two digits per byte
-            let high = (byte >> 4) as i64;
-            let low = (byte & 0x0F) as i64;
-            value = value * 100 + high * 10 + low;
-        }
-    }
-
-    value
+    unpack_packed(data)
 }
 
 /// Compare binary values (big-endian signed).

@@ -7,3 +7,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 thiserror = "1.0"
+open-mainframe-encoding = { path = "../open-mainframe-encoding" }

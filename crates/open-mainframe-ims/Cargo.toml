@@ -12,6 +12,7 @@ thiserror.workspace = true
 serde = { workspace = true }
 serde_json = "1"
 postgres = { version = "0.19", optional = true }
+open-mainframe-encoding = { path = "../open-mainframe-encoding" }
 
 [features]
 default = []

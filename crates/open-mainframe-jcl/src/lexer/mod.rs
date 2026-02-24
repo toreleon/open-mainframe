@@ -67,22 +67,34 @@ impl Lexer {
 
     /// Parse all JCL statements from the source.
     pub fn parse_statements(&mut self) -> Result<Vec<JclStatement>, JclError> {
-        let mut statements = Vec::new();
+        let mut statements: Vec<JclStatement> = Vec::new();
 
         while self.current_line < self.lines.len() {
             let line = &self.lines[self.current_line];
 
-            // Check for inline data end
+            // Check for inline data end and collect inline data lines
             if self.in_inline_data {
                 if self.is_inline_data_end(line) {
+                    // Explicit delimiter (/* or custom DLM=) — consume it
                     self.in_inline_data = false;
                     self.inline_delimiter = None;
                     self.current_line += 1;
                     continue;
                 }
-                // Skip inline data lines for now (they'll be collected by parser)
-                self.current_line += 1;
-                continue;
+                // In z/OS JCL, DD * inline data is also terminated by any
+                // JCL statement (line starting with //) unless a custom
+                // DLM= delimiter was specified.
+                if self.inline_delimiter.is_none() && line.starts_with("//") {
+                    self.in_inline_data = false;
+                    // Fall through to parse this line as a JCL statement
+                } else {
+                    // Collect inline data line and attach to previous DD statement
+                    if let Some(prev_stmt) = statements.last_mut() {
+                        prev_stmt.inline_data.push(line.to_string());
+                    }
+                    self.current_line += 1;
+                    continue;
+                }
             }
 
             // Skip empty lines
@@ -156,8 +168,12 @@ impl Lexer {
             return Ok(None);
         }
 
+        // Strip columns 72-80 (continuation marker + sequence numbers).
+        // JCL columns 1-71 are the statement content.
+        let effective_line = if first_line.len() > 71 { &first_line[..71] } else { &first_line };
+
         // Get content after //
-        let content = &first_line[2..];
+        let content = &effective_line[2..];
 
         // Check for null statement
         if content.trim().is_empty() {
@@ -168,6 +184,7 @@ impl Lexer {
                 operands: String::new(),
                 line: start_line,
                 byte_offset,
+                inline_data: Vec::new(),
                 byte_end,
             }));
         }
@@ -195,18 +212,23 @@ impl Lexer {
                 break;
             }
 
-            let cont_content = &cont_line[2..];
+            // Strip columns 72-80 from continuation lines too.
+            let cont_effective = if cont_line.len() > 71 { &cont_line[..71] } else { cont_line };
+            let cont_content = &cont_effective[2..];
             // Continuation has blank in column 3 (name field)
             if !cont_content.starts_with(' ') {
                 break;
             }
 
-            // Remove trailing comma from previous and append continuation
+            // Remove trailing comma from previous and append continuation.
+            // Strip JCL comment field from the continuation content:
+            // after a comma at paren-depth-0, a blank starts a comment.
+            let cont_trimmed = Self::strip_operand_comment(cont_content.trim());
             if full_operands.ends_with(',') {
                 full_operands.pop();
             }
             full_operands.push(',');
-            full_operands.push_str(cont_content.trim());
+            full_operands.push_str(cont_trimmed);
             last_line_idx = self.current_line;
             self.current_line += 1;
         }
@@ -220,6 +242,7 @@ impl Lexer {
             line: start_line,
             byte_offset,
             byte_end,
+            inline_data: Vec::new(),
         }))
     }
 
@@ -231,11 +254,12 @@ impl Lexer {
             return (None, content.trim_start());
         }
 
-        // Find end of name (first space or end of valid name chars)
+        // Find end of name (first space or end of valid name chars).
+        // Allow dots for DD override names like STEPNAME.DDNAME (max 8+1+8 = 17).
         let name_end = content
-            .find(|c: char| !c.is_ascii_alphanumeric() && c != '@' && c != '#' && c != '$')
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '@' && c != '#' && c != '$' && c != '.')
             .unwrap_or(content.len())
-            .min(8); // Max 8 characters
+            .min(17); // Max 17 characters (STEPNAME.DDNAME)
 
         let name = &content[..name_end];
         let rest = &content[name_end..];
@@ -250,16 +274,7 @@ impl Lexer {
             .unwrap_or(content.len());
 
         let operation = &content[..op_end];
-        let operands = content[op_end..].trim_start();
-
-        // Remove sequence number (columns 73-80) if present
-        // Limit operand length to avoid sequence numbers
-        let max_len = 71usize.saturating_sub(op_end);
-        let operands = if operands.len() > max_len {
-            operands[..max_len].trim_end()
-        } else {
-            operands.trim_end()
-        };
+        let operands = content[op_end..].trim_start().trim_end();
 
         (operation, operands)
     }
@@ -267,6 +282,51 @@ impl Lexer {
     /// Check if a line is continued (ends with comma, or has continuation char in col 72).
     fn is_continued(&self, operands: &str) -> bool {
         operands.trim_end().ends_with(',')
+    }
+
+    /// Strip JCL comment field from operand text on a continuation line.
+    ///
+    /// In z/OS JCL, after the operand field on a statement line, a blank
+    /// followed by any text is a comment. The operand field ends when
+    /// parentheses are balanced and a comma followed by a blank is found.
+    fn strip_operand_comment(operand: &str) -> &str {
+        let mut depth: i32 = 0;
+        let mut in_quote = false;
+        let bytes = operand.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if in_quote {
+                if c == '\'' {
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                        i += 2; // skip escaped quote
+                        continue;
+                    }
+                    in_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+            match c {
+                '\'' => in_quote = true,
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth < 0 {
+                        depth = 0;
+                    }
+                }
+                ',' if depth == 0 => {
+                    // Comma at top level — if next char is blank, rest is comment
+                    if i + 1 < bytes.len() && bytes[i + 1] == b' ' {
+                        return &operand[..=i]; // include the comma
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        operand
     }
 
     /// Check if line ends inline data.
@@ -386,6 +446,47 @@ mod tests {
         let src = lexer.source();
         assert!(src[statements[1].byte_offset as usize..].starts_with("//STEP1"));
         assert!(src[statements[2].byte_offset as usize..].starts_with("//DD1"));
+    }
+
+    #[test]
+    fn test_sequence_number_stripping() {
+        // JCL with sequence numbers in columns 73-80
+        let jcl = "//STEP1    EXEC PGM=IEFBR14                                            00000100";
+        let mut lexer = Lexer::new(jcl);
+        let statements = lexer.parse_statements().unwrap();
+
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].operation, "EXEC");
+        // Operands should NOT contain the sequence number
+        assert!(!statements[0].operands.contains("00000100"));
+        assert!(statements[0].operands.contains("PGM=IEFBR14"));
+    }
+
+    #[test]
+    fn test_sequence_number_stripping_continuation() {
+        // Multi-line JCL with sequence numbers on both lines
+        let jcl = "//STEP1    EXEC PGM=IEFBR14,                                           00000100\n//             REGION=4M                                                00000200";
+        let mut lexer = Lexer::new(jcl);
+        let statements = lexer.parse_statements().unwrap();
+
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].operation, "EXEC");
+        assert!(statements[0].operands.contains("PGM=IEFBR14"));
+        assert!(statements[0].operands.contains("REGION=4M"));
+        assert!(!statements[0].operands.contains("00000100"));
+        assert!(!statements[0].operands.contains("00000200"));
+    }
+
+    #[test]
+    fn test_dot_in_name_field() {
+        // DD override with STEPNAME.DDNAME format
+        let jcl = "//PRC001.FILEIN DD DSN=MY.DATA.SET,DISP=SHR";
+        let mut lexer = Lexer::new(jcl);
+        let statements = lexer.parse_statements().unwrap();
+
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].name, Some("PRC001.FILEIN".to_string()));
+        assert_eq!(statements[0].operation, "DD");
     }
 
     #[test]

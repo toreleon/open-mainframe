@@ -85,4 +85,6 @@ pub struct JclStatement {
     pub byte_offset: u32,
     /// Byte offset of the end of this statement in the source (exclusive).
     pub byte_end: u32,
+    /// Inline data lines (for DD * statements).
+    pub inline_data: Vec<String>,
 }

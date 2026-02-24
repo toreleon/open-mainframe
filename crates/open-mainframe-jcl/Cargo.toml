@@ -12,6 +12,8 @@ miette.workspace = true
 thiserror.workspace = true
 open-mainframe-lang-core.workspace = true
 open-mainframe-dataset.workspace = true
+open-mainframe-encoding.workspace = true
 open-mainframe-sort.workspace = true
+open-mainframe-utilities.workspace = true
 
 [dev-dependencies]
