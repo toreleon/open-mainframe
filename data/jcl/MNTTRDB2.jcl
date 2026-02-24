@@ -1,0 +1,27 @@
+//MNTTRDB2 JOB (CCARD001),'DB2 TABLE MAINT',CLASS=A,MSGCLASS=H,
+//             MSGLEVEL=(1,1),TIME=1440,REGION=0M
+//*------------------------------------------------------------*
+//* DB2 Table Maintenance - Reorganize and Update Statistics      *
+//*------------------------------------------------------------*
+//STEP010 EXEC PGM=IKJEFT01,DYNAMNBR=20
+//STEPLIB  DD DSN=DB2.SDSNLOAD,DISP=SHR
+//SYSTSPRT DD SYSOUT=*
+//SYSPRINT DD SYSOUT=*
+//SYSUDUMP DD SYSOUT=*
+//SYSTSIN  DD *
+ DSN SYSTEM(DAZ1)
+ RUN PROGRAM(DSNTIAD) PLAN(DSNTIA12) -
+   LIB('DB2.RUNLIB.LOAD')
+ END
+/*
+//SYSIN    DD *
+ RUNSTATS TABLESPACE CCARD001.CARDDEMO
+   TABLE(ALL) INDEX(ALL)
+   SHRLEVEL CHANGE
+   REPORT YES;
+
+ REORG TABLESPACE CCARD001.CARDDEMO
+   SHRLEVEL CHANGE
+   LOG YES;
+/*
+//

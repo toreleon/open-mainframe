@@ -1,0 +1,26 @@
+//TRANEXTR JOB (CCARD001),'DB2 TRAN EXTRACT',CLASS=A,MSGCLASS=H,
+//             MSGLEVEL=(1,1),TIME=1440,REGION=0M
+//*------------------------------------------------------------*
+//* DB2 Transaction Extract - Export transaction data             *
+//*------------------------------------------------------------*
+//STEP010 EXEC PGM=IKJEFT01,DYNAMNBR=20
+//STEPLIB  DD DSN=DB2.SDSNLOAD,DISP=SHR
+//SYSTSPRT DD SYSOUT=*
+//SYSPRINT DD SYSOUT=*
+//SYSUDUMP DD SYSOUT=*
+//SYSTSIN  DD *
+ DSN SYSTEM(DAZ1)
+ RUN PROGRAM(DSNTIAUL) PLAN(DSNTIA12) -
+   LIB('DB2.RUNLIB.LOAD')
+ END
+/*
+//SYSIN    DD *
+ SELECT ACCT_ID, TRAN_ID, TRAN_AMT, TRAN_DATE
+   FROM CARDDEMO.DAILY_TRAN
+   WHERE TRAN_DATE >= '2024-01-01'
+   ORDER BY TRAN_DATE DESC;
+/*
+//SYSREC00 DD DSN=AWS.M2.CARDDEMO.TRANEXTR.PS,DISP=(NEW,CATLG),
+//             UNIT=SYSDA,SPACE=(CYL,(5,5)),
+//             DCB=(LRECL=200,BLKSIZE=2000,RECFM=FB)
+//

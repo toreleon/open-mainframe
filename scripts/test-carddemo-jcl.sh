@@ -429,6 +429,107 @@ for ctl in "$CARDDEMO_DIR/app/ctl/"*.ctl; do
     fi
 done
 
+# Copy compiler procedure files (BUILDBAT, BUILDBMS, BUILDONL, BLDCIDB2)
+# These are referenced via JCLLIB ORDER=AWS.M2.CARDDEMO.PRC.UTIL
+PROCUTIL_DEST="$CARDDEMO_DS/PRC/UTIL"
+mkdir -p "$PROCUTIL_DEST"
+for prc in "$OMFRAME_DIR/data/proclib/"*; do
+    if [[ -f "$prc" ]]; then
+        base=$(basename "$prc")
+        cp "$prc" "$PROCUTIL_DEST/$base" 2>/dev/null || true
+    fi
+done
+# Also copy to PROC.UTIL (some JCL uses &HLQ..PROC.UTIL where HLQ=AWS.M2.CARDDEMO)
+PROCUTIL2_DEST="$CARDDEMO_DS/PROC/UTIL"
+mkdir -p "$PROCUTIL2_DEST"
+for prc in "$OMFRAME_DIR/data/proclib/"*; do
+    if [[ -f "$prc" ]]; then
+        base=$(basename "$prc")
+        cp "$prc" "$PROCUTIL2_DEST/$base" 2>/dev/null || true
+    fi
+done
+
+# Copy JCL files to dataset directory for IEBGENER internal reader references
+# (INTRDRJ1 references AWS.M2.CARDDEMO.JCL(INTRDRJ2))
+JCL_DEST="$CARDDEMO_DS/JCL"
+mkdir -p "$JCL_DEST"
+for jcl in "$SAMPLE_JCL_DIR/"*.jcl "$SAMPLE_JCL_DIR/"*.JCL; do
+    if [[ -f "$jcl" ]]; then
+        base=$(basename "$jcl")
+        # Strip extension for PDS member name
+        mem="${base%.*}"
+        cp "$jcl" "$JCL_DEST/$mem" 2>/dev/null || true
+    fi
+done
+
+# Create dummy datasets needed by INTRDR chain and FTP jobs
+mkdir -p "$DATASET_DIR/AWS/M2/CARDEMO/FTP/TEST"
+echo "FTP TEST DATA - DUMMY CONTENT FOR TESTING" > "$DATASET_DIR/AWS/M2/CARDEMO/FTP/TEST/data"
+# Create backup datasets needed by INTRDRJ1/INTRDRJ2 (DISP=SHR targets)
+# BKUP is both a sequential dataset AND a parent qualifier for BKUP.INTRDR,
+# so create it as a directory with a data file inside.
+if [[ -f "$DATASET_DIR/AWS/M2/CARDEMO/FTP/TEST/BKUP" ]]; then
+    rm -f "$DATASET_DIR/AWS/M2/CARDEMO/FTP/TEST/BKUP"
+fi
+mkdir -p "$DATASET_DIR/AWS/M2/CARDEMO/FTP/TEST/BKUP"
+echo "BACKUP DATA" > "$DATASET_DIR/AWS/M2/CARDEMO/FTP/TEST/BKUP/data"
+echo "INTRDR BACKUP" > "$DATASET_DIR/AWS/M2/CARDEMO/FTP/TEST/BKUP/INTRDR"
+# Copy INTRDRJ2 JCL to JCL PDS for internal reader (INTRDRJ1 references it)
+cp "$JCL_DIR/INTRDRJ2.JCL" "$JCL_DEST/INTRDRJ2" 2>/dev/null || true
+# Create COBOL source stubs for compile jobs
+mkdir -p "$CARDDEMO_DS/COBOL/SRC"
+for mem in BATCHPGM CICSPGMN CICSDB2P IMSMQPGM; do
+    if [[ ! -f "$CARDDEMO_DS/COBOL/SRC/$mem" ]]; then
+        printf '       IDENTIFICATION DIVISION.\n       PROGRAM-ID. %s.\n       PROCEDURE DIVISION.\n           DISPLAY "HELLO".\n           STOP RUN.\n' "$mem" \
+            > "$CARDDEMO_DS/COBOL/SRC/$mem"
+    fi
+done
+# Create BMS source stubs for BMS compile job
+mkdir -p "$CARDDEMO_DS/BMS/SRC"
+if [[ ! -f "$CARDDEMO_DS/BMS/SRC/CICSMAP" ]]; then
+    echo "CICSMAP  DFHMSD TYPE=MAP,LANG=COBOL,MODE=INOUT" > "$CARDDEMO_DS/BMS/SRC/CICSMAP"
+fi
+# Create COBCOPY stub
+mkdir -p "$CARDDEMO_DS/COBCOPY"
+# Create LOADLIB directory for compiler output
+mkdir -p "$CARDDEMO_DS/LOADLIB"
+# Create DBRMLIB directory for DB2 precompiler output
+mkdir -p "$CARDDEMO_DS/DBRMLIB"
+# Create IMS library directories for STEPLIB concatenation
+mkdir -p "$DATASET_DIR/IMS/SDFSRESL"
+mkdir -p "$DATASET_DIR/IMS/PSBLIB"
+mkdir -p "$DATASET_DIR/IMS/DBDLIB"
+mkdir -p "$DATASET_DIR/IMS/PROCLIB"
+# Create DB2 library directories
+mkdir -p "$DATASET_DIR/DB2/SDSNLOAD"
+mkdir -p "$DATASET_DIR/DB2/RUNLIB/LOAD"
+# Create CICS library directories
+mkdir -p "$DATASET_DIR/OEM/CICSTS/V05R06M0/CICS/SDFHLOAD"
+mkdir -p "$DATASET_DIR/OEM/CICSTS/DFHCSD"
+mkdir -p "$DATASET_DIR/CICSTS/CICS/SDFHLOAD"
+mkdir -p "$DATASET_DIR/CICSTS/CICS/SDFHCOB"
+# Create compiler library directories
+mkdir -p "$DATASET_DIR/IGY/SIGYCOMP/V63"
+mkdir -p "$DATASET_DIR/CEE/SCEERUN"
+mkdir -p "$DATASET_DIR/CEE/SCEERUN2"
+mkdir -p "$DATASET_DIR/CEE/SCEESAMP"
+mkdir -p "$DATASET_DIR/CEE/SCEELKED"
+mkdir -p "$DATASET_DIR/SYS1/LINKLIB"
+# Create MQ library directories for IMSMQCMP
+mkdir -p "$DATASET_DIR/MQ/SCSQCOBC"
+mkdir -p "$DATASET_DIR/MQ/SCSQLOAD"
+# Create dummy STATEMNT.PS for TXT2PDF
+mkdir -p "$CARDDEMO_DS/STATEMNT"
+echo "STATEMENT DATA FOR PDF CONVERSION" > "$CARDDEMO_DS/STATEMNT/PS"
+# Create TXT2PDF libraries
+mkdir -p "$DATASET_DIR/AWS/M2/LBD/TXT2PDF/LOAD"
+mkdir -p "$DATASET_DIR/AWS/M2/LBD/TXT2PDF/EXEC"
+# Create CICSLOAD for linker output
+mkdir -p "$CARDDEMO_DS/CICSLOAD"
+# Create IMS input datasets
+mkdir -p "$(dirname "$CARDDEMO_DS/ACCTUPDT/PS")"
+echo "UPDATE DATA" > "$CARDDEMO_DS/ACCTUPDT/PS"
+
 # ─── Phase 1: GDG Base Definitions ──────────────────────────────────────────
 
 log_header "Phase 1: GDG Base Definitions"
@@ -508,65 +609,53 @@ run_jcl "SORT Test"                        "$SAMPLE_JCL_DIR/SORTTEST.jcl"  "CC 0
 run_jcl "REPRO Test"                       "$SAMPLE_JCL_DIR/REPRTEST.jcl"  "CC 0000"
 run_jcl "Wait Step"                        "$JCL_DIR/WAITSTEP.jcl"         "CC 0000"
 
-# ─── Phase 10: Skipped Jobs (require external subsystems) ───────────────────
+# ─── Phase 10: CICS Utilities ────────────────────────────────────────────────
 
-log_header "Phase 10: Skipped Jobs (External Subsystem Dependencies)"
+log_header "Phase 10: CICS Utilities"
 
-SKIP_JOBS=(
-    "CBADMCDJ.jcl:CICS CSD Utility (DFHCSDUP)"
-    "OPENFIL.jcl:CICS File Control (SDSF)"
-    "CLOSEFIL.jcl:CICS File Control (SDSF)"
-    "TXT2PDF1.JCL:TSO TXT2PDF Utility"
-    "FTPJCL.JCL:FTP Transfer (requires network)"
-    "INTRDRJ1.JCL:Internal Reader (chains INTRDRJ2)"
-    "INTRDRJ2.JCL:Internal Reader (submitted by INTRDRJ1)"
-    "RACFCMDS.jcl:RACF Commands (external groups)"
-)
+run_jcl "CICS CSD Definitions (DFHCSDUP)"      "$JCL_DIR/CBADMCDJ.jcl"   "CC 0000"
+run_jcl "CICS Open Files (SDSF)"               "$JCL_DIR/OPENFIL.jcl"    "CC 0000"
+run_jcl "CICS Close Files (SDSF)"              "$JCL_DIR/CLOSEFIL.jcl"   "CC 0000"
 
-for entry in "${SKIP_JOBS[@]}"; do
-    name="${entry%%:*}"
-    reason="${entry##*:}"
-    log_skip "$name — $reason"
-    TOTAL=$((TOTAL + 1))
-    SKIPPED=$((SKIPPED + 1))
-done
+# ─── Phase 11: TSO/FTP/RACF Utilities ───────────────────────────────────────
 
-# Skipped IMS/DB2/MQ jobs
-IMS_DB2_JOBS=(
-    "CBPAUP0J.jcl:IMS BMP Program"
-    "DBPAUTP0.jcl:IMS Database Unload"
-    "LOADPADB.JCL:IMS Database Load"
-    "UNLDGSAM.JCL:IMS GSAM Unload"
-    "UNLDPADB.JCL:IMS Database Unload"
-    "CREADB21.jcl:DB2 Database Create"
-    "MNTTRDB2.jcl:DB2 Table Maintenance"
-    "TRANEXTR.jcl:DB2 Transaction Extract"
-)
+log_header "Phase 11: TSO/FTP/RACF Utilities"
 
-for entry in "${IMS_DB2_JOBS[@]}"; do
-    name="${entry%%:*}"
-    reason="${entry##*:}"
-    log_skip "$name — requires $reason"
-    TOTAL=$((TOTAL + 1))
-    SKIPPED=$((SKIPPED + 1))
-done
+run_jcl "TSO TXT2PDF Conversion"               "$JCL_DIR/TXT2PDF1.JCL"   "CC 0000"
+run_jcl "FTP File Transfer"                    "$JCL_DIR/FTPJCL.JCL"     "CC 0000"
+run_jcl "RACF Commands"                        "$SAMPLE_JCL_DIR/RACFCMDS.jcl"   "CC 0000"
 
-# Skipped compilation jobs
-COMPILE_JOBS=(
-    "BATCMP.jcl:Batch COBOL Compile"
-    "BMSCMP.jcl:BMS Map Compile"
-    "CICCMP.jcl:CICS Program Compile"
-    "CICDBCMP.jcl:CICS DB2 Program Compile"
-    "IMSMQCMP.jcl:IMS MQ Program Compile"
-)
+# ─── Phase 12: Internal Reader ──────────────────────────────────────────────
 
-for entry in "${COMPILE_JOBS[@]}"; do
-    name="${entry%%:*}"
-    reason="${entry##*:}"
-    log_skip "$name — requires $reason procedure"
-    TOTAL=$((TOTAL + 1))
-    SKIPPED=$((SKIPPED + 1))
-done
+log_header "Phase 12: Internal Reader"
+
+run_jcl "Internal Reader Parent (INTRDRJ1)"    "$JCL_DIR/INTRDRJ1.JCL"   "CC 0000"
+run_jcl "Internal Reader Child (INTRDRJ2)"     "$JCL_DIR/INTRDRJ2.JCL"   "CC 0000"
+
+# ─── Phase 13: IMS/DB2 Jobs ─────────────────────────────────────────────────
+
+log_header "Phase 13: IMS/DB2 Jobs"
+
+IMS_JCL_DIR="$OMFRAME_DIR/data/jcl"
+
+run_jcl "IMS BMP Account Update"               "$IMS_JCL_DIR/CBPAUP0J.jcl"      "CC 0000"
+run_jcl "IMS DL/I Database Unload"             "$IMS_JCL_DIR/DBPAUTP0.jcl"      "CC 0000"
+run_jcl "IMS Database Load"                    "$IMS_JCL_DIR/LOADPADB.JCL"      "CC 0000"
+run_jcl "IMS GSAM Unload"                      "$IMS_JCL_DIR/UNLDGSAM.JCL"      "CC 0000"
+run_jcl "IMS Database Unload"                  "$IMS_JCL_DIR/UNLDPADB.JCL"      "CC 0000"
+run_jcl "DB2 Create Tables"                    "$IMS_JCL_DIR/CREADB21.jcl"      "CC 0000"
+run_jcl "DB2 Table Maintenance"                "$IMS_JCL_DIR/MNTTRDB2.jcl"      "CC 0000"
+run_jcl "DB2 Transaction Extract"              "$IMS_JCL_DIR/TRANEXTR.jcl"      "CC 0000"
+
+# ─── Phase 14: Compiler Jobs ────────────────────────────────────────────────
+
+log_header "Phase 14: Compiler Jobs"
+
+run_jcl "Batch COBOL Compile (BUILDBAT)"       "$SAMPLE_JCL_DIR/BATCMP.jcl"     "CC 0000"
+run_jcl "BMS Map Compile (BUILDBMS)"           "$SAMPLE_JCL_DIR/BMSCMP.jcl"     "CC 0000"
+run_jcl "CICS COBOL Compile (BUILDONL)"        "$SAMPLE_JCL_DIR/CICCMP.jcl"     "CC 0000"
+run_jcl "CICS DB2 Compile (BLDCIDB2)"          "$SAMPLE_JCL_DIR/CICDBCMP.jcl"   "CC 0000"
+run_jcl "IMS MQ COBOL Compile"                 "$SAMPLE_JCL_DIR/IMSMQCMP.jcl"   "CC 0000"
 
 # ─── Summary ────────────────────────────────────────────────────────────────
 

@@ -213,7 +213,13 @@ pub fn execute_idcams(
 fn resolve_dd_references(stmt: &str, dd_files: &HashMap<String, PathBuf>) -> String {
     let mut result = stmt.to_string();
 
-    for (keyword_in, keyword_out) in &[("INFILE", "INDATASET"), ("OUTFILE", "OUTDATASET")] {
+    // Process longer keywords first so INFILE matches before IFILE
+    for (keyword_in, keyword_out) in &[
+        ("INFILE", "INDATASET"),
+        ("OUTFILE", "OUTDATASET"),
+        ("IFILE", "INDATASET"),
+        ("OFILE", "OUTDATASET"),
+    ] {
         let search = format!("{keyword_in}(");
         if let Some(start) = result.find(&search) {
             let after = &result[start + search.len()..];

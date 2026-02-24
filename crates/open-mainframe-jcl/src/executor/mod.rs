@@ -614,6 +614,11 @@ impl JobExecutor {
             let dsn = Self::full_dsn(ds);
             let path = self.resolve_dataset(&dsn, &ds.disp)?;
             if path.exists() {
+                // Skip directories (PDS/PDSE/LOADLIB) in concatenation — they
+                // act as search libraries and cannot be read as sequential data.
+                if path.is_dir() {
+                    continue;
+                }
                 let content = std::fs::read(&path).map_err(|e| JclError::ExecutionFailed {
                     message: format!("Failed to read dataset {} for concatenation: {}", ds.dsn, e),
                 })?;
@@ -969,7 +974,10 @@ impl JobExecutor {
             if path.as_os_str() == "/dev/null" {
                 ctx.add_dd(DdAllocation::dummy(dd_name));
             } else if path.exists() {
-                if let Ok(content) = std::fs::read_to_string(path) {
+                if path.is_dir() {
+                    // Directory (PDS/PDSE/LOADLIB) — treat as allocated but with no inline data
+                    ctx.add_dd(DdAllocation::output(dd_name));
+                } else if let Ok(content) = std::fs::read_to_string(path) {
                     let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
                     ctx.add_dd(DdAllocation::inline(dd_name, lines));
                 } else {

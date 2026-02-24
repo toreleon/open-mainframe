@@ -109,7 +109,9 @@ impl<'a> Parser<'a> {
                     idx += 1;
                 }
                 "JCLLIB" => {
-                    let operands = stmt.operands.clone();
+                    // Apply symbol substitution to JCLLIB ORDER operands
+                    // so that SET HLQ=AWS.M2 / JCLLIB ORDER=&HLQ..PROC.UTIL works
+                    let operands = self.substitute_symbols(&stmt.operands.clone());
                     self.jcllib_order = Self::parse_jcllib_operands(&operands);
                     idx += 1;
                 }
@@ -702,6 +704,11 @@ impl<'a> Parser<'a> {
                 "OUTPUT" => {
                     let output_stmt = self.parse_output_statement()?;
                     job.output_stmts.push(output_stmt);
+                    job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
+                    self.current += 1;
+                }
+                "EXPORT" => {
+                    // EXPORT SYMLIST — ignored for now, symbols are already resolved
                     job.span = job.span.extend(Span::main(stmt.byte_offset, stmt.byte_end));
                     self.current += 1;
                 }

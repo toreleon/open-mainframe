@@ -33,6 +33,7 @@ pub mod ieh;
 pub mod iebgener;
 pub mod iebptpch;
 pub mod iebupdte;
+pub mod subsystems;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -622,6 +623,20 @@ impl UtilityRegistry {
         reg.register(Box::new(batch::Ikjeft1b));
         reg.register(Box::new(batch::Irxjcl));
         reg.register(Box::new(batch::Bpxbatch));
+        // Subsystem utilities (IMS, CICS, DB2, compilers)
+        reg.register(Box::new(subsystems::Dfsrrc00));
+        reg.register(Box::new(subsystems::Dfhcsdup));
+        reg.register(Box::new(subsystems::Sdsf));
+        reg.register(Box::new(subsystems::Ftp));
+        reg.register(Box::new(subsystems::Igycrctl));
+        reg.register(Box::new(subsystems::Iewl));
+        reg.register(Box::new(subsystems::Dfhecp1));
+        reg.register(Box::new(subsystems::Dfhmaps));
+        reg.register(Box::new(subsystems::Dsnhpc));
+        reg.register(Box::new(subsystems::Dsntiad));
+        reg.register(Box::new(subsystems::Dsntiaul));
+        reg.register(Box::new(subsystems::Dsntep4));
+        reg.register(Box::new(subsystems::Dfsurgu0));
         reg
     }
 

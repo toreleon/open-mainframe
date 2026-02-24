@@ -1,0 +1,20 @@
+//CBPAUP0J JOB (CCARD001),'IMS BMP BATCH',CLASS=A,MSGCLASS=H,
+//             MSGLEVEL=(1,1),TIME=1440,REGION=0M
+//*------------------------------------------------------------*
+//* IMS BMP Region Controller - CardDemo Account Update          *
+//*------------------------------------------------------------*
+//BMP     EXEC PGM=DFSRRC00,REGION=0M,
+//             PARM='BMP,CBPAUP00,,,,,,,,,,,,Y,N,,,,,,,,,,,Y'
+//STEPLIB  DD DSN=IMS.SDFSRESL,DISP=SHR
+//         DD DSN=AWS.M2.CARDDEMO.LOADLIB,DISP=SHR
+//DFSRESLB DD DSN=IMS.SDFSRESL,DISP=SHR
+//IMS      DD DSN=IMS.PSBLIB,DISP=SHR
+//         DD DSN=IMS.DBDLIB,DISP=SHR
+//PROCLIB  DD DSN=IMS.PROCLIB,DISP=SHR
+//IEFRDER  DD DUMMY
+//SYSUDUMP DD SYSOUT=*
+//SYSPRINT DD SYSOUT=*
+//SYSOUT   DD SYSOUT=*
+//ACCTDAT  DD DSN=AWS.M2.CARDDEMO.ACCTDATA.PS,DISP=SHR
+//UPDTFILE DD DSN=AWS.M2.CARDDEMO.ACCTUPDT.PS,DISP=SHR
+//
