@@ -844,11 +844,12 @@ async fn mount_filesystem(
             mount_table.add_mount(
                 mt,
                 std::path::PathBuf::from(&host_path),
-                mount_point,
+                mount_point.clone(),
                 req.read_only,
                 req.file_filter,
             );
 
+            tracing::info!(fsname = %fsname, mount_point = %mount_point, host_path = %host_path, "Filesystem mounted");
             Ok(StatusCode::NO_CONTENT)
         }
         "unmount" => {
@@ -872,6 +873,7 @@ async fn mount_filesystem(
                     mount_table.remove_mount(&mid);
                 }
             }
+            tracing::info!(fsname = %fsname, "Filesystem unmounted");
             Ok(StatusCode::NO_CONTENT)
         }
         other => Err(ZosmfErrorResponse::bad_request(format!("Unknown mount action: {}", other))),

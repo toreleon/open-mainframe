@@ -252,6 +252,8 @@ async fn start_session(
     let mut mapsets = HashMap::new();
     mapsets.insert(mapset.name.clone(), mapset);
 
+    tracing::info!(session_key = %session_key, mapset = %mapset_name, "CICS terminal session started");
+
     let session = CicsSessionHandle {
         terminal_manager,
         terminal_id,
@@ -264,8 +266,7 @@ async fn start_session(
     let mut response = build_screen_response(&session);
     response["sessionKey"] = serde_json::Value::String(session_key.clone());
 
-    state.cics_sessions.insert(session_key, session);
-
+    state.cics_sessions.insert(session_key.clone(), session);
     Ok((StatusCode::CREATED, Json(response)))
 }
 
@@ -374,6 +375,7 @@ async fn stop_session(
             ZosmfErrorResponse::not_found(format!("CICS session '{}' not found", session_key))
         })?;
 
+    tracing::info!(session_key = %session_key, "CICS terminal session stopped");
     Ok(StatusCode::OK)
 }
 

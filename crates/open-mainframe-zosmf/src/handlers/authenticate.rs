@@ -55,6 +55,7 @@ async fn login(
     let result = state.saf.verify(&state.racf, userid, password);
 
     if !result.is_authorized() {
+        tracing::warn!(userid = %userid.to_uppercase(), "Login failed");
         return Err(ZosmfErrorResponse::unauthorized(format!(
             "Authentication failed for user '{}'",
             userid.to_uppercase()
@@ -90,6 +91,8 @@ async fn login(
         token
     );
 
+    tracing::info!(userid = %userid, "Login successful");
+
     // IBM z/OSMF returns JWT only via Set-Cookie; body is empty JSON.
     Ok((
         StatusCode::OK,
@@ -115,6 +118,7 @@ async fn logout(
         state.token_store.remove(&token);
     }
 
+    tracing::info!(userid = %_auth.userid, "Logout");
     Ok(StatusCode::OK)
 }
 

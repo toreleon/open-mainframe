@@ -74,6 +74,8 @@ async fn issue_command(
         state.console_responses.insert(key.clone(), response_text.clone());
     }
 
+    tracing::info!(command = %request.cmd, "Console command issued");
+
     let cmd_response_uri = cmd_response_url.clone();
     Ok(Json(ConsoleResponse {
         cmd_response_url,

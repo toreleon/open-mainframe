@@ -120,8 +120,9 @@ async fn provision_instance(
 
     state
         .provisioning_instances
-        .insert(id, instance.clone());
+        .insert(id.clone(), instance.clone());
 
+    tracing::info!(instance_id = %id, template = %instance.template_name, "Instance provisioned");
     Ok((StatusCode::CREATED, Json(instance)))
 }
 
@@ -170,7 +171,10 @@ async fn deprovision_instance(
     state
         .provisioning_instances
         .remove(&id)
-        .map(|_| StatusCode::NO_CONTENT)
+        .map(|_| {
+            tracing::info!(instance_id = %id, "Instance deprovisioned");
+            StatusCode::NO_CONTENT
+        })
         .ok_or_else(|| {
             ZosmfErrorResponse::not_found(format!(
                 "Provisioned instance '{}' not found",

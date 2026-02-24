@@ -85,6 +85,7 @@ async fn list_systems(
         .collect();
     let num_rows = items.len();
 
+    tracing::debug!(systems = num_rows, "Topology systems listed");
     Json(TopologyListResponse { items, num_rows })
 }
 

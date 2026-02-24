@@ -120,9 +120,11 @@ async fn start_or_command(
         TsoSessionHandle {
             session,
             output_buffer: Vec::new(),
-            userid: auth.userid,
+            userid: auth.userid.clone(),
         },
     );
+
+    tracing::info!(userid = %auth.userid, servlet_key = %servlet_key, "TSO session started");
 
     Ok((
         StatusCode::CREATED,
@@ -200,6 +202,7 @@ async fn stop_session(
             ZosmfErrorResponse::not_found(format!("TSO session '{}' not found", servlet_key))
         })?;
 
+    tracing::info!(servlet_key = %servlet_key, "TSO session stopped");
     Ok(StatusCode::OK)
 }
 

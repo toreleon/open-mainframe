@@ -434,6 +434,15 @@ async fn submit_job(
     })?;
     let response = job_to_response(job);
 
+    tracing::info!(
+        jobname = %job_name,
+        jobid = %format_job_id(job_id),
+        owner = %auth.userid,
+        target_system = ?target_system,
+        retcode = max_rc,
+        "Job submitted and completed"
+    );
+
     Ok((StatusCode::CREATED, Json(response)))
 }
 
@@ -606,16 +615,19 @@ async fn job_action(
     match action.request.to_lowercase().as_str() {
         "hold" => {
             jes.hold(id).map_err(|e| {
+                tracing::warn!(jobid = %jobid, action = "hold", error = %e, "Job action failed");
                 ZosmfErrorResponse::bad_request(format!("Cannot hold job: {}", e))
             })?;
         }
         "release" => {
             jes.release(id).map_err(|e| {
+                tracing::warn!(jobid = %jobid, action = "release", error = %e, "Job action failed");
                 ZosmfErrorResponse::bad_request(format!("Cannot release job: {}", e))
             })?;
         }
         "cancel" => {
             jes.cancel(id).map_err(|e| {
+                tracing::warn!(jobid = %jobid, action = "cancel", error = %e, "Job action failed");
                 ZosmfErrorResponse::bad_request(format!("Cannot cancel job: {}", e))
             })?;
         }
@@ -626,6 +638,8 @@ async fn job_action(
             )));
         }
     }
+
+    tracing::info!(jobid = %jobid, jobname = %jobname, action = %action.request, "Job action completed");
 
     Ok(Json(JobFeedback {
         jobid: jobid.clone(),

@@ -20,11 +20,13 @@ pub const CSRF_HEADER: &str = "x-csrf-zosmf-header";
 /// `X-CSRF-ZOSMF-HEADER` header with a 403 Forbidden response.
 pub async fn csrf_middleware(request: Request, next: Next) -> Response {
     let method = request.method().clone();
+    let uri = request.uri().clone();
 
     // Only validate CSRF on mutating methods.
     if (method == Method::PUT || method == Method::POST || method == Method::DELETE)
         && !request.headers().contains_key(CSRF_HEADER)
     {
+        tracing::warn!(method = %method, uri = %uri, "CSRF validation failed");
         return ZosmfErrorResponse::forbidden(
             "CSRF validation failed: X-CSRF-ZOSMF-HEADER required on mutating requests",
         )

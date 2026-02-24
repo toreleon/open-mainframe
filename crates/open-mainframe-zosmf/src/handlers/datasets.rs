@@ -919,6 +919,8 @@ async fn create_dataset(
         })?;
     }
 
+    tracing::info!(dsn = %dsn_upper, dsorg = %dsorg_to_string(&dsorg), "Dataset created");
+
     let entry = open_mainframe_dataset::CatalogEntry {
         dsn: dsn_upper,
         path: ds_path,
@@ -927,7 +929,6 @@ async fn create_dataset(
     };
 
     catalog.add_entry(entry);
-
     Ok(StatusCode::CREATED)
 }
 
@@ -991,6 +992,7 @@ async fn delete_dataset(
         })?;
     }
 
+    tracing::info!(dsn = %dsn.to_uppercase(), "Dataset deleted");
     Ok(StatusCode::NO_CONTENT)
 }
 

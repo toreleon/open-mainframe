@@ -111,6 +111,22 @@ impl ZosmfErrorResponse {
 
 impl IntoResponse for ZosmfErrorResponse {
     fn into_response(self) -> Response {
+        if self.status.is_server_error() {
+            tracing::error!(
+                status = %self.status.as_u16(),
+                rc = self.body.rc,
+                message = %self.body.message,
+                "Server error response"
+            );
+        } else if self.status.is_client_error() {
+            tracing::warn!(
+                status = %self.status.as_u16(),
+                rc = self.body.rc,
+                message = %self.body.message,
+                "Client error response"
+            );
+        }
+
         let body = serde_json::to_string(&self.body).unwrap_or_else(|_| {
             r#"{"rc":12,"reason":0,"category":5,"message":"internal serialization error"}"#
                 .to_string()

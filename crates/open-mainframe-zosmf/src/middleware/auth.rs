@@ -70,9 +70,11 @@ fn validate_jwt(token: &str, state: &Arc<AppState>) -> std::result::Result<AuthC
 
         if user.expires_at <= now {
             state.token_store.remove(token);
+            tracing::debug!(userid = %user.userid, "Token expired");
             return Err(ZosmfErrorResponse::unauthorized("Token expired"));
         }
 
+        tracing::debug!(userid = %user.userid, "Token validated (store)");
         return Ok(AuthContext {
             userid: user.userid.clone(),
         });
@@ -87,14 +89,19 @@ fn validate_jwt(token: &str, state: &Arc<AppState>) -> std::result::Result<AuthC
                 .as_secs();
 
             if claims.exp <= now {
+                tracing::debug!(userid = %claims.sub, "Token expired (stateless)");
                 return Err(ZosmfErrorResponse::unauthorized("Token expired"));
             }
 
+            tracing::debug!(userid = %claims.sub, "Token validated (stateless)");
             Ok(AuthContext {
                 userid: claims.sub,
             })
         }
-        Err(_) => Err(ZosmfErrorResponse::unauthorized("Invalid token")),
+        Err(_) => {
+            tracing::debug!("Invalid token presented");
+            Err(ZosmfErrorResponse::unauthorized("Invalid token"))
+        }
     }
 }
 
@@ -118,10 +125,12 @@ fn validate_basic(
     let result = state.saf.verify(&state.racf, userid, password);
 
     if result.is_authorized() {
+        tracing::debug!(userid = %userid.to_uppercase(), "Basic auth validated");
         Ok(AuthContext {
             userid: userid.trim().to_uppercase(),
         })
     } else {
+        tracing::warn!(userid = %userid.to_uppercase(), "Basic auth failed");
         Err(ZosmfErrorResponse::unauthorized(format!(
             "Authentication failed for user '{}'",
             userid.to_uppercase()

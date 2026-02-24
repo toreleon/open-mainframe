@@ -6,10 +6,14 @@ use open_mainframe_zosmf::config::ZosmfConfig;
 use open_mainframe_zosmf::handlers::build_router;
 use open_mainframe_zosmf::mounts::{MountType, parse_mount_arg};
 use open_mainframe_zosmf::state::AppState;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("open_mainframe_zosmf=info,tower_http=debug,warn")
+    });
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let args: Vec<String> = std::env::args().collect();
 
@@ -21,7 +25,7 @@ async fn main() {
     // Check for --config flag to load TOML config
     let mut config = if let Some(config_path) = get_arg(&args, "--config") {
         ZosmfConfig::from_file(&config_path).unwrap_or_else(|e| {
-            eprintln!("Warning: failed to load config {}: {}", config_path, e);
+            tracing::warn!(path = %config_path, error = %e, "Failed to load config, using defaults");
             ZosmfConfig::default()
         })
     } else {
@@ -57,17 +61,17 @@ async fn main() {
                     MountType::DatasetSeq => "SEQ",
                     MountType::Uss => "USS",
                 };
-                eprintln!("  Mount {}: {} {} -> {}", id, type_str, host_path.display(), virtual_path);
+                tracing::info!(mount_id = %id, mount_type = type_str, host = %host_path.display(), virtual_path = %virtual_path, "Dataset mount added");
             } else {
-                eprintln!("Warning: invalid --mount-dataset argument: {}", arg);
+                tracing::warn!(arg = %arg, "Invalid --mount-dataset argument");
             }
         }
         for arg in &uss_mounts {
             if let Some((mt, host_path, virtual_path)) = parse_mount_arg(arg, MountType::Uss) {
                 let id = mount_table.add_mount(mt, host_path.clone(), virtual_path.clone(), false, None);
-                eprintln!("  Mount {}: USS {} -> {}", id, host_path.display(), virtual_path);
+                tracing::info!(mount_id = %id, host = %host_path.display(), virtual_path = %virtual_path, "USS mount added");
             } else {
-                eprintln!("Warning: invalid --mount-uss argument: {}", arg);
+                tracing::warn!(arg = %arg, "Invalid --mount-uss argument");
             }
         }
     }
@@ -91,14 +95,15 @@ async fn main() {
     let router = build_router(state);
 
     let bind_addr = format!("127.0.0.1:{}", port);
-    eprintln!("z/OSMF server starting on http://{}", bind_addr);
-    eprintln!("  Default user: IBMUSER / SYS1");
-    eprintln!("  Datasets dir: {}", ds_dir.display());
-    eprintln!("  USS root:     {}", uss_dir.display());
-    eprintln!("  Sysplex:      {} ({} system{})", sysplex_name, system_count, if system_count == 1 { "" } else { "s" });
-    if mount_count > 0 {
-        eprintln!("  Mounts:       {}", mount_count);
-    }
+    tracing::info!(
+        bind_addr = %bind_addr,
+        datasets_dir = %ds_dir.display(),
+        uss_root = %uss_dir.display(),
+        sysplex = %sysplex_name,
+        systems = system_count,
+        mounts = mount_count,
+        "z/OSMF server starting"
+    );
 
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await

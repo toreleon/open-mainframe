@@ -17,6 +17,7 @@ pub mod workflow;
 use std::sync::Arc;
 
 use axum::Router;
+use tower_http::trace::TraceLayer;
 
 use crate::state::AppState;
 
@@ -36,5 +37,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(workflow::routes())
         .merge(provisioning::routes())
         .merge(cics::routes())
+        .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

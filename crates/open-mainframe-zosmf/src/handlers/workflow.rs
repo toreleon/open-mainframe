@@ -82,8 +82,9 @@ async fn create_workflow(
         system: req.system,
     };
 
-    state.workflows.insert(key, instance.clone());
+    state.workflows.insert(key.clone(), instance.clone());
 
+    tracing::info!(workflow_key = %key, workflow_name = %instance.workflow_name, "Workflow created");
     Ok((StatusCode::CREATED, Json(instance)))
 }
 
@@ -129,7 +130,10 @@ async fn delete_workflow(
     state
         .workflows
         .remove(&key)
-        .map(|_| StatusCode::NO_CONTENT)
+        .map(|_| {
+            tracing::info!(workflow_key = %key, "Workflow deleted");
+            StatusCode::NO_CONTENT
+        })
         .ok_or_else(|| {
             ZosmfErrorResponse::not_found(format!("Workflow '{}' not found", key))
         })
