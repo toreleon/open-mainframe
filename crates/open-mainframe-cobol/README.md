@@ -481,6 +481,17 @@ cargo test -p open-mainframe-cobol
 cargo test -p open-mainframe-cobol --features llvm
 ```
 
+## Implementation vs Mainframe Gaps
+
+| Feature | Real IBM Enterprise COBOL | OpenMainframe implementation |
+|---------|---------------------------|------------------------------|
+| **Arithmetic**| Hardware decimal instructions (AP, SP, MP, DP). | Software-emulated decimal math via `open-mainframe-runtime`. |
+| **Object Code**| z/Architecture machine code. | LLVM IR or Abstract Syntax Tree (AST) interpretation. |
+| **Data Storage**| EBCDIC by default. | Internal UTF-8; conversion to EBCDIC on I/O. |
+| **Report Writer**| Full support for `GENERATE/TERMINATE`. | Not yet implemented. |
+| **Intrinsic Funcs**| Hardware-accelerated (z13+). | Software implementation (77+ functions). |
+| **Precision** | 31-digit decimal precision. | 31-digit declared; currently implemented via `f64` in math functions. |
+
 ## Limitations and Future Work
 
 - **Code generation** is partially implemented — generates LLVM module structure
