@@ -147,10 +147,10 @@ async fn list_datasets(
         all_names.sort();
     }
 
-    // Apply start filter for pagination.
+    // Apply start filter for pagination (inclusive — z/OSMF returns items >= start).
     if let Some(ref start) = query.start {
         let start_upper = start.to_uppercase();
-        all_names.retain(|n| n.to_uppercase() > start_upper);
+        all_names.retain(|n| n.to_uppercase() >= start_upper);
     }
 
     let total_rows = all_names.len();
@@ -830,6 +830,14 @@ fn write_dataset_content(
             .path
             .as_ref()
             .ok_or_else(|| ZosmfErrorResponse::not_found("Dataset path not resolved"))?;
+
+        // If the path is a directory (PDS), we cannot write to it without a member name.
+        if path.is_dir() {
+            return Err(ZosmfErrorResponse::bad_request(format!(
+                "Dataset '{}' is a PDS; specify a member name using DSN(MEMBER) notation",
+                ds_name.to_uppercase()
+            )));
+        }
 
         std::fs::write(path, &content).map_err(|e| {
             ZosmfErrorResponse::internal(format!("Failed to write dataset: {}", e))
