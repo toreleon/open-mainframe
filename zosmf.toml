@@ -1,0 +1,40 @@
+[cics]
+default_app = "CARDDEMO"
+session_timeout_seconds = 1800
+
+[cics.apps.CARDDEMO]
+program = "../carddemo/app/cbl/COSGN00C.cbl"
+include_paths = [
+    "../carddemo/app/cpy",
+    "../carddemo/app/cpy-bms",
+    "crates/open-mainframe-cics/copybooks",
+]
+bms_dir = "../carddemo/app/bms"
+program_dir = "../carddemo/app/cbl"
+data_files = [
+    "ACCTDAT=../carddemo/app/data/ASCII/acctdata.txt:11:300",
+    "CARDDAT=../carddemo/app/data/ASCII/carddata.txt:16:150",
+    "CUSTDAT=../carddemo/app/data/ASCII/custdata.txt:9:500",
+    "CCXREF=../carddemo/app/data/ASCII/cardxref.txt:16:36",
+    "TRANSACT=../carddemo/app/data/ASCII/dailytran.txt:16:350",
+    "USRSEC=../carddemo/app/data/ASCII/usrsec.txt:8:80",
+]
+
+[cics.apps.CARDDEMO.transids]
+CC00 = "COSGN00C"
+CM00 = "COMEN01C"
+CA00 = "COADM01C"
+CB00 = "COBIL00C"
+CR00 = "CORPT00C"
+CT00 = "COTRN00C"
+CT01 = "COTRN01C"
+CT02 = "COTRN02C"
+CU00 = "COUSR00C"
+CU01 = "COUSR01C"
+CU02 = "COUSR02C"
+CU03 = "COUSR03C"
+CAVW = "COACTVWC"
+CAUP = "COACTUPC"
+CCLI = "COCRDLIC"
+CCDL = "COCRDSLC"
+CCUP = "COCRDUPC"

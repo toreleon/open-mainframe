@@ -419,6 +419,10 @@ async fn session_thread_main(config: CicsAppConfig, mut cmd_rx: mpsc::Receiver<S
                             headless::capture_screen(&sess)
                         };
 
+                        // Reply to the pending SendInput with the new screen
+                        // before waiting for the next input command.
+                        reply_pending(SessionResponse::Screen(screen.clone()));
+
                         match wait_for_input_via_channel(&mut cmd_rx, screen).await {
                             Some((aid_byte, fields)) => {
                                 pending_aid = Some(aid_byte);
