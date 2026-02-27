@@ -33,7 +33,8 @@ async fn main() {
     };
 
     config.server.port = port;
-    config.server.host = "127.0.0.1".to_string();
+    let host = std::env::var("ZOSMF_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    config.server.host = host.clone();
 
     // Set up USS root in a temp directory.
     let uss_dir = std::env::temp_dir().join("openmainframe-uss");
@@ -94,7 +95,7 @@ async fn main() {
     let state = Arc::new(state);
     let router = build_router(state);
 
-    let bind_addr = format!("127.0.0.1:{}", port);
+    let bind_addr = format!("{}:{}", host, port);
     tracing::info!(
         bind_addr = %bind_addr,
         datasets_dir = %ds_dir.display(),

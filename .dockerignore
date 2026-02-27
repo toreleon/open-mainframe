@@ -1,0 +1,10 @@
+target/
+.git/
+data/
+tests/
+examples/
+deploy/
+packaging/
+scripts/
+.github/
+.claude/
