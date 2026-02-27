@@ -120,3 +120,4 @@ open-mainframe-easytrieve = { path = "crates/open-mainframe-easytrieve" }
 open-mainframe-natural = { path = "crates/open-mainframe-natural" }
 open-mainframe-focus = { path = "crates/open-mainframe-focus" }
 open-mainframe-rexx = { path = "crates/open-mainframe-rexx" }
+open-mainframe-lib = { path = "crates/open-mainframe", package = "open-mainframe" }

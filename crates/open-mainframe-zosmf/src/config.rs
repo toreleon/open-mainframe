@@ -29,6 +29,9 @@ pub struct ZosmfConfig {
     /// External filesystem mounts.
     #[serde(default)]
     pub mounts: Vec<MountConfig>,
+    /// CICS application configuration.
+    #[serde(default)]
+    pub cics: CicsConfig,
 }
 
 /// Configuration for a single mount entry.
@@ -197,6 +200,46 @@ fn default_hostname() -> String {
 
 fn default_saf_realm() -> String {
     "SAFRealm".to_string()
+}
+
+fn default_cics_timeout() -> u64 {
+    1800 // 30 minutes
+}
+
+/// CICS application server configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CicsConfig {
+    /// Named CICS application profiles (e.g., "CARDDEMO").
+    #[serde(default)]
+    pub apps: std::collections::HashMap<String, CicsAppProfile>,
+    /// Default application name when POST body omits `appName`.
+    #[serde(default)]
+    pub default_app: Option<String>,
+    /// Session idle timeout in seconds (default: 1800 = 30 min).
+    #[serde(default = "default_cics_timeout")]
+    pub session_timeout_seconds: u64,
+}
+
+/// A named CICS application profile loaded from `zosmf.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CicsAppProfile {
+    /// Path to the initial COBOL program.
+    pub program: String,
+    /// Copybook include paths.
+    #[serde(default)]
+    pub include_paths: Vec<String>,
+    /// BMS map directory.
+    #[serde(default)]
+    pub bms_dir: Option<String>,
+    /// VSAM data files (format: `DDNAME=path[:key_len[:rec_len]]`).
+    #[serde(default)]
+    pub data_files: Vec<String>,
+    /// TRANSID → program name mappings.
+    #[serde(default)]
+    pub transids: std::collections::HashMap<String, String>,
+    /// Directory to search for XCTL target programs.
+    #[serde(default)]
+    pub program_dir: Option<String>,
 }
 
 #[cfg(test)]

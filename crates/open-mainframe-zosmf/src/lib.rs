@@ -29,6 +29,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cics_runner;
 pub mod config;
 pub mod eureka;
 pub mod handlers;

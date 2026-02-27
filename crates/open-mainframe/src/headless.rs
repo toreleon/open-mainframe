@@ -19,7 +19,7 @@ use open_mainframe_tui::session::Session;
 // ---------------------------------------------------------------------------
 
 /// A complete screen snapshot sent to the caller.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ScreenOutput {
     /// Always `"screen"`.
     #[serde(rename = "type")]
@@ -39,14 +39,14 @@ pub struct ScreenOutput {
 }
 
 /// Cursor row/col (1-based).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CursorPosition {
     pub row: usize,
     pub col: usize,
 }
 
 /// A single field on the screen.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FieldOutput {
     pub name: String,
     pub row: usize,
@@ -61,7 +61,7 @@ pub struct FieldOutput {
 }
 
 /// Session-end message sent to the caller.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EndOutput {
     /// `"end"` or `"error"`.
     #[serde(rename = "type")]

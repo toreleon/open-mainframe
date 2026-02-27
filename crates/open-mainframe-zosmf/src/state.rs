@@ -12,6 +12,7 @@ use open_mainframe_wlm::{DisplayWlmResponse, PolicyStore, WlmMode};
 use open_mainframe_cics::bms::BmsMapset;
 use open_mainframe_cics::terminal::TerminalManager;
 
+use crate::cics_runner::CicsSessionRunner;
 use crate::config::ZosmfConfig;
 use crate::mounts::MountTable;
 use crate::sysplex::SysplexManager;
@@ -88,8 +89,10 @@ pub struct AppState {
     pub provisioning_templates: DashMap<String, ProvisioningTemplate>,
     /// Provisioned instances (software service instances).
     pub provisioning_instances: DashMap<String, ProvisionedInstance>,
-    /// CICS terminal sessions: session key → session handle.
+    /// CICS terminal sessions (legacy BMS-only): session key → session handle.
     pub cics_sessions: DashMap<String, CicsSessionHandle>,
+    /// CICS execution sessions (full engine): session key → runner handle.
+    pub cics_exec_sessions: DashMap<String, CicsSessionRunner>,
     /// Mount table for external filesystem mounts.
     pub mount_table: RwLock<MountTable>,
     /// Sysplex manager for multi-system support.
@@ -170,6 +173,7 @@ impl AppState {
             provisioning_templates: DashMap::new(),
             provisioning_instances: DashMap::new(),
             cics_sessions: DashMap::new(),
+            cics_exec_sessions: DashMap::new(),
             mount_table: RwLock::new(mount_table),
             sysplex: RwLock::new(sysplex),
         }

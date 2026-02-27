@@ -1,12 +1,17 @@
 //! /zosmf/cicsApp/* — CICS terminal interaction REST API endpoints.
 //!
-//! Provides BMS screen interaction via REST:
+//! Supports two modes:
+//! - **Legacy BMS-only** — request includes `bmsSource` → screen rendering only
+//! - **Full execution** — request includes `appName` → COBOL compilation + execution
+//!
+//! Endpoints:
 //! - `POST   /zosmf/cicsApp/terminal`               — start CICS terminal session
 //! - `GET    /zosmf/cicsApp/terminal/:sessionKey`    — get current screen state
 //! - `PUT    /zosmf/cicsApp/terminal/:sessionKey`    — send AID + field data
 //! - `DELETE /zosmf/cicsApp/terminal/:sessionKey`    — end session
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -16,7 +21,10 @@ use axum::{Json, Router};
 use open_mainframe_cics::bms::BmsParser;
 use open_mainframe_cics::runtime::eib::aid;
 use open_mainframe_cics::terminal::TerminalManager;
+use tokio::sync::oneshot;
 
+use crate::cics_runner::{CicsAppConfig, CicsSessionRunner, SessionCommand, SessionResponse};
+use crate::config::CicsAppProfile;
 use crate::state::{AppState, CicsSessionHandle};
 use crate::types::auth::AuthContext;
 use crate::types::error::ZosmfErrorResponse;
@@ -33,6 +41,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
 }
 
+// ── Shared helpers ───────────────────────────────────────────────────
+
 /// Generate a unique session key.
 fn generate_session_key() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,7 +53,278 @@ fn generate_session_key() -> String {
     format!("CICS-{:016X}", ts)
 }
 
-/// Map AID name to byte value.
+/// Convert a `CicsAppProfile` (from zosmf.toml) into a `CicsAppConfig`.
+fn profile_to_config(profile: &CicsAppProfile, userid: &str) -> CicsAppConfig {
+    CicsAppConfig {
+        initial_program: PathBuf::from(&profile.program),
+        include_paths: profile.include_paths.iter().map(PathBuf::from).collect(),
+        bms_dir: profile.bms_dir.as_ref().map(PathBuf::from),
+        data_files: profile.data_files.clone(),
+        transid_map: profile.transids.clone(),
+        program_dir: profile.program_dir.as_ref().map(PathBuf::from),
+        userid: userid.to_string(),
+    }
+}
+
+/// Parse `fields` from request JSON into `HashMap<String, String>`.
+fn parse_fields_string(request: &serde_json::Value) -> HashMap<String, String> {
+    let mut fields = HashMap::new();
+    if let Some(obj) = request["fields"].as_object() {
+        for (k, v) in obj {
+            if let Some(s) = v.as_str() {
+                fields.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    fields
+}
+
+/// Convert a `ScreenOutput` to JSON with an added `sessionKey` field.
+fn screen_to_json(
+    screen: &open_mainframe_lib::headless::ScreenOutput,
+    session_key: &str,
+) -> serde_json::Value {
+    let mut json = serde_json::to_value(screen).unwrap_or_default();
+    json["sessionKey"] = serde_json::Value::String(session_key.to_string());
+    json
+}
+
+/// Convert an `EndOutput` to JSON with an added `sessionKey` field.
+fn end_to_json(
+    end: &open_mainframe_lib::headless::EndOutput,
+    session_key: &str,
+) -> serde_json::Value {
+    let mut json = serde_json::to_value(end).unwrap_or_default();
+    json["sessionKey"] = serde_json::Value::String(session_key.to_string());
+    json
+}
+
+// ── POST: start session ──────────────────────────────────────────────
+
+/// POST /zosmf/cicsApp/terminal — start a CICS terminal session.
+///
+/// **Full execution mode** (new):
+/// ```json
+/// { "appName": "CARDDEMO" }
+/// ```
+///
+/// **Legacy BMS-only mode** (backward compatible):
+/// ```json
+/// {
+///   "bmsSource": "... raw BMS source ...",
+///   "mapset": "COSGN00",
+///   "map": "COSGN0A",
+///   "fields": { "TITLE": "Welcome" }
+/// }
+/// ```
+async fn start_session(
+    State(state): State<Arc<AppState>>,
+    auth: AuthContext,
+    Json(request): Json<serde_json::Value>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ZosmfErrorResponse> {
+    // Legacy BMS-only path: if `bmsSource` is present, use the old handler.
+    if request.get("bmsSource").is_some() {
+        return start_session_bms_only(state, auth, request).await;
+    }
+
+    // Full execution path: resolve app profile from zosmf.toml.
+    let app_name = request["appName"]
+        .as_str()
+        .map(|s| s.to_uppercase())
+        .or_else(|| state.config.cics.default_app.clone().map(|s| s.to_uppercase()))
+        .ok_or_else(|| {
+            ZosmfErrorResponse::bad_request(
+                "Missing 'appName' and no default CICS app configured in zosmf.toml",
+            )
+        })?;
+
+    let profile = state
+        .config
+        .cics
+        .apps
+        .get(&app_name)
+        .ok_or_else(|| {
+            ZosmfErrorResponse::bad_request(format!(
+                "CICS app '{}' not found in zosmf.toml [cics.apps]",
+                app_name
+            ))
+        })?;
+
+    let app_config = profile_to_config(profile, &auth.userid);
+    let session_key = generate_session_key();
+
+    let runner = CicsSessionRunner::spawn(app_config).map_err(|e| {
+        ZosmfErrorResponse::internal(format!("Failed to start CICS session: {e}"))
+    })?;
+
+    // Get the initial screen from the session thread.
+    let (reply_tx, reply_rx) = oneshot::channel();
+    runner
+        .cmd_tx
+        .send(SessionCommand::GetScreen { reply: reply_tx })
+        .await
+        .map_err(|_| ZosmfErrorResponse::internal("CICS session thread not responding"))?;
+
+    let response = tokio::time::timeout(std::time::Duration::from_secs(30), reply_rx)
+        .await
+        .map_err(|_| ZosmfErrorResponse::internal("CICS session startup timed out"))?
+        .map_err(|_| ZosmfErrorResponse::internal("CICS session thread died during startup"))?;
+
+    let json = match response {
+        SessionResponse::Screen(screen) => screen_to_json(&screen, &session_key),
+        SessionResponse::End(end) => end_to_json(&end, &session_key),
+        SessionResponse::Error(e) => {
+            return Err(ZosmfErrorResponse::internal(e));
+        }
+    };
+
+    state
+        .cics_exec_sessions
+        .insert(session_key.clone(), runner);
+
+    tracing::info!(
+        session_key = %session_key,
+        app = %app_name,
+        "CICS execution session started"
+    );
+
+    Ok((StatusCode::CREATED, Json(json)))
+}
+
+// ── GET: get screen ──────────────────────────────────────────────────
+
+/// GET /zosmf/cicsApp/terminal/:sessionKey — get current screen state.
+async fn get_screen(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Path(session_key): Path<String>,
+) -> Result<Json<serde_json::Value>, ZosmfErrorResponse> {
+    // Try full-execution sessions first.
+    if let Some(runner) = state.cics_exec_sessions.get(&session_key) {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        runner
+            .cmd_tx
+            .send(SessionCommand::GetScreen { reply: reply_tx })
+            .await
+            .map_err(|_| ZosmfErrorResponse::internal("Session thread not responding"))?;
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(10), reply_rx)
+            .await
+            .map_err(|_| ZosmfErrorResponse::internal("GetScreen timed out"))?
+            .map_err(|_| ZosmfErrorResponse::internal("Session thread died"))?;
+
+        return match response {
+            SessionResponse::Screen(screen) => Ok(Json(screen_to_json(&screen, &session_key))),
+            SessionResponse::End(end) => {
+                drop(runner);
+                state.cics_exec_sessions.remove(&session_key);
+                Ok(Json(end_to_json(&end, &session_key)))
+            }
+            SessionResponse::Error(e) => Err(ZosmfErrorResponse::internal(e)),
+        };
+    }
+
+    // Fall back to legacy BMS sessions.
+    let session = state.cics_sessions.get(&session_key).ok_or_else(|| {
+        ZosmfErrorResponse::not_found(format!("CICS session '{}' not found", session_key))
+    })?;
+
+    let mut response = build_screen_response(&session);
+    response["sessionKey"] = serde_json::Value::String(session_key);
+    Ok(Json(response))
+}
+
+// ── PUT: send input ──────────────────────────────────────────────────
+
+/// PUT /zosmf/cicsApp/terminal/:sessionKey — send AID key + field data.
+///
+/// Request body:
+/// ```json
+/// {
+///   "aid": "ENTER",
+///   "fields": { "USRIDINI": "ADMIN", "PASSINI": "password" }
+/// }
+/// ```
+async fn send_input(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Path(session_key): Path<String>,
+    Json(request): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ZosmfErrorResponse> {
+    // Try full-execution sessions first.
+    if let Some(runner) = state.cics_exec_sessions.get(&session_key) {
+        let aid = request["aid"]
+            .as_str()
+            .unwrap_or("Enter")
+            .to_string();
+        let fields = parse_fields_string(&request);
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        runner
+            .cmd_tx
+            .send(SessionCommand::SendInput {
+                aid,
+                fields,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| ZosmfErrorResponse::internal("Session thread not responding"))?;
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(30), reply_rx)
+            .await
+            .map_err(|_| ZosmfErrorResponse::internal("CICS execution timed out"))?
+            .map_err(|_| ZosmfErrorResponse::internal("Session thread died"))?;
+
+        return match response {
+            SessionResponse::Screen(screen) => Ok(Json(screen_to_json(&screen, &session_key))),
+            SessionResponse::End(end) => {
+                drop(runner);
+                state.cics_exec_sessions.remove(&session_key);
+                Ok(Json(end_to_json(&end, &session_key)))
+            }
+            SessionResponse::Error(e) => {
+                drop(runner);
+                state.cics_exec_sessions.remove(&session_key);
+                Err(ZosmfErrorResponse::internal(e))
+            }
+        };
+    }
+
+    // Fall back to legacy BMS sessions.
+    send_input_bms_only(state, session_key, request).await
+}
+
+// ── DELETE: stop session ─────────────────────────────────────────────
+
+/// DELETE /zosmf/cicsApp/terminal/:sessionKey — end CICS terminal session.
+async fn stop_session(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Path(session_key): Path<String>,
+) -> Result<StatusCode, ZosmfErrorResponse> {
+    // Try full-execution sessions first.
+    if state.cics_exec_sessions.remove(&session_key).is_some() {
+        tracing::info!(session_key = %session_key, "CICS execution session stopped");
+        return Ok(StatusCode::OK);
+    }
+
+    // Fall back to legacy BMS sessions.
+    state
+        .cics_sessions
+        .remove(&session_key)
+        .ok_or_else(|| {
+            ZosmfErrorResponse::not_found(format!("CICS session '{}' not found", session_key))
+        })?;
+
+    tracing::info!(session_key = %session_key, "CICS terminal session stopped");
+    Ok(StatusCode::OK)
+}
+
+// =====================================================================
+// Legacy BMS-only handlers (preserved for backward compatibility)
+// =====================================================================
+
+/// Map AID name to byte value (legacy BMS mode).
 fn parse_aid(name: &str) -> u8 {
     match name.to_uppercase().as_str() {
         "ENTER" => aid::ENTER,
@@ -67,7 +348,7 @@ fn parse_aid(name: &str) -> u8 {
     }
 }
 
-/// AID byte to name.
+/// AID byte to name (legacy BMS mode).
 fn aid_name(aid_byte: u8) -> &'static str {
     match aid_byte {
         0x7D => "ENTER",
@@ -91,13 +372,9 @@ fn aid_name(aid_byte: u8) -> &'static str {
     }
 }
 
-/// Build JSON representation of the current screen state.
-fn build_screen_response(
-    session: &CicsSessionHandle,
-) -> serde_json::Value {
-    let term = session
-        .terminal_manager
-        .get(&session.terminal_id);
+/// Build JSON representation of the current screen state (legacy BMS mode).
+fn build_screen_response(session: &CicsSessionHandle) -> serde_json::Value {
+    let term = session.terminal_manager.get(&session.terminal_id);
 
     let (rows, cols, cursor_row, cursor_col, screen_text, last_aid) = match term {
         Some(t) => {
@@ -108,7 +385,6 @@ fn build_screen_response(
         None => (24, 80, 1, 1, String::new(), aid::NO_AID),
     };
 
-    // Build field info from current mapset/map
     let mut fields = Vec::new();
     if let (Some(mapset_name), Some(map_name)) =
         (&session.current_mapset, &session.current_map)
@@ -119,9 +395,12 @@ fn build_screen_response(
                     if field.name.is_empty() {
                         continue;
                     }
-                    // Read field value from screen text
                     let value = extract_field_from_text(
-                        &screen_text, cols, field.row, field.column, field.length,
+                        &screen_text,
+                        cols,
+                        field.row,
+                        field.column,
+                        field.length,
                     );
                     fields.push(serde_json::json!({
                         "name": field.name,
@@ -153,7 +432,7 @@ fn build_screen_response(
     })
 }
 
-/// Extract a field value from screen text (line-based).
+/// Extract a field value from screen text (line-based, legacy BMS mode).
 fn extract_field_from_text(
     text: &str,
     _cols: usize,
@@ -174,23 +453,11 @@ fn extract_field_from_text(
     line[start..end].trim_end().to_string()
 }
 
-// ── Endpoints ─────────────────────────────────────────────────────────
-
-/// POST /zosmf/cicsApp/terminal — start a CICS terminal session.
-///
-/// Request body:
-/// ```json
-/// {
-///   "bmsSource": "... raw BMS source ...",
-///   "mapset": "COSGN00",
-///   "map": "COSGN0A",
-///   "fields": { "TITLE": "Welcome" }
-/// }
-/// ```
-async fn start_session(
-    State(state): State<Arc<AppState>>,
+/// Legacy BMS-only start_session implementation.
+async fn start_session_bms_only(
+    state: Arc<AppState>,
     auth: AuthContext,
-    Json(request): Json<serde_json::Value>,
+    request: serde_json::Value,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ZosmfErrorResponse> {
     let bms_source = request["bmsSource"]
         .as_str()
@@ -202,13 +469,11 @@ async fn start_session(
         .to_uppercase();
     let map_name = request["map"].as_str().unwrap_or("").to_uppercase();
 
-    // Parse BMS source
     let mut parser = BmsParser::new();
     let mapset = parser.parse(bms_source).map_err(|e| {
         ZosmfErrorResponse::bad_request(format!("BMS parse error: {}", e))
     })?;
 
-    // Determine which map to display
     let target_map = if map_name.is_empty() {
         mapset
             .maps
@@ -220,13 +485,15 @@ async fn start_session(
             .iter()
             .find(|m| m.name == map_name)
             .ok_or_else(|| {
-                ZosmfErrorResponse::bad_request(format!("Map '{}' not found in mapset", map_name))
+                ZosmfErrorResponse::bad_request(format!(
+                    "Map '{}' not found in mapset",
+                    map_name
+                ))
             })?
     };
 
     let actual_map_name = target_map.name.clone();
 
-    // Build field data from request
     let mut field_data: HashMap<String, Vec<u8>> = HashMap::new();
     if let Some(fields) = request["fields"].as_object() {
         for (k, v) in fields {
@@ -236,23 +503,19 @@ async fn start_session(
         }
     }
 
-    // Create terminal session
     let session_key = generate_session_key();
     let terminal_id = format!("T{:04}", state.cics_sessions.len() + 1);
 
     let mut terminal_manager = TerminalManager::new();
-    let send_opts =
-        open_mainframe_cics::terminal::SendMapOptions::initial();
+    let send_opts = open_mainframe_cics::terminal::SendMapOptions::initial();
     terminal_manager
         .send_map(&terminal_id, target_map, &field_data, send_opts)
-        .map_err(|e| {
-            ZosmfErrorResponse::internal(format!("SEND MAP failed: {}", e))
-        })?;
+        .map_err(|e| ZosmfErrorResponse::internal(format!("SEND MAP failed: {}", e)))?;
 
     let mut mapsets = HashMap::new();
     mapsets.insert(mapset.name.clone(), mapset);
 
-    tracing::info!(session_key = %session_key, mapset = %mapset_name, "CICS terminal session started");
+    tracing::info!(session_key = %session_key, mapset = %mapset_name, "CICS terminal session started (BMS-only)");
 
     let session = CicsSessionHandle {
         terminal_manager,
@@ -270,35 +533,11 @@ async fn start_session(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
-/// GET /zosmf/cicsApp/terminal/:sessionKey — get current screen state.
-async fn get_screen(
-    State(state): State<Arc<AppState>>,
-    _auth: AuthContext,
-    Path(session_key): Path<String>,
-) -> Result<Json<serde_json::Value>, ZosmfErrorResponse> {
-    let session = state.cics_sessions.get(&session_key).ok_or_else(|| {
-        ZosmfErrorResponse::not_found(format!("CICS session '{}' not found", session_key))
-    })?;
-
-    let mut response = build_screen_response(&session);
-    response["sessionKey"] = serde_json::Value::String(session_key);
-    Ok(Json(response))
-}
-
-/// PUT /zosmf/cicsApp/terminal/:sessionKey — send AID key + field data.
-///
-/// Request body:
-/// ```json
-/// {
-///   "aid": "ENTER",
-///   "fields": { "USRIDINI": "ADMIN", "PASSINI": "password" }
-/// }
-/// ```
-async fn send_input(
-    State(state): State<Arc<AppState>>,
-    _auth: AuthContext,
-    Path(session_key): Path<String>,
-    Json(request): Json<serde_json::Value>,
+/// Legacy BMS-only send_input implementation.
+async fn send_input_bms_only(
+    state: Arc<AppState>,
+    session_key: String,
+    request: serde_json::Value,
 ) -> Result<Json<serde_json::Value>, ZosmfErrorResponse> {
     let mut session = state.cics_sessions.get_mut(&session_key).ok_or_else(|| {
         ZosmfErrorResponse::not_found(format!("CICS session '{}' not found", session_key))
@@ -307,7 +546,6 @@ async fn send_input(
     let aid_str = request["aid"].as_str().unwrap_or("ENTER");
     let aid_byte = parse_aid(aid_str);
 
-    // Build field data
     let mut field_data: HashMap<String, Vec<u8>> = HashMap::new();
     if let Some(fields) = request["fields"].as_object() {
         for (k, v) in fields {
@@ -317,25 +555,19 @@ async fn send_input(
         }
     }
 
-    // Clone terminal_id to avoid borrow conflict
     let tid = session.terminal_id.clone();
 
-    // Simulate input on the terminal
     session
         .terminal_manager
         .simulate_input(&tid, aid_byte, field_data.clone())
-        .map_err(|e| {
-            ZosmfErrorResponse::internal(format!("simulate_input failed: {}", e))
-        })?;
+        .map_err(|e| ZosmfErrorResponse::internal(format!("simulate_input failed: {}", e)))?;
 
-    // If we have a current map, do RECEIVE MAP to extract the data
     let mut received_data = HashMap::new();
     if let (Some(mapset_name), Some(map_name)) =
         (&session.current_mapset, &session.current_map)
     {
         let mapset_name = mapset_name.clone();
         let map_name = map_name.clone();
-        // Clone map to avoid holding immutable borrow on session while calling mutable method
         let map_clone = session
             .mapsets
             .get(&mapset_name)
@@ -347,7 +579,6 @@ async fn send_input(
         }
     }
 
-    // Build a response with the received fields
     let mut received_fields = serde_json::Map::new();
     for (name, value) in &received_data {
         let text = String::from_utf8_lossy(value).trim_end().to_string();
@@ -360,23 +591,6 @@ async fn send_input(
     response["receivedFields"] = serde_json::Value::Object(received_fields);
 
     Ok(Json(response))
-}
-
-/// DELETE /zosmf/cicsApp/terminal/:sessionKey — end CICS terminal session.
-async fn stop_session(
-    State(state): State<Arc<AppState>>,
-    _auth: AuthContext,
-    Path(session_key): Path<String>,
-) -> Result<StatusCode, ZosmfErrorResponse> {
-    state
-        .cics_sessions
-        .remove(&session_key)
-        .ok_or_else(|| {
-            ZosmfErrorResponse::not_found(format!("CICS session '{}' not found", session_key))
-        })?;
-
-    tracing::info!(session_key = %session_key, "CICS terminal session stopped");
-    Ok(StatusCode::OK)
 }
 
 #[cfg(test)]

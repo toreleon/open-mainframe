@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "OpenMainframe CLI — COBOL interpreter with CICS TUI"
 
+[lib]
+name = "open_mainframe_lib"
+path = "src/lib.rs"
+
 [[bin]]
 name = "open-mainframe"
 path = "src/main.rs"
