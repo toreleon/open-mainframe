@@ -54,6 +54,7 @@ open-mainframe-runtime = { workspace = true }
 open-mainframe-tui = { workspace = true }
 open-mainframe-db2 = { workspace = true }
 open-mainframe-smf = { workspace = true }
+open-mainframe-drda = { workspace = true }
 
 [[bin]]
 name = "zosmf-server"

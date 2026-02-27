@@ -1470,6 +1470,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "open-mainframe-drda"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "open-mainframe-db2",
+ "open-mainframe-racf",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "open-mainframe-easytrieve"
 version = "0.1.0"
 dependencies = [
@@ -1770,6 +1782,7 @@ dependencies = [
  "open-mainframe-cics",
  "open-mainframe-dataset",
  "open-mainframe-db2",
+ "open-mainframe-drda",
  "open-mainframe-encoding",
  "open-mainframe-jcl",
  "open-mainframe-jes2",

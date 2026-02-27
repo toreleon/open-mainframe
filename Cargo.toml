@@ -36,6 +36,7 @@ members = [
     "crates/open-mainframe-easytrieve",
     "crates/open-mainframe-natural",
     "crates/open-mainframe-focus",
+    "crates/open-mainframe-drda",
     "crates/open-mainframe",
 ]
 
@@ -120,4 +121,5 @@ open-mainframe-easytrieve = { path = "crates/open-mainframe-easytrieve" }
 open-mainframe-natural = { path = "crates/open-mainframe-natural" }
 open-mainframe-focus = { path = "crates/open-mainframe-focus" }
 open-mainframe-rexx = { path = "crates/open-mainframe-rexx" }
+open-mainframe-drda = { path = "crates/open-mainframe-drda" }
 open-mainframe-lib = { path = "crates/open-mainframe", package = "open-mainframe" }

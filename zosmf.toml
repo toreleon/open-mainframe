@@ -40,6 +40,14 @@ CCLI = "COCRDLIC"
 CCDL = "COCRDSLC"
 CCUP = "COCRDUPC"
 
+# ── DB2 DRDA server ───────────────────────────────────────
+[db2_server]
+enabled = true
+host = "0.0.0.0"
+port = 50000
+database = "DSN1"
+location = "OPENMF"
+
 # ── Dataset mounts ────────────────────────────────────────
 [[mounts]]
 type = "dataset-pds"

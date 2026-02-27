@@ -1,0 +1,16 @@
+[package]
+name = "open-mainframe-drda"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DRDA wire protocol server for DB2 connectivity"
+
+[dependencies]
+open-mainframe-db2 = { path = "../open-mainframe-db2" }
+open-mainframe-racf = { path = "../open-mainframe-racf" }
+tokio = { version = "1", features = ["net", "io-util", "sync", "macros", "rt"] }
+tracing = "0.1"
+thiserror = "1"
+bytes = "1"

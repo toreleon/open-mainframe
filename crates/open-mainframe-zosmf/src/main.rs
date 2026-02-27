@@ -93,7 +93,31 @@ async fn main() {
     let mount_count = state.mount_table.read().unwrap().list().len();
 
     let state = Arc::new(state);
-    let router = build_router(state);
+
+    // Spawn DRDA (DB2 wire protocol) server as parallel task
+    if state.config.db2_server.enabled {
+        let drda_config = open_mainframe_drda::DrdaServerConfig {
+            enabled: true,
+            host: state.config.db2_server.host.clone(),
+            port: state.config.db2_server.port,
+            database: state.config.db2_server.database.clone(),
+            location: state.config.db2_server.location.clone(),
+        };
+        // Auth closure: accept the configured default user (IBMUSER/SYS1)
+        // since RACF doesn't impl Clone, we just validate against known creds.
+        let auth_fn: open_mainframe_drda::AuthFn =
+            std::sync::Arc::new(move |user: &str, pass: &str| {
+                // Accept IBMUSER/SYS1 (the default z/OS user)
+                user.eq_ignore_ascii_case("IBMUSER") && pass == "SYS1"
+            });
+        tokio::spawn(async move {
+            if let Err(e) = open_mainframe_drda::start_server(drda_config, auth_fn).await {
+                tracing::error!(error = %e, "DRDA server failed");
+            }
+        });
+    }
+
+    let router = build_router(Arc::clone(&state));
 
     let bind_addr = format!("{}:{}", host, port);
     tracing::info!(

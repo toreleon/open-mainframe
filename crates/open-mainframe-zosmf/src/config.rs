@@ -32,6 +32,9 @@ pub struct ZosmfConfig {
     /// CICS application configuration.
     #[serde(default)]
     pub cics: CicsConfig,
+    /// DB2 DRDA server configuration.
+    #[serde(default)]
+    pub db2_server: Db2ServerConfig,
 }
 
 /// Configuration for a single mount entry.
@@ -204,6 +207,58 @@ fn default_saf_realm() -> String {
 
 fn default_cics_timeout() -> u64 {
     1800 // 30 minutes
+}
+
+fn default_db2_enabled() -> bool {
+    true
+}
+
+fn default_db2_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_db2_port() -> u16 {
+    50000
+}
+
+fn default_db2_database() -> String {
+    "DSN1".to_string()
+}
+
+fn default_db2_location() -> String {
+    "OPENMF".to_string()
+}
+
+/// DB2 DRDA wire protocol server configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Db2ServerConfig {
+    /// Whether the DRDA server is enabled.
+    #[serde(default = "default_db2_enabled")]
+    pub enabled: bool,
+    /// Bind address for the DRDA server.
+    #[serde(default = "default_db2_host")]
+    pub host: String,
+    /// Listen port for the DRDA server (standard DB2 port).
+    #[serde(default = "default_db2_port")]
+    pub port: u16,
+    /// Database name to accept from clients.
+    #[serde(default = "default_db2_database")]
+    pub database: String,
+    /// DDF location name reported to clients.
+    #[serde(default = "default_db2_location")]
+    pub location: String,
+}
+
+impl Default for Db2ServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_db2_enabled(),
+            host: default_db2_host(),
+            port: default_db2_port(),
+            database: default_db2_database(),
+            location: default_db2_location(),
+        }
+    }
 }
 
 /// CICS application server configuration.
