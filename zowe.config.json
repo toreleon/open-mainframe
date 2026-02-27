@@ -1,0 +1,18 @@
+{
+    "profiles": {
+        "openmainframe": {
+            "properties": {
+                "host": "localhost",
+                "port": 10443,
+                "rejectUnauthorized": false,
+                "protocol": "http",
+                "user": "IBMUSER",
+                "password": "SYS1"
+            },
+            "type": "zosmf"
+        }
+    },
+    "defaults": {
+        "zosmf": "openmainframe"
+    }
+}
