@@ -37,6 +37,8 @@ pub struct DataItemMeta {
     pub picture: Option<String>,
     /// Whether JUSTIFIED RIGHT is specified.
     pub is_justified: bool,
+    /// Initial value from VALUE clause.
+    pub initial_value: Option<String>,
 }
 
 impl Default for DataItemMeta {
@@ -47,6 +49,7 @@ impl Default for DataItemMeta {
             is_numeric: false,
             picture: None,
             is_justified: false,
+            initial_value: None,
         }
     }
 }
@@ -218,7 +221,29 @@ impl Environment {
     pub fn define(&mut self, name: &str, meta: DataItemMeta) {
         let name_upper = name.to_uppercase();
         if !self.variables.contains_key(&name_upper) {
-            let initial = if meta.is_numeric {
+            let initial = if let Some(ref val) = meta.initial_value {
+                if meta.is_numeric {
+                    // Parse the initial value as a number
+                    match val.parse::<i64>() {
+                        Ok(n) => CobolValue::from_i64(n),
+                        Err(_) => CobolValue::Alphanumeric(val.clone()),
+                    }
+                } else {
+                    // Alphanumeric: pad or truncate to size (character count,
+                    // since COBOL bytes map 1:1 to chars).
+                    let char_count = val.chars().count();
+                    let s = if char_count < meta.size {
+                        let mut padded = val.clone();
+                        padded.push_str(&" ".repeat(meta.size - char_count));
+                        padded
+                    } else if char_count > meta.size {
+                        val.chars().take(meta.size).collect()
+                    } else {
+                        val.clone()
+                    };
+                    CobolValue::Alphanumeric(s)
+                }
+            } else if meta.is_numeric {
                 CobolValue::from_i64(0)
             } else {
                 CobolValue::Alphanumeric(" ".repeat(meta.size))
@@ -977,6 +1002,12 @@ pub fn compose_group(group_name: &str, program: &SimpleProgram, env: &Environmen
             continue;
         }
 
+        // Skip intermediate group fields — they hold stale data and would
+        // overwrite the leaf values we just composed.
+        if program.group_layouts.contains_key(&field.name.to_uppercase()) {
+            continue;
+        }
+
         if let Some(val) = env.get(&field.name) {
             let display = if field.is_numeric {
                 // Numeric fields: zero-pad on the left to field size
@@ -1009,6 +1040,38 @@ pub fn execute(program: &SimpleProgram, env: &mut Environment) -> Result<i32> {
     // Register REDEFINES aliases
     for (alias, original) in &program.redefines_aliases {
         env.register_redefines(alias, original);
+    }
+
+    // Initialize groups that have FILLER children with VALUE defaults.
+    // Only compose groups that are *direct* FILLER containers — i.e., groups
+    // whose FILLER defaults are NOT overlapped by subscripted named fields
+    // from an OCCURS expansion.  Parent groups (like CARDDEMO-MAIN-MENU-OPTIONS)
+    // contain both FILLER entries and subscripted entries at the same offsets;
+    // composing them would overwrite the FILLER defaults with env defaults
+    // (zeros/spaces).  Instead, compose only the inner DATA group and let
+    // REDEFINES propagation + decomposition handle the OCCURS overlay.
+    for (group_name, fields) in &program.group_layouts {
+        let has_filler_defaults = fields.iter().any(|f| f.name.is_empty() && f.default_value.is_some());
+        let has_subscripted = fields.iter().any(|f| f.name.contains('('));
+        if has_filler_defaults && !has_subscripted {
+            if let Some(composed) = compose_group(group_name, program, env) {
+                env.set(group_name, composed).ok();
+                // Decompose to populate children
+                if let Some(val) = env.get(group_name).cloned() {
+                    decompose_group(group_name, &val.to_display_string(), program, env).ok();
+                }
+            }
+        }
+    }
+
+    // Decompose REDEFINES aliases of initialized groups so subscripted
+    // entries (e.g., CDEMO-MENU-OPT-NAME(1)) get populated.
+    for (alias, _original) in &program.redefines_aliases {
+        if let Some(val) = env.get(alias).cloned() {
+            if program.group_layouts.contains_key(&alias.to_uppercase()) {
+                decompose_group(alias, &val.to_display_string(), program, env).ok();
+            }
+        }
     }
 
     // Execute main statements
@@ -1465,6 +1528,20 @@ fn execute_statement_impl(
                 })
                 .collect::<Result<_>>()?;
 
+            // Before executing the CICS command, recompose any group variables
+            // referenced by VAR_REF options (e.g., COMMAREA, FROM).  Children
+            // may have been updated independently, leaving the group stale.
+            for (opt_name, opt_val) in &eval_options {
+                if VAR_REF_OPTIONS.iter().any(|o| opt_name.eq_ignore_ascii_case(o)) {
+                    if let Some(ref val) = opt_val {
+                        let var_name = val.to_display_string();
+                        if let Some(composed) = compose_group(&var_name, program, env) {
+                            env.set(&var_name, composed).ok();
+                        }
+                    }
+                }
+            }
+
             // Take the handler out temporarily to avoid borrow conflict
             if let Some(mut handler) = env.cics_handler.take() {
                 let result = handler.execute(command, &eval_options, env);
@@ -1472,13 +1549,27 @@ fn execute_statement_impl(
                 result?;
             }
 
-            // After CICS READ/RECEIVE INTO: decompose group items into sub-fields
+            // After CICS READ/RECEIVE INTO: sync group items with sub-fields.
+            //
+            // - READ (file): the bridge sets the INTO group variable as a
+            //   whole record → decompose to populate children.
+            // - RECEIVE MAP: the bridge sets individual child fields (e.g.,
+            //   OPTIONI, OPTIONL) → compose the group FROM children so the
+            //   group value is consistent.  Decomposing here would read the
+            //   stale group value and overwrite the freshly-set children.
             if command == "READ" || command == "RECEIVE" {
+                let has_map = options.iter().any(|(name, _)| name.eq_ignore_ascii_case("MAP"));
                 if let Some(SimpleExpr::Variable(var_name)) = options.iter()
                     .find(|(name, _)| name == "INTO")
                     .and_then(|(_, expr)| expr.as_ref())
                 {
-                    if let Some(val) = env.get(var_name) {
+                    if has_map {
+                        // RECEIVE MAP: bridge set individual fields → compose group
+                        if let Some(composed) = compose_group(var_name, program, env) {
+                            env.set(var_name, composed).ok();
+                        }
+                    } else if let Some(val) = env.get(var_name) {
+                        // READ: bridge set group → decompose into children
                         let data = val.to_display_string();
                         if std::env::var("OPEN_MAINFRAME_DEBUG_CMP").is_ok() {
                             eprintln!("[DECOMPOSE] {} INTO {} len={}", command, var_name, data.len());
@@ -3313,6 +3404,7 @@ mod tests {
                 is_numeric: true,
                 picture: Some("9(5)".to_string()),
                 is_justified: false,
+                initial_value: None,
             },
         );
 
@@ -3324,6 +3416,7 @@ mod tests {
                 is_numeric: true,
                 picture: Some("9(5)".to_string()),
                 is_justified: false,
+                initial_value: None,
             },
         );
 
@@ -3373,6 +3466,7 @@ mod tests {
                 is_numeric: true,
                 picture: Some("9(5)".to_string()),
                 is_justified: false,
+                initial_value: None,
             },
         );
 
@@ -3384,6 +3478,7 @@ mod tests {
                 is_numeric: false,
                 picture: Some("X(10)".to_string()),
                 is_justified: false,
+                initial_value: None,
             },
         );
 
@@ -3436,6 +3531,7 @@ mod tests {
                 is_numeric: true,
                 picture: Some("9(5)".to_string()),
                 is_justified: false,
+                initial_value: None,
             },
         );
 
@@ -3525,6 +3621,7 @@ mod tests {
         env.define("OPT-COUNT", DataItemMeta {
             size: 2, decimals: 0, is_numeric: true,
             picture: Some("9(02)".to_string()), is_justified: false,
+            initial_value: None,
         });
 
         // Build group layout for MENU-OPTIONS
@@ -3686,6 +3783,7 @@ mod tests {
             is_numeric: true,
             picture: Some(format!("9({})", size)),
             is_justified: false,
+            initial_value: None,
         }
     }
 
@@ -3696,6 +3794,7 @@ mod tests {
             is_numeric: false,
             picture: Some(format!("X({})", size)),
             is_justified: false,
+            initial_value: None,
         }
     }
 
@@ -4257,6 +4356,7 @@ mod tests {
             is_numeric: true,
             picture: Some("9(5)".to_string()),
             is_justified: false,
+            initial_value: None,
         }
     }
 
@@ -5298,6 +5398,7 @@ mod tests {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
             is_justified: false,
+            initial_value: None,
         });
         env.set("WS-STATUS", CobolValue::Alphanumeric("Y".to_string())).unwrap();
 
@@ -5352,6 +5453,7 @@ mod tests {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
             is_justified: false,
+            initial_value: None,
         });
         env.set("WS-STATUS", CobolValue::Alphanumeric("Y".to_string())).unwrap();
 
@@ -5399,6 +5501,7 @@ mod tests {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
             is_justified: false,
+            initial_value: None,
         });
 
         let mut cond_names = HashMap::new();
@@ -5458,6 +5561,7 @@ mod tests {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
             is_justified: false,
+            initial_value: None,
         });
 
         let mut cond_names = HashMap::new();
@@ -5514,6 +5618,7 @@ mod tests {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
             is_justified: false,
+            initial_value: None,
         });
 
         let mut cond_names = HashMap::new();
@@ -5559,6 +5664,7 @@ mod tests {
             size: 1, decimals: 0, is_numeric: false,
             picture: Some("X".to_string()),
             is_justified: false,
+            initial_value: None,
         });
 
         let mut cond_names = HashMap::new();

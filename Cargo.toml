@@ -36,6 +36,7 @@ members = [
     "crates/open-mainframe-easytrieve",
     "crates/open-mainframe-natural",
     "crates/open-mainframe-focus",
+    "crates/open-mainframe",
 ]
 
 [workspace.package]

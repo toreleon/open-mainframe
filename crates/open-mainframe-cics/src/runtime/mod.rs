@@ -7,7 +7,7 @@ pub mod dispatcher;
 pub mod eib;
 mod files;
 
-pub use commands::{CicsRuntime, ProgramRegistry};
+pub use commands::{CicsRuntime, ProgramRegistry, ProgramResult};
 pub use dispatcher::{CicsDispatcher, CommandParamBlock, DispatchError, DispatchResult};
 pub use eib::Eib;
 pub use files::{

@@ -294,6 +294,26 @@ impl Session {
         self.status.transid = transid.to_string();
     }
 
+    /// Access the current field table (for headless mode screen capture).
+    pub fn field_table(&self) -> &FieldTable {
+        &self.field_table
+    }
+
+    /// Get the current program name.
+    pub fn current_program(&self) -> &str {
+        &self.current_program
+    }
+
+    /// Get the current transaction ID from status.
+    pub fn transid(&self) -> &str {
+        &self.status.transid
+    }
+
+    /// Get the current status message.
+    pub fn message(&self) -> &str {
+        &self.status.message
+    }
+
     /// Run the TUI input loop, rendering the screen and waiting for user input.
     /// Returns the AID key pressed and the modified field data.
     ///
