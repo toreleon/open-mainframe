@@ -1,6 +1,7 @@
 [cics]
 default_app = "CARDDEMO"
 session_timeout_seconds = 1800
+system_copybooks = ["crates/open-mainframe-cics/copybooks"]
 
 [cics.apps.CARDDEMO]
 program = "../carddemo/app/cbl/COSGN00C.cbl"

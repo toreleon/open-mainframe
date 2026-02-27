@@ -9,6 +9,9 @@
 //! - `GET    /zosmf/cicsApp/terminal/:sessionKey`    — get current screen state
 //! - `PUT    /zosmf/cicsApp/terminal/:sessionKey`    — send AID + field data
 //! - `DELETE /zosmf/cicsApp/terminal/:sessionKey`    — end session
+//! - `GET    /zosmf/cicsApp/apps`                    — list registered CICS apps
+//! - `POST   /zosmf/cicsApp/apps`                    — register a new CICS app
+//! - `DELETE /zosmf/cicsApp/apps/:appName`           — unregister a dynamic CICS app
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -39,6 +42,9 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/zosmf/cicsApp/terminal/{session_key}",
             delete(stop_session),
         )
+        .route("/zosmf/cicsApp/apps", get(list_apps))
+        .route("/zosmf/cicsApp/apps", post(register_app))
+        .route("/zosmf/cicsApp/apps/{app_name}", delete(unregister_app))
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────
@@ -53,11 +59,24 @@ fn generate_session_key() -> String {
     format!("CICS-{:016X}", ts)
 }
 
-/// Convert a `CicsAppProfile` (from zosmf.toml) into a `CicsAppConfig`.
-fn profile_to_config(profile: &CicsAppProfile, userid: &str) -> CicsAppConfig {
+/// Convert a `CicsAppProfile` (from zosmf.toml or dynamic registration) into a `CicsAppConfig`.
+/// System copybooks are automatically appended to include_paths.
+fn profile_to_config(
+    profile: &CicsAppProfile,
+    userid: &str,
+    system_copybooks: &[String],
+) -> CicsAppConfig {
+    let mut include_paths: Vec<PathBuf> =
+        profile.include_paths.iter().map(PathBuf::from).collect();
+    for cp in system_copybooks {
+        let p = PathBuf::from(cp);
+        if !include_paths.contains(&p) {
+            include_paths.push(p);
+        }
+    }
     CicsAppConfig {
         initial_program: PathBuf::from(&profile.program),
-        include_paths: profile.include_paths.iter().map(PathBuf::from).collect(),
+        include_paths,
         bms_dir: profile.bms_dir.as_ref().map(PathBuf::from),
         data_files: profile.data_files.clone(),
         transid_map: profile.transids.clone(),
@@ -127,30 +146,33 @@ async fn start_session(
         return start_session_bms_only(state, auth, request).await;
     }
 
-    // Full execution path: resolve app profile from zosmf.toml.
+    // Full execution path: resolve app profile from dynamic registry or zosmf.toml.
     let app_name = request["appName"]
         .as_str()
         .map(|s| s.to_uppercase())
         .or_else(|| state.config.cics.default_app.clone().map(|s| s.to_uppercase()))
         .ok_or_else(|| {
             ZosmfErrorResponse::bad_request(
-                "Missing 'appName' and no default CICS app configured in zosmf.toml",
+                "Missing 'appName' and no default CICS app configured. \
+                 Register an app via POST /zosmf/cicsApp/apps first.",
             )
         })?;
 
+    // Check dynamic registry first, then static TOML config.
     let profile = state
-        .config
-        .cics
-        .apps
+        .cics_dynamic_apps
         .get(&app_name)
+        .map(|r| r.value().clone())
+        .or_else(|| state.config.cics.apps.get(&app_name).cloned())
         .ok_or_else(|| {
             ZosmfErrorResponse::bad_request(format!(
-                "CICS app '{}' not found in zosmf.toml [cics.apps]",
+                "CICS app '{}' not found. Register it via POST /zosmf/cicsApp/apps \
+                 or add it to zosmf.toml [cics.apps].",
                 app_name
             ))
         })?;
 
-    let app_config = profile_to_config(profile, &auth.userid);
+    let app_config = profile_to_config(&profile, &auth.userid, &state.config.cics.system_copybooks);
     let session_key = generate_session_key();
 
     let runner = CicsSessionRunner::spawn(app_config).map_err(|e| {
@@ -318,6 +340,171 @@ async fn stop_session(
 
     tracing::info!(session_key = %session_key, "CICS terminal session stopped");
     Ok(StatusCode::OK)
+}
+
+// ── GET: list apps ──────────────────────────────────────────────────
+
+/// GET /zosmf/cicsApp/apps — list all registered CICS applications.
+///
+/// Returns apps from both the static TOML config and the dynamic runtime registry.
+async fn list_apps(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+) -> Json<serde_json::Value> {
+    let mut apps = serde_json::Map::new();
+
+    // Static apps from zosmf.toml
+    for (name, profile) in &state.config.cics.apps {
+        apps.insert(
+            name.clone(),
+            serde_json::json!({
+                "program": profile.program,
+                "include_paths": profile.include_paths,
+                "bms_dir": profile.bms_dir,
+                "program_dir": profile.program_dir,
+                "data_files": profile.data_files,
+                "transids": profile.transids,
+                "source": "config",
+            }),
+        );
+    }
+
+    // Dynamic apps (runtime-registered) — override static if same name
+    for entry in state.cics_dynamic_apps.iter() {
+        let (name, profile) = entry.pair();
+        apps.insert(
+            name.clone(),
+            serde_json::json!({
+                "program": profile.program,
+                "include_paths": profile.include_paths,
+                "bms_dir": profile.bms_dir,
+                "program_dir": profile.program_dir,
+                "data_files": profile.data_files,
+                "transids": profile.transids,
+                "source": "dynamic",
+            }),
+        );
+    }
+
+    Json(serde_json::json!({
+        "apps": apps,
+        "default_app": state.config.cics.default_app,
+        "system_copybooks": state.config.cics.system_copybooks,
+    }))
+}
+
+// ── POST: register app ──────────────────────────────────────────────
+
+/// POST /zosmf/cicsApp/apps — register a new CICS application at runtime.
+///
+/// Request body:
+/// ```json
+/// {
+///   "name": "MYAPP",
+///   "program": "/workspace/app/cbl/ENTRY.cbl",
+///   "include_paths": ["/workspace/app/cpy"],
+///   "bms_dir": "/workspace/app/bms",
+///   "program_dir": "/workspace/app/cbl",
+///   "data_files": ["ACCTDAT=/workspace/app/data/acct.txt:11:300"],
+///   "transids": { "CC00": "COSGN00C" }
+/// }
+/// ```
+async fn register_app(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Json(request): Json<serde_json::Value>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ZosmfErrorResponse> {
+    let name = request["name"]
+        .as_str()
+        .ok_or_else(|| ZosmfErrorResponse::bad_request("Missing 'name' field"))?
+        .to_uppercase();
+
+    let program = request["program"]
+        .as_str()
+        .ok_or_else(|| ZosmfErrorResponse::bad_request("Missing 'program' field"))?
+        .to_string();
+
+    // Validate that the program file exists
+    if !std::path::Path::new(&program).exists() {
+        return Err(ZosmfErrorResponse::bad_request(format!(
+            "Program file '{}' does not exist",
+            program
+        )));
+    }
+
+    let include_paths: Vec<String> = request["include_paths"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let bms_dir = request["bms_dir"].as_str().map(String::from);
+    let program_dir = request["program_dir"].as_str().map(String::from);
+
+    let data_files: Vec<String> = request["data_files"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let transids: HashMap<String, String> = request["transids"]
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let profile = CicsAppProfile {
+        program: program.clone(),
+        include_paths,
+        bms_dir,
+        data_files,
+        transids,
+        program_dir,
+    };
+
+    state.cics_dynamic_apps.insert(name.clone(), profile);
+
+    tracing::info!(app = %name, program = %program, "CICS application registered dynamically");
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "name": name,
+            "status": "registered",
+        })),
+    ))
+}
+
+// ── DELETE: unregister app ──────────────────────────────────────────
+
+/// DELETE /zosmf/cicsApp/apps/:appName — unregister a dynamically registered CICS app.
+///
+/// Only removes apps from the dynamic registry, not from the static TOML config.
+async fn unregister_app(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Path(app_name): Path<String>,
+) -> Result<StatusCode, ZosmfErrorResponse> {
+    let app_name = app_name.to_uppercase();
+
+    if state.cics_dynamic_apps.remove(&app_name).is_some() {
+        tracing::info!(app = %app_name, "CICS application unregistered");
+        Ok(StatusCode::OK)
+    } else {
+        Err(ZosmfErrorResponse::not_found(format!(
+            "Dynamic CICS app '{}' not found (static config apps cannot be removed via API)",
+            app_name
+        )))
+    }
 }
 
 // =====================================================================

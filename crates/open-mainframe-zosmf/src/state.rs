@@ -13,7 +13,7 @@ use open_mainframe_cics::bms::BmsMapset;
 use open_mainframe_cics::terminal::TerminalManager;
 
 use crate::cics_runner::CicsSessionRunner;
-use crate::config::ZosmfConfig;
+use crate::config::{CicsAppProfile, ZosmfConfig};
 use crate::mounts::MountTable;
 use crate::sysplex::SysplexManager;
 use crate::types::auth::AuthenticatedUser;
@@ -93,6 +93,8 @@ pub struct AppState {
     pub cics_sessions: DashMap<String, CicsSessionHandle>,
     /// CICS execution sessions (full engine): session key → runner handle.
     pub cics_exec_sessions: DashMap<String, CicsSessionRunner>,
+    /// Dynamically registered CICS app profiles (runtime, via REST API).
+    pub cics_dynamic_apps: DashMap<String, CicsAppProfile>,
     /// Mount table for external filesystem mounts.
     pub mount_table: RwLock<MountTable>,
     /// Sysplex manager for multi-system support.
@@ -174,6 +176,7 @@ impl AppState {
             provisioning_instances: DashMap::new(),
             cics_sessions: DashMap::new(),
             cics_exec_sessions: DashMap::new(),
+            cics_dynamic_apps: DashMap::new(),
             mount_table: RwLock::new(mount_table),
             sysplex: RwLock::new(sysplex),
         }

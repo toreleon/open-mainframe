@@ -218,6 +218,10 @@ pub struct CicsConfig {
     /// Session idle timeout in seconds (default: 1800 = 30 min).
     #[serde(default = "default_cics_timeout")]
     pub session_timeout_seconds: u64,
+    /// System-level CICS copybook paths (DFHAID, DFHBMSCA, DFHEIBLK).
+    /// Automatically appended to every app's include_paths.
+    #[serde(default)]
+    pub system_copybooks: Vec<String>,
 }
 
 /// A named CICS application profile loaded from `zosmf.toml`.
