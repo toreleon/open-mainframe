@@ -2,11 +2,14 @@
 
 pub mod authenticate;
 pub mod cics;
+pub mod cmci;
 pub mod console;
 pub mod datasets;
+pub mod db2;
 pub mod files;
 pub mod info;
 pub mod jobs;
+pub mod logs;
 pub mod provisioning;
 pub mod topology;
 pub mod tso;
@@ -37,6 +40,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(workflow::routes())
         .merge(provisioning::routes())
         .merge(cics::routes())
+        .merge(cmci::routes())
+        .merge(db2::routes())
+        .merge(logs::routes())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

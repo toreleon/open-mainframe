@@ -67,6 +67,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/zosmf/restfiles/ds/{dsn}", post(create_dataset))
         .route("/zosmf/restfiles/ds/{dsn}", delete(delete_dataset))
         .route("/zosmf/restfiles/ds/{dsn}/member", get(list_members))
+        .route(
+            "/zosmf/restfiles/ds/{dsn}/search",
+            get(search_dataset_content),
+        )
         .route("/zosmf/restfiles/ams", put(execute_ams))
 }
 
@@ -1019,6 +1023,141 @@ struct AmsResponse {
     return_code: u32,
     /// IDCAMS output text.
     output: String,
+}
+
+/// Query parameters for dataset content search.
+#[derive(Debug, Deserialize)]
+struct SearchQuery {
+    /// Search pattern (substring match).
+    search: String,
+    /// Maximum number of results to return.
+    #[serde(default = "default_max_return")]
+    maxreturnsize: usize,
+}
+
+fn default_max_return() -> usize {
+    100
+}
+
+/// A single search result item.
+#[derive(Debug, serde::Serialize)]
+struct SearchItem {
+    /// Line number (1-based).
+    line: usize,
+    /// Line content.
+    content: String,
+}
+
+/// Response for dataset content search.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchResponse {
+    /// Number of matching rows returned.
+    returned_rows: usize,
+    /// Matching items.
+    items: Vec<SearchItem>,
+}
+
+/// GET /zosmf/restfiles/ds/:dsn/search — search dataset content for a pattern.
+async fn search_dataset_content(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthContext,
+    Path(dsn): Path<String>,
+    Query(query): Query<SearchQuery>,
+) -> std::result::Result<Json<SearchResponse>, ZosmfErrorResponse> {
+    let (ds_name, member) = parse_dsn(&dsn);
+
+    // Read content from mount table or catalog
+    let content = if let Ok(mount_table) = state.mount_table.read() {
+        if let Some(mounted) = mount_table.resolve_dataset(ds_name, member) {
+            if mounted.host_path.exists() && !mounted.host_path.is_dir() {
+                std::fs::read(&mounted.host_path).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let content = match content {
+        Some(c) => c,
+        None => {
+            // Try catalog
+            let catalog = state
+                .catalog
+                .read()
+                .map_err(|_| ZosmfErrorResponse::internal("Catalog lock poisoned"))?;
+
+            if let Some(member_name) = member {
+                let dsref = catalog.lookup(ds_name).map_err(|_| {
+                    ZosmfErrorResponse::not_found(format!(
+                        "Dataset '{}' not found",
+                        ds_name.to_uppercase()
+                    ))
+                })?;
+                let pds_path = dsref
+                    .path
+                    .as_ref()
+                    .ok_or_else(|| ZosmfErrorResponse::not_found("Dataset path not resolved"))?;
+                let pds = Pds::open(pds_path).map_err(|_| {
+                    ZosmfErrorResponse::not_found(format!(
+                        "PDS '{}' not found",
+                        ds_name.to_uppercase()
+                    ))
+                })?;
+                pds.read_member(member_name).map_err(|_| {
+                    ZosmfErrorResponse::not_found(format!(
+                        "Member '{}({})' not found",
+                        ds_name.to_uppercase(),
+                        member_name.to_uppercase()
+                    ))
+                })?
+            } else {
+                let dsref = catalog.lookup(ds_name).map_err(|_| {
+                    ZosmfErrorResponse::not_found(format!(
+                        "Dataset '{}' not found",
+                        ds_name.to_uppercase()
+                    ))
+                })?;
+                let path = dsref
+                    .path
+                    .as_ref()
+                    .ok_or_else(|| ZosmfErrorResponse::not_found("Dataset path not resolved"))?;
+                std::fs::read(path).map_err(|_| {
+                    ZosmfErrorResponse::not_found(format!(
+                        "Cannot read dataset '{}'",
+                        ds_name.to_uppercase()
+                    ))
+                })?
+            }
+        }
+    };
+
+    // Convert to text and search
+    let text = String::from_utf8_lossy(&content);
+    let pattern_upper = query.search.to_uppercase();
+    let mut items = Vec::new();
+
+    for (idx, line) in text.lines().enumerate() {
+        if line.to_uppercase().contains(&pattern_upper) {
+            items.push(SearchItem {
+                line: idx + 1,
+                content: line.to_string(),
+            });
+            if items.len() >= query.maxreturnsize {
+                break;
+            }
+        }
+    }
+
+    let returned_rows = items.len();
+    Ok(Json(SearchResponse {
+        returned_rows,
+        items,
+    }))
 }
 
 /// PUT /zosmf/restfiles/ams — execute IDCAMS (Access Method Services) commands.

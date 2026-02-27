@@ -52,6 +52,8 @@ open-mainframe-cics = { workspace = true }
 open-mainframe-lib = { workspace = true }
 open-mainframe-runtime = { workspace = true }
 open-mainframe-tui = { workspace = true }
+open-mainframe-db2 = { workspace = true }
+open-mainframe-smf = { workspace = true }
 
 [[bin]]
 name = "zosmf-server"

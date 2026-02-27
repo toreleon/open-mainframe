@@ -11,12 +11,30 @@ use open_mainframe_wlm::{DisplayWlmResponse, PolicyStore, WlmMode};
 
 use open_mainframe_cics::bms::BmsMapset;
 use open_mainframe_cics::terminal::TerminalManager;
+use open_mainframe_db2::Db2Catalog;
 
 use crate::cics_runner::CicsSessionRunner;
 use crate::config::{CicsAppProfile, ZosmfConfig};
 use crate::mounts::MountTable;
 use crate::sysplex::SysplexManager;
 use crate::types::auth::AuthenticatedUser;
+
+/// An entry in the operations log (OPERLOG/SYSLOG).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OperLogEntry {
+    /// ISO 8601 timestamp.
+    pub time: String,
+    /// Log message text.
+    pub message: String,
+    /// System name.
+    pub system: String,
+    /// Job name (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jobname: Option<String>,
+    /// Message type: "W" (WTO), "R" (WTOR), "S" (system), "I" (info).
+    #[serde(rename = "type")]
+    pub msg_type: String,
+}
 
 /// A workflow instance tracked by the z/OSMF workflow service.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -99,6 +117,10 @@ pub struct AppState {
     pub mount_table: RwLock<MountTable>,
     /// Sysplex manager for multi-system support.
     pub sysplex: RwLock<SysplexManager>,
+    /// Db2 catalog (packages, plans).
+    pub db2_catalog: RwLock<Db2Catalog>,
+    /// Operations log buffer (recent WTO/WTOR/system messages).
+    pub operations_log: RwLock<Vec<OperLogEntry>>,
 }
 
 /// Handle to a CICS terminal session.
@@ -179,6 +201,8 @@ impl AppState {
             cics_dynamic_apps: DashMap::new(),
             mount_table: RwLock::new(mount_table),
             sysplex: RwLock::new(sysplex),
+            db2_catalog: RwLock::new(Db2Catalog::new()),
+            operations_log: RwLock::new(Vec::new()),
         }
     }
 }

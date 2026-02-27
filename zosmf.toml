@@ -39,3 +39,73 @@ CAUP = "COACTUPC"
 CCLI = "COCRDLIC"
 CCDL = "COCRDSLC"
 CCUP = "COCRDUPC"
+
+# ── Dataset mounts ────────────────────────────────────────
+[[mounts]]
+type = "dataset-pds"
+host_path = "../carddemo/app/cbl"
+virtual_path = "IBMUSER.CARDDEMO.COBOL"
+file_filter = "*.cbl"
+
+[[mounts]]
+type = "dataset-pds"
+host_path = "../carddemo/app/cpy"
+virtual_path = "IBMUSER.CARDDEMO.COPY"
+
+[[mounts]]
+type = "dataset-pds"
+host_path = "../carddemo/app/cpy-bms"
+virtual_path = "IBMUSER.CARDDEMO.CPYBMS"
+
+[[mounts]]
+type = "dataset-pds"
+host_path = "../carddemo/app/bms"
+virtual_path = "IBMUSER.CARDDEMO.BMS"
+file_filter = "*.bms"
+
+[[mounts]]
+type = "dataset-pds"
+host_path = "../carddemo/app/data/ASCII"
+virtual_path = "IBMUSER.CARDDEMO.DATA"
+
+[[mounts]]
+type = "dataset-seq"
+host_path = "../carddemo/app/data/ASCII/acctdata.txt"
+virtual_path = "IBMUSER.CARDDEMO.ACCTDAT"
+read_only = true
+
+[[mounts]]
+type = "dataset-seq"
+host_path = "../carddemo/app/data/ASCII/carddata.txt"
+virtual_path = "IBMUSER.CARDDEMO.CARDDAT"
+read_only = true
+
+[[mounts]]
+type = "dataset-seq"
+host_path = "../carddemo/app/data/ASCII/custdata.txt"
+virtual_path = "IBMUSER.CARDDEMO.CUSTDAT"
+read_only = true
+
+[[mounts]]
+type = "dataset-seq"
+host_path = "../carddemo/app/data/ASCII/cardxref.txt"
+virtual_path = "IBMUSER.CARDDEMO.CCXREF"
+read_only = true
+
+[[mounts]]
+type = "dataset-seq"
+host_path = "../carddemo/app/data/ASCII/dailytran.txt"
+virtual_path = "IBMUSER.CARDDEMO.TRANSACT"
+read_only = true
+
+[[mounts]]
+type = "dataset-seq"
+host_path = "../carddemo/app/data/ASCII/usrsec.txt"
+virtual_path = "IBMUSER.CARDDEMO.USRSEC"
+read_only = true
+
+# ── USS mount ─────────────────────────────────────────────
+[[mounts]]
+type = "uss"
+host_path = "../carddemo"
+virtual_path = "/u/ibmuser/carddemo"
