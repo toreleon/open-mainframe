@@ -177,6 +177,29 @@ src/
 2. `CicsDispatcher` maps CALL names to `CicsRuntime` method calls
 3. 30+ commands: LINK, XCTL, RETURN, SEND MAP, RECEIVE MAP, READ, WRITE, REWRITE, DELETE, STARTBR, READNEXT, etc.
 
+### Key CICS Implementation Details
+
+**EIBRESP error propagation**: File operations in `FileManager` (files.rs) return
+`Err(CicsError::FileError(CicsResponse::Xxx))` but do NOT set `eib.eibresp`
+themselves. The bridge (`bridge.rs`) must call `set_error_response(&err)` to
+extract the response code and set it on the EIB before the outer `execute()`
+wrapper copies it to the COBOL RESP variable.
+
+**BMS input/output map REDEFINES**: BMS copybooks define two 01-level groups:
+`xxxI` (input) and `xxxO REDEFINES xxxI` (output). In real COBOL they share
+memory, so setting `USRID01I` (input map) automatically sets `USRID01O` (output
+map) at the same offset. Our interpreter uses a flat variable namespace, so
+`USRID01I` and `USRID01O` are separate variables. The `collect_send_map_data()`
+method in `bridge.rs` handles this by checking both O and I suffixes when
+resolving BMS field values for SEND MAP, preferring whichever is non-blank.
+
+**Group variable decomposition**: After CICS READ/READNEXT/READPREV sets a group
+variable (e.g., `SEC-USER-DATA`), the interpreter automatically decomposes it
+into sub-fields using `decompose_group()` based on `program.group_layouts`
+(built during the AST lowering pass in `lower.rs`). This is critical for browse
+operations where READNEXT fills a record buffer that must be split into
+individual fields.
+
 ## COBOL Compiler (`open-mainframe-cobol`)
 
 ### 8-Pass Pipeline

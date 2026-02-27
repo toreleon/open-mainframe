@@ -212,6 +212,12 @@ impl CicsDispatcher {
             "CICSCNVS" => Self::dispatch_converse(params, runtime),
             // System info
             "CICSASGN" => Self::dispatch_assign(params, runtime),
+            // Browse operations
+            "CICSSTBR" => Self::dispatch_startbr(params, runtime),
+            "CICSRDNX" => Self::dispatch_readnext(params, runtime),
+            "CICSRDPV" => Self::dispatch_readprev(params, runtime),
+            "CICSRSBR" => Self::dispatch_resetbr(params, runtime),
+            "CICSENDB" => Self::dispatch_endbr(params, runtime),
             // ENQ/DEQ
             "CICSENQ" => Self::dispatch_enq(params, runtime),
             "CICSDEQ" => Self::dispatch_deq(params, runtime),
@@ -371,6 +377,143 @@ impl CicsDispatcher {
         let ridfld = params.get("RIDFLD");
 
         match runtime.files.delete(file, ridfld.map(|r| r.as_bytes())) {
+            Ok(()) => {
+                runtime.eib.set_response(CicsResponse::Normal);
+                Ok(DispatchResult::ok())
+            }
+            Err(_) => {
+                Ok(DispatchResult::from_eib(&runtime.eib))
+            }
+        }
+    }
+
+    // --- Browse Operations ---
+
+    fn dispatch_startbr(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        let file = params.require("FILE")
+            .or_else(|_| params.require("DATASET"))?;
+        let ridfld = params.get("RIDFLD").unwrap_or("");
+
+        runtime.eib.reset_for_command();
+
+        match runtime.files.startbr(file, ridfld.as_bytes()) {
+            Ok(_token) => {
+                runtime.eib.set_response(CicsResponse::Normal);
+                Ok(DispatchResult::ok())
+            }
+            Err(_) => {
+                Ok(DispatchResult::from_eib(&runtime.eib))
+            }
+        }
+    }
+
+    fn dispatch_readnext(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        let file = params.require("FILE")
+            .or_else(|_| params.require("DATASET"))?;
+
+        runtime.eib.reset_for_command();
+
+        // Look up the browse token by file name
+        let token = match runtime.files.browse_token_for_file(file) {
+            Ok(t) => t,
+            Err(_) => {
+                runtime.eib.set_response(CicsResponse::Invreq);
+                return Ok(DispatchResult::from_eib(&runtime.eib));
+            }
+        };
+
+        match runtime.files.readnext(token) {
+            Ok(record) => {
+                runtime.eib.set_response(CicsResponse::Normal);
+                Ok(DispatchResult::ok_with_data(record.data))
+            }
+            Err(_) => {
+                Ok(DispatchResult::from_eib(&runtime.eib))
+            }
+        }
+    }
+
+    fn dispatch_readprev(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        let file = params.require("FILE")
+            .or_else(|_| params.require("DATASET"))?;
+
+        runtime.eib.reset_for_command();
+
+        let token = match runtime.files.browse_token_for_file(file) {
+            Ok(t) => t,
+            Err(_) => {
+                runtime.eib.set_response(CicsResponse::Invreq);
+                return Ok(DispatchResult::from_eib(&runtime.eib));
+            }
+        };
+
+        match runtime.files.readprev(token) {
+            Ok(record) => {
+                runtime.eib.set_response(CicsResponse::Normal);
+                Ok(DispatchResult::ok_with_data(record.data))
+            }
+            Err(_) => {
+                Ok(DispatchResult::from_eib(&runtime.eib))
+            }
+        }
+    }
+
+    fn dispatch_resetbr(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        let file = params.require("FILE")
+            .or_else(|_| params.require("DATASET"))?;
+        let ridfld = params.get("RIDFLD").unwrap_or("");
+
+        runtime.eib.reset_for_command();
+
+        let token = match runtime.files.browse_token_for_file(file) {
+            Ok(t) => t,
+            Err(_) => {
+                runtime.eib.set_response(CicsResponse::Invreq);
+                return Ok(DispatchResult::from_eib(&runtime.eib));
+            }
+        };
+
+        match runtime.files.resetbr(token, ridfld.as_bytes()) {
+            Ok(()) => {
+                runtime.eib.set_response(CicsResponse::Normal);
+                Ok(DispatchResult::ok())
+            }
+            Err(_) => {
+                Ok(DispatchResult::from_eib(&runtime.eib))
+            }
+        }
+    }
+
+    fn dispatch_endbr(
+        params: &CommandParamBlock,
+        runtime: &mut super::CicsRuntime,
+    ) -> Result<DispatchResult, DispatchError> {
+        let file = params.require("FILE")
+            .or_else(|_| params.require("DATASET"))?;
+
+        runtime.eib.reset_for_command();
+
+        let token = match runtime.files.browse_token_for_file(file) {
+            Ok(t) => t,
+            Err(_) => {
+                runtime.eib.set_response(CicsResponse::Invreq);
+                return Ok(DispatchResult::from_eib(&runtime.eib));
+            }
+        };
+
+        match runtime.files.endbr(token) {
             Ok(()) => {
                 runtime.eib.set_response(CicsResponse::Normal);
                 Ok(DispatchResult::ok())

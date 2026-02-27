@@ -454,6 +454,20 @@ impl FileManager {
         Ok(())
     }
 
+    /// Find the active browse token for a given file name.
+    ///
+    /// In IBM CICS, READNEXT/READPREV/RESETBR/ENDBR identify the browse
+    /// by DATASET name (one active browse per file). This helper maps a
+    /// file name back to its internal browse token.
+    pub fn browse_token_for_file(&self, file_name: &str) -> CicsResult<u32> {
+        let name = file_name.to_uppercase();
+        self.browse_sessions
+            .iter()
+            .find(|(_, s)| s.file_name == name)
+            .map(|(&token, _)| token)
+            .ok_or_else(|| CicsError::FileError(CicsResponse::Invreq))
+    }
+
     /// Unlock record without update.
     pub fn unlock(&mut self, file_name: &str) -> CicsResult<()> {
         let name = file_name.to_uppercase();

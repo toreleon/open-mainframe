@@ -52,6 +52,16 @@ pub enum CicsCommandType {
     Rewrite,
     /// DELETE - delete file record
     Delete,
+    /// STARTBR - start browse
+    Startbr,
+    /// READNEXT - read next in browse
+    Readnext,
+    /// READPREV - read previous in browse
+    Readprev,
+    /// RESETBR - reset browse position
+    Resetbr,
+    /// ENDBR - end browse
+    Endbr,
     /// SEND - send data to terminal
     Send,
     /// RECEIVE - receive data from terminal
@@ -167,6 +177,11 @@ impl CicsCommandType {
                     CicsCommandType::Delete
                 }
             }
+            "STARTBR" => CicsCommandType::Startbr,
+            "READNEXT" => CicsCommandType::Readnext,
+            "READPREV" => CicsCommandType::Readprev,
+            "RESETBR" => CicsCommandType::Resetbr,
+            "ENDBR" => CicsCommandType::Endbr,
             "SEND" => {
                 if words.len() > 1 && words[1].starts_with("MAP") {
                     CicsCommandType::SendMap
@@ -437,6 +452,12 @@ impl CicsPreprocessor {
             CicsCommandType::Abend => "CICSABND",
             CicsCommandType::Enq => "CICSENQ",
             CicsCommandType::Deq => "CICSDEQ",
+            // Browse operations
+            CicsCommandType::Startbr => "CICSSTBR",
+            CicsCommandType::Readnext => "CICSRDNX",
+            CicsCommandType::Readprev => "CICSRDPV",
+            CicsCommandType::Resetbr => "CICSRSBR",
+            CicsCommandType::Endbr => "CICSENDB",
             _ => "CICSEXEC",
         };
 

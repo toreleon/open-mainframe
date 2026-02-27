@@ -355,6 +355,13 @@ async fn session_thread_main(config: CicsAppConfig, mut cmd_rx: mpsc::Receiver<S
         let exec_result = interpreter::execute(&current_program, &mut env);
         let action = bridge.borrow_mut().take_pending_action();
 
+        info!(
+            program = %current_name,
+            result = if exec_result.is_ok() { "ok" } else { "err" },
+            has_action = action.is_some(),
+            "Program execution finished"
+        );
+
         match &exec_result {
             Ok(_) => {}
             Err(e) if action.is_some() => {

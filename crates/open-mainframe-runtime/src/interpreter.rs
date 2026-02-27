@@ -1557,11 +1557,12 @@ fn execute_statement_impl(
             //   OPTIONI, OPTIONL) → compose the group FROM children so the
             //   group value is consistent.  Decomposing here would read the
             //   stale group value and overwrite the freshly-set children.
-            if command == "READ" || command == "RECEIVE" {
+            if command == "READ" || command == "READNEXT" || command == "READPREV" || command == "RECEIVE" {
                 let has_map = options.iter().any(|(name, _)| name.eq_ignore_ascii_case("MAP"));
-                if let Some(SimpleExpr::Variable(var_name)) = options.iter()
+                let into_opt = options.iter()
                     .find(|(name, _)| name == "INTO")
-                    .and_then(|(_, expr)| expr.as_ref())
+                    .and_then(|(_, expr)| expr.as_ref());
+                if let Some(SimpleExpr::Variable(var_name)) = into_opt
                 {
                     if has_map {
                         // RECEIVE MAP: bridge set individual fields → compose group
@@ -1571,9 +1572,6 @@ fn execute_statement_impl(
                     } else if let Some(val) = env.get(var_name) {
                         // READ: bridge set group → decompose into children
                         let data = val.to_display_string();
-                        if std::env::var("OPEN_MAINFRAME_DEBUG_CMP").is_ok() {
-                            eprintln!("[DECOMPOSE] {} INTO {} len={}", command, var_name, data.len());
-                        }
                         decompose_group(var_name, &data, program, env)?;
                     }
                 }
