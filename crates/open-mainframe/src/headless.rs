@@ -107,13 +107,19 @@ pub fn capture_screen(session: &Session) -> ScreenOutput {
     let fields: Vec<FieldOutput> = ft
         .fields()
         .iter()
-        .filter(|f| !f.name.is_empty())
+        .filter(|f| f.length > 0)
         .map(|f| {
             let value = String::from_utf8_lossy(&f.content).to_string();
             let color = f.color.as_ref().map(|c| format!("{:?}", c));
             let highlight = f.highlight.as_ref().map(|h| format!("{:?}", h));
+            // Unnamed BMS fields (labels/static text) get a positional name
+            let name = if f.name.is_empty() {
+                format!("_R{}C{}", f.row, f.col)
+            } else {
+                f.name.clone()
+            };
             FieldOutput {
-                name: f.name.clone(),
+                name,
                 row: f.row,
                 col: f.col,
                 length: f.length,
