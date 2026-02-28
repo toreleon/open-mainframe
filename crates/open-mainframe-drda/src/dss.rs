@@ -27,8 +27,11 @@ pub const DSS_MAX_LENGTH: usize = 32767;
 pub struct DssSegment {
     /// DSS type (request=1, reply=2, object=3, communication=4).
     pub dss_type: u8,
-    /// Whether this segment is chained to the next (same correlation ID).
+    /// Whether this segment is chained to the next (more DSS segments follow).
     pub chained: bool,
+    /// Whether the next chained segment has the same correlation ID.
+    /// Only meaningful when `chained` is true.
+    pub same_correlator: bool,
     /// Whether this is a continuation of a previous segment.
     pub continuation: bool,
     /// Correlation ID.
@@ -43,6 +46,7 @@ impl DssSegment {
         Self {
             dss_type: DSS_TYPE_REPLY,
             chained: false,
+            same_correlator: false,
             continuation: false,
             correlation_id,
             payload,
@@ -54,6 +58,19 @@ impl DssSegment {
         Self {
             dss_type: DSS_TYPE_REPLY,
             chained: true,
+            same_correlator: false,
+            continuation: false,
+            correlation_id,
+            payload,
+        }
+    }
+
+    /// Create a new reply DSS segment with chaining and same-correlator bit.
+    pub fn new_reply_chained_same_corr(correlation_id: u16, payload: BytesMut) -> Self {
+        Self {
+            dss_type: DSS_TYPE_REPLY,
+            chained: true,
+            same_correlator: true,
             continuation: false,
             correlation_id,
             payload,
@@ -65,6 +82,19 @@ impl DssSegment {
         Self {
             dss_type: DSS_TYPE_OBJECT,
             chained: false,
+            same_correlator: false,
+            continuation: false,
+            correlation_id,
+            payload,
+        }
+    }
+
+    /// Create a new object DSS segment with chaining and same-correlator bit.
+    pub fn new_object_chained_same_corr(correlation_id: u16, payload: BytesMut) -> Self {
+        Self {
+            dss_type: DSS_TYPE_OBJECT,
+            chained: true,
+            same_correlator: true,
             continuation: false,
             correlation_id,
             payload,
@@ -80,10 +110,13 @@ impl DssSegment {
         buf.put_u16(total_len as u16);
         // Magic byte
         buf.put_u8(DSS_MAGIC);
-        // Format flags: type in low nibble, chain bit, continue bit
+        // Format flags: type in low nibble, chain/same-correlator/continue bits
         let mut format = self.dss_type & 0x0F;
         if self.chained {
             format |= DSS_CHAIN_BIT;
+        }
+        if self.same_correlator {
+            format |= DSS_SAME_CORRELATOR_BIT;
         }
         if self.continuation {
             format |= DSS_CONTINUE_BIT;
@@ -148,11 +181,13 @@ pub async fn read_dss<R: AsyncReadExt + Unpin>(reader: &mut R) -> DrdaResult<Dss
 
     let dss_type = format & 0x0F;
     let chained = (format & DSS_CHAIN_BIT) != 0;
+    let same_correlator = (format & DSS_SAME_CORRELATOR_BIT) != 0;
     let continuation = (format & DSS_CONTINUE_BIT) != 0;
 
     Ok(DssSegment {
         dss_type,
         chained,
+        same_correlator,
         continuation,
         correlation_id,
         payload,

@@ -16,10 +16,13 @@ pub const DSS_TYPE_OBJECT: u8 = 0x03;
 /// DSS type: Communication (server info).
 pub const DSS_TYPE_COMMUNICATION: u8 = 0x04;
 
-/// DSS format bit: chained with same correlation ID.
+/// DSS format bit: chained (more DSS segments follow in this batch).
 pub const DSS_CHAIN_BIT: u8 = 0x40;
 /// DSS format bit: continuation of previous DSS.
 pub const DSS_CONTINUE_BIT: u8 = 0x20;
+/// DSS format bit: next chained DSS has the same correlation ID.
+/// Only meaningful when DSS_CHAIN_BIT is also set.
+pub const DSS_SAME_CORRELATOR_BIT: u8 = 0x10;
 
 // ── Connection management ────────────────────────────────
 /// Exchange Server Attributes (client→server).
@@ -54,6 +57,8 @@ pub const PRPSQLSTT: u16 = 0x200D;
 pub const EXCSQLSTT: u16 = 0x200B;
 /// Describe SQL Statement (client→server).
 pub const DSCSQLSTT: u16 = 0x2008;
+/// Execute SQL Set Statement (SET special registers, etc.).
+pub const EXCSQLSET: u16 = 0x2014;
 
 // ── Transaction control ──────────────────────────────────
 /// RDB Commit Unit of Work (client→server).
@@ -146,6 +151,18 @@ pub const MAXRSLCNT: u16 = 0x2140;
 pub const QRYINSID: u16 = 0x215B;
 /// RDB Allow Updates.
 pub const RDBALWUPD: u16 = 0x211A;
+/// SQL Cursor Hold (retain cursor across commits).
+pub const SQLCSRHLD: u16 = 0x211F;
+/// Query Attribute Scrollable.
+pub const QRYATTSCR: u16 = 0x2149;
+/// Query Attribute Sensitive.
+pub const QRYATTSNS: u16 = 0x2157;
+/// Query Attribute Updatable.
+pub const QRYATTUPD: u16 = 0x2150;
+/// Query Scroll Orientation.
+pub const QRYSCRORN: u16 = 0x2152;
+/// Query Close Implicit.
+pub const QRYCLSIMP: u16 = 0x215D;
 /// Severity Code.
 pub const SVRCOD: u16 = 0x1149;
 
@@ -172,30 +189,64 @@ pub const XMLMGR: u16 = 0x1C00;
 pub const SECMEC_USRIDPWD: u16 = 0x0003;
 /// User ID only security.
 pub const SECMEC_USRONLY: u16 = 0x0004;
-/// Encrypted user ID and password (Kerberos).
+/// Encrypted user ID and password.
 pub const SECMEC_EUSRIDPWD: u16 = 0x0009;
+/// Security token (for EUSRIDPWD handshake).
+pub const SECTKN: u16 = 0x11DC;
 
 // ── FD:OCA data type codes (for QRYDSC/QRYDTA) ─────────
-/// CHAR / CHAR FOR BIT DATA.
-pub const FDOCA_TYPE_FIXEDCHAR: u8 = 0x01;
-/// VARCHAR.
-pub const FDOCA_TYPE_VARCHAR: u8 = 0x30;
-/// SMALLINT (2-byte integer).
-pub const FDOCA_TYPE_SMALLINT: u8 = 0x05;
-/// INTEGER (4-byte integer).
-pub const FDOCA_TYPE_INTEGER: u8 = 0x03;
-/// BIGINT (8-byte integer).
-pub const FDOCA_TYPE_BIGINT: u8 = 0x17;
-/// DECIMAL (packed decimal).
-pub const FDOCA_TYPE_DECIMAL: u8 = 0x0F;
-/// FLOAT (double).
-pub const FDOCA_TYPE_FLOAT: u8 = 0x0B;
-/// DATE.
-pub const FDOCA_TYPE_DATE: u8 = 0x21;
-/// TIME.
-pub const FDOCA_TYPE_TIME: u8 = 0x23;
-/// TIMESTAMP.
-pub const FDOCA_TYPE_TIMESTAMP: u8 = 0x25;
+// Even codes = NOT NULL, odd codes = NULLABLE.
+// pydrda/ibm_db convention: nullable types (N-prefix) have odd type code.
+
+/// INTEGER (4-byte signed, not null).
+pub const FDOCA_TYPE_INTEGER: u8 = 0x02;
+/// INTEGER (4-byte signed, nullable).
+pub const FDOCA_TYPE_NINTEGER: u8 = 0x03;
+/// SMALLINT (2-byte signed, not null).
+pub const FDOCA_TYPE_SMALLINT: u8 = 0x04;
+/// SMALLINT (2-byte signed, nullable).
+pub const FDOCA_TYPE_NSMALLINT: u8 = 0x05;
+/// FLOAT8 / DOUBLE (8-byte, not null).
+pub const FDOCA_TYPE_FLOAT8: u8 = 0x0A;
+/// FLOAT8 / DOUBLE (8-byte, nullable).
+pub const FDOCA_TYPE_NFLOAT8: u8 = 0x0B;
+/// DECIMAL (packed, not null).
+pub const FDOCA_TYPE_DECIMAL: u8 = 0x0E;
+/// DECIMAL (packed, nullable).
+pub const FDOCA_TYPE_NDECIMAL: u8 = 0x0F;
+/// BIGINT (8-byte signed, not null).
+pub const FDOCA_TYPE_BIGINT: u8 = 0x16;
+/// BIGINT (8-byte signed, nullable).
+pub const FDOCA_TYPE_NBIGINT: u8 = 0x17;
+/// DATE (not null).
+pub const FDOCA_TYPE_DATE: u8 = 0x20;
+/// DATE (nullable).
+pub const FDOCA_TYPE_NDATE: u8 = 0x21;
+/// TIME (not null).
+pub const FDOCA_TYPE_TIME: u8 = 0x22;
+/// TIME (nullable).
+pub const FDOCA_TYPE_NTIME: u8 = 0x23;
+/// TIMESTAMP (not null).
+pub const FDOCA_TYPE_TIMESTAMP: u8 = 0x24;
+/// TIMESTAMP (nullable).
+pub const FDOCA_TYPE_NTIMESTAMP: u8 = 0x25;
+/// CHAR (fixed-length, not null).
+pub const FDOCA_TYPE_FIXEDCHAR: u8 = 0x30;
+/// CHAR (fixed-length, nullable).
+pub const FDOCA_TYPE_NFIXEDCHAR: u8 = 0x31;
+/// VARCHAR (variable-length, not null).
+pub const FDOCA_TYPE_VARCHAR: u8 = 0x32;
+/// VARCHAR (variable-length, nullable).
+pub const FDOCA_TYPE_NVARCHAR: u8 = 0x33;
+// (FD:OCA type constant block ends here)
+
+// ── Piggy-Backed Session Data (PBSD) ────────────────────
+/// PBSD (Piggy-Backed Session Data) — sent after ACCRDBRM.
+pub const PBSD: u16 = 0xC000;
+/// PBSD Isolation Level.
+pub const PBSD_ISO: u16 = 0xC001;
+/// PBSD Schema Name.
+pub const PBSD_SCHEMA: u16 = 0xC002;
 
 // ── Severity codes ───────────────────────────────────────
 pub const SVRCOD_INFO: u16 = 0x0000;

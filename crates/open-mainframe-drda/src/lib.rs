@@ -22,6 +22,7 @@ pub mod dss;
 pub mod error;
 pub mod handler;
 pub mod response;
+pub mod secmec9;
 pub mod server;
 pub mod sql_handler;
 

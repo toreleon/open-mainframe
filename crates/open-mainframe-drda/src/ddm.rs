@@ -64,6 +64,25 @@ impl DdmObject {
         }
     }
 
+    /// Get a parameter's raw payload bytes.
+    pub fn get_raw_param(&self, code_point: u16) -> DrdaResult<Option<Vec<u8>>> {
+        if let Some(param) = self.find_param(code_point)? {
+            Ok(Some(param.payload))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get all parameters with the given code point (for repeated params like SECTKN).
+    pub fn get_all_raw_params(&self, code_point: u16) -> DrdaResult<Vec<Vec<u8>>> {
+        let params = self.parse_params()?;
+        Ok(params
+            .into_iter()
+            .filter(|p| p.code_point == code_point)
+            .map(|p| p.payload)
+            .collect())
+    }
+
     /// Get a parameter's payload as a u16 value.
     pub fn get_u16_param(&self, code_point: u16) -> DrdaResult<Option<u16>> {
         if let Some(param) = self.find_param(code_point)? {
@@ -177,9 +196,16 @@ impl DdmBuilder {
         self
     }
 
-    /// Add a nested DDM parameter with a string value (EBCDIC-like — we use UTF-8/ASCII).
+    /// Add a nested DDM parameter with a string value (UTF-8/ASCII).
     pub fn add_string_param(self, code_point: u16, value: &str) -> Self {
         self.add_param(code_point, value.as_bytes())
+    }
+
+    /// Add a nested DDM parameter with a string value encoded in EBCDIC cp500.
+    /// DRDA handshake messages (EXCSAT/EXCSATRD) require EBCDIC encoding.
+    pub fn add_ebcdic_param(self, code_point: u16, value: &str) -> Self {
+        let ebcdic_bytes: Vec<u8> = value.bytes().map(ascii_to_ebcdic_cp500).collect();
+        self.add_param(code_point, &ebcdic_bytes)
     }
 
     /// Add a nested DDM parameter with a u16 value.
@@ -216,5 +242,37 @@ impl DdmBuilder {
     /// Build and serialize to bytes.
     pub fn build_bytes(self) -> BytesMut {
         self.build().serialize()
+    }
+}
+
+/// Convert a single ASCII byte to EBCDIC cp500.
+/// Used for encoding strings in DRDA handshake messages.
+pub fn ascii_to_ebcdic_cp500(b: u8) -> u8 {
+    match b {
+        b' ' => 0x40,
+        b'.' => 0x4B, b'<' => 0x4C, b'(' => 0x4D, b'+' => 0x4E,
+        b'&' => 0x50, b'!' => 0x5A, b'$' => 0x5B, b'*' => 0x5C,
+        b')' => 0x5D, b';' => 0x5E, b'-' => 0x60, b'/' => 0x61,
+        b',' => 0x6B, b'%' => 0x6C, b'_' => 0x6D, b'>' => 0x6E,
+        b'?' => 0x6F, b':' => 0x7A, b'#' => 0x7B, b'@' => 0x7C,
+        b'\'' => 0x7D, b'=' => 0x7E, b'"' => 0x7F,
+        // Lowercase a-i
+        b'a'..=b'i' => 0x81 + (b - b'a'),
+        // Lowercase j-r
+        b'j'..=b'r' => 0x91 + (b - b'j'),
+        // Lowercase s-z
+        b's'..=b'z' => 0xA2 + (b - b's'),
+        // Uppercase A-I
+        b'A'..=b'I' => 0xC1 + (b - b'A'),
+        // Uppercase J-R
+        b'J'..=b'R' => 0xD1 + (b - b'J'),
+        // Uppercase S-Z
+        b'S'..=b'Z' => 0xE2 + (b - b'S'),
+        // Digits 0-9
+        b'0'..=b'9' => 0xF0 + (b - b'0'),
+        // Null
+        0x00 => 0x00,
+        // Default: pass through
+        _ => b,
     }
 }

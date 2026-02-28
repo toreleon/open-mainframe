@@ -14,6 +14,7 @@ use crate::ddm::DdmObject;
 use crate::dss::DssSegment;
 use crate::error::{DrdaError, DrdaResult};
 use crate::response;
+use crate::secmec9::EusridpwdState;
 
 /// Connection state during the handshake process.
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +66,8 @@ pub struct ConnectionHandler {
     pub database: Option<String>,
     /// Negotiated security mechanism.
     secmec: u16,
+    /// DH key exchange state for EUSRIDPWD (SECMEC 0x0009).
+    eusridpwd_state: Option<EusridpwdState>,
 }
 
 impl ConnectionHandler {
@@ -76,6 +79,7 @@ impl ConnectionHandler {
             userid: None,
             database: None,
             secmec: SECMEC_USRIDPWD,
+            eusridpwd_state: None,
         }
     }
 
@@ -87,6 +91,11 @@ impl ConnectionHandler {
     /// Check if the connection is ready for SQL execution.
     pub fn is_ready(&self) -> bool {
         self.state == ConnectionState::Ready
+    }
+
+    /// Get the negotiated security mechanism.
+    pub fn secmec(&self) -> u16 {
+        self.secmec
     }
 
     /// Handle an EXCSAT (Exchange Server Attributes) request.
@@ -116,13 +125,50 @@ impl ConnectionHandler {
             self.secmec = secmec;
         }
 
-        // We support USRIDPWD (0x0003) and USRONLY (0x0004)
+        // We support USRIDPWD (0x0003), USRONLY (0x0004), and EUSRIDPWD (0x0009).
         let accepted_secmec = match self.secmec {
             SECMEC_USRIDPWD | SECMEC_USRONLY => self.secmec,
-            _ => SECMEC_USRIDPWD, // default to user/password
+            SECMEC_EUSRIDPWD => SECMEC_EUSRIDPWD,
+            _ => SECMEC_USRIDPWD, // downgrade to plain user/password
         };
+        self.secmec = accepted_secmec;
 
-        let accsecrd = response::build_accsecrd(accepted_secmec);
+        // Log all incoming ACCSEC params for debugging
+        if let Ok(params) = request.parse_params() {
+            for p in &params {
+                tracing::debug!(
+                    code_point = format!("0x{:04X}", p.code_point),
+                    payload_len = p.payload.len(),
+                    "ACCSEC param"
+                );
+            }
+        }
+
+        let accsecrd = if accepted_secmec == SECMEC_EUSRIDPWD {
+            // Extract client's DH public key from SECTKN
+            let client_public_key = request.get_raw_param(SECTKN)?.unwrap_or_default();
+
+            tracing::debug!(
+                client_sectkn_len = client_public_key.len(),
+                client_sectkn_hex = %client_public_key.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
+                "EUSRIDPWD: received client DH public key"
+            );
+
+            // Create DH state and generate server keypair
+            let state = EusridpwdState::new(&client_public_key);
+            let server_public = state.server_public;
+            self.eusridpwd_state = Some(state);
+
+            tracing::debug!(
+                server_sectkn_hex = %server_public.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
+                "EUSRIDPWD: generated server DH public key"
+            );
+
+            // Respond with ACCSECRD including server's DH public key as SECTKN
+            response::build_accsecrd_with_token(SECMEC_EUSRIDPWD, &server_public)
+        } else {
+            response::build_accsecrd(accepted_secmec)
+        };
 
         if self.state == ConnectionState::Exchanged || self.state == ConnectionState::Initial {
             self.state = ConnectionState::SecurityNegotiated;
@@ -144,13 +190,50 @@ impl ConnectionHandler {
     where
         F: FnOnce(&str, &str) -> bool,
     {
-        // Extract USRID and PASSWORD from SECCHK parameters
-        let userid = request
-            .get_string_param(USRID)?
-            .unwrap_or_default();
-        let password = request
-            .get_string_param(PASSWORD)?
-            .unwrap_or_default();
+        let (userid, password) = if self.secmec == SECMEC_EUSRIDPWD {
+            // EUSRIDPWD: credentials are DES-encrypted in SECTKN parameters.
+            // ibm_db sends two SECTKN params: encrypted userid and encrypted password.
+            let sectkn_list = request.get_all_raw_params(SECTKN)?;
+
+            if sectkn_list.len() < 2 {
+                return Err(DrdaError::Protocol(format!(
+                    "EUSRIDPWD SECCHK requires 2 SECTKN params, got {}",
+                    sectkn_list.len()
+                )));
+            }
+
+            let state = self.eusridpwd_state.as_ref().ok_or_else(|| {
+                DrdaError::Protocol("EUSRIDPWD state not initialized (missing ACCSEC?)".to_string())
+            })?;
+
+            let encrypted_userid = &sectkn_list[0];
+            let encrypted_password = &sectkn_list[1];
+
+            tracing::debug!(
+                enc_userid_len = encrypted_userid.len(),
+                enc_password_len = encrypted_password.len(),
+                "EUSRIDPWD: decrypting credentials"
+            );
+
+            let (userid_bytes, password_bytes) =
+                state.decrypt_credentials(encrypted_userid, encrypted_password)?;
+
+            // Credentials are in EBCDIC cp500 — decode to ASCII
+            let userid = crate::handler::decode_ebcdic_bytes_pub(&userid_bytes);
+            let password = crate::handler::decode_ebcdic_bytes_pub(&password_bytes);
+
+            tracing::debug!(
+                userid = %userid,
+                "EUSRIDPWD: credentials decrypted"
+            );
+
+            (userid, password)
+        } else {
+            // Plain text USRIDPWD: extract USRID and PASSWORD directly
+            let userid = request.get_string_param(USRID)?.unwrap_or_default();
+            let password = request.get_string_param(PASSWORD)?.unwrap_or_default();
+            (userid, password)
+        };
 
         // Authenticate
         let authenticated = auth_fn(&userid, &password);
@@ -172,11 +255,21 @@ impl ConnectionHandler {
         request: &DdmObject,
         correlation_id: u16,
     ) -> DrdaResult<Vec<DssSegment>> {
-        // Extract RDB name
-        let rdbnam = request
-            .get_string_param(RDBNAM)?
-            .unwrap_or_default()
-            .to_uppercase();
+        // Log all incoming ACCRDB params for debugging
+        if let Ok(params) = request.parse_params() {
+            for p in &params {
+                tracing::debug!(
+                    code_point = format!("0x{:04X}", p.code_point),
+                    payload_len = p.payload.len(),
+                    payload_hex = %p.payload.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
+                    "ACCRDB param"
+                );
+            }
+        }
+
+        // Extract RDB name — may be EBCDIC encoded, decode from raw bytes
+        let rdbnam_bytes = request.get_raw_param(RDBNAM)?.unwrap_or_default();
+        let rdbnam = crate::handler::decode_ebcdic_bytes_pub(&rdbnam_bytes).to_uppercase();
 
         // Check if database name matches our config
         let expected = self.config.database.to_uppercase();
@@ -192,15 +285,21 @@ impl ConnectionHandler {
         self.database = Some(rdbnam.clone());
         self.state = ConnectionState::Ready;
 
-        // Build ACCRDBRM + SQLCARD success
-        let accrdbrm = response::build_accrdbrm(
-            if rdbnam.is_empty() { &expected } else { &rdbnam },
-        );
-        let sqlcard = response::build_sqlcard_success(0);
+        let db = if rdbnam.is_empty() { &expected } else { &rdbnam };
+
+        // Build ACCRDBRM + PBSD (piggy-backed session data)
+        // This matches Apache Derby's response format:
+        //   ACCRDBRM (Reply DSS, chained) → PBSD (Reply DSS, end of chain)
+        // Note: Derby sends PBSD (not SQLCARD) after ACCRDBRM.
+        let accrdbrm = response::build_accrdbrm(db);
+
+        // Extract userid for schema name (default to database name)
+        let schema = self.userid.as_deref().unwrap_or(db);
+        let pbsd = response::build_pbsd(schema);
 
         Ok(vec![
-            response::reply_dss_chained(correlation_id, &accrdbrm),
-            response::reply_dss(correlation_id, &sqlcard),
+            response::reply_dss_chained_same_corr(correlation_id, &accrdbrm),
+            response::object_dss(correlation_id, &pbsd),
         ])
     }
 
